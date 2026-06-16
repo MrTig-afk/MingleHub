@@ -19,7 +19,8 @@ The full product spec — game rules, scoring, NFC verification, theme system, m
 | NFC tap verification (`/api/patron/tap`, public landing route) | ✅ Implemented — **dev-stub HMAC signature** standing in for real NTAG 424 DNA SDM/CMAC, see [NFC Tap Verification](#nfc-tap-verification) |
 | Lobby + Join-or-New chooser (`game_sessions`/`game_players`/`table_lobbies` schema, host election, up to 3 groups per table) | ✅ Implemented — session/membership routing only, see [Lobby + Join-or-New](#lobby--join-or-new) for the scope boundary |
 | Setup screen + Adults Only toggle (player count/names, group label, server-enforced content gating) | ✅ Implemented — see [Setup Screen + Adults Only Toggle](#setup-screen--adults-only-toggle) |
-| QR fallback, Trivia, Roulette, theming, billing, dashboards | ⏳ Not started |
+| Finger picker (session integration — server-side selection, `times_selected`, origin-phone-only) | ✅ Implemented — see [Finger Picker](#finger-picker) for the scope boundary |
+| QR fallback, Chooser/Trivia/Roulette round content, theming, billing, dashboards | ⏳ Not started |
 
 See `.claude/gamespec.md` → "What Needs To Be Built" for the full remaining scope.
 
@@ -200,6 +201,22 @@ Once a phone claims host in the lobby, the same screen (`Lobby.jsx`) becomes the
 - **Group label**: optional free-text field; left blank, `start_game` auto-generates "Table N Group M" via `next_group_label()` (existing Lobby + Join-or-New logic).
 - **No NFC hardware needed to test locally**: same multi-tab simulation as [Lobby + Join-or-New](#lobby--join-or-new) — claim host from one tab, you'll see the player-count slider, names field, group-label field, and (only on a table whose `content_ceiling` is `adults_allowed`) the Adults Only checkbox. The seeded dev tables (`lions-den` table 1/2) are `standard` ceiling, so the toggle won't appear on them by design — it's exercised in tests against a dedicated `adults_allowed_table` fixture instead.
 - **Tests**: `test_start_rejects_adults_only_on_standard_table`, `test_start_allows_adults_only_on_adults_allowed_table`, `test_start_rejects_adults_only_when_venue_restricts_even_if_table_allows` (in `api/tests/test_lobby.py`) — the last one proves the venue-wide switch overrides a table that would otherwise allow it.
+
+---
+
+## Finger Picker
+
+gamespec.md Step 5: once the game starts, players place fingers on the **session-origin phone** (the one that started the game) and the picker selects the Hot Seat Player. The finger-placement UI/animation (`FingerChooser.jsx` + `useMultiTouch.js`) is carried over unchanged from the original FirstMove card game — this slice is the "session integration" layer: wiring that existing picker to a real `game_sessions`/`game_players` row instead of leaving the selection purely client-side.
+
+- **Scope boundary**: this covers selecting and persisting the Hot Seat player only. What happens next — a Chooser card, Trivia question, or Roulette challenge — is later backlog work; for now `RoundOrigin.jsx` just shows who was picked with a "Pick again" button so the mechanism is exercisable end-to-end. The Hot Seat leave edge case (gamespec: prompting "you're up right now" if the Hot Seat player tries to leave mid-round) depends on a leave flow that doesn't exist anywhere yet, so it's deferred to whichever round-type task builds leave handling first.
+- **One device, not every phone**: only the phone that started the session (`game_sessions.origin_phone_id`, set from the host's `phone_id` at Setup) renders the finger picker — `PatronLanding.jsx` checks `host_phone_id === phoneId` and routes accordingly. Every other phone at the table (whether it joined the lobby early or joined an in-progress session via Join-or-New) sees a "watch the table phone" placeholder instead, matching how the original single-device game actually gets played at a table.
+- **Server-side selection** (`api/services/round_service.py`) — the picker's local finger-placement animation is purely visual; once it lands on a finger (`onCardDraw`), the origin phone calls `POST /api/patron/sessions/{session_id}/select-hot-seat`, and the **server** (not the browser) decides which real player that maps to:
+  - 2 active players: pure random, no exclusion (back-to-back allowed) — `secrets.choice()`, the server-side equivalent of the client picker's `crypto.getRandomValues()` rejection sampling.
+  - 3+ active players: the previous winner (`game_sessions.last_hot_seat_player_id`) is excluded from the pool, preventing immediate repeats — persisted in the DB rather than one phone's JS state, so it survives reloads and is consistent regardless of which phone asks.
+  - Only the origin phone may call this endpoint — any other `phone_id` gets a 403, since the finger picker only ever runs on the one physical device sitting on the table.
+  - Increments `game_players.times_selected` on the winning row.
+- **No NFC hardware or second phone needed to test locally**: pair a tag, "Open Game" as the host, claim host, and start a game from the Setup screen — that same tab becomes the table device and shows the finger-picker UI. On a touchscreen (or Chrome DevTools' device toolbar with multi-touch emulation), place 2+ fingers, wait for the 3-second countdown, then tap the glowing dot to reveal the Hot Seat player and "Pick again" to repeat. Phones opened via separate "Open Game" tabs show the "watch the table phone" placeholder instead, exactly as they would in a real venue.
+- **Tests**: `api/tests/test_round.py` (6 tests) — a pick returns a real player from the session, non-origin phones are rejected with 403, the previous winner is never immediately repeated across 10 consecutive picks with 3 players, `times_selected` accumulates correctly in the DB across multiple picks, picks against an ended session are rejected, and picks against an unknown session return 404.
 
 ---
 

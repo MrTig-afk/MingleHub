@@ -3,7 +3,7 @@ import { useMultiTouch, STATES } from '../../hooks/useMultiTouch'
 
 const ACCENT_COLORS = ['#ecb2ff', '#00eefc', '#e7006e', '#FFD700', '#FF6B35', '#4169E1', '#ffb1c3']
 
-export default function FingerChooser({ packAccent, onCardDraw, onBack }) {
+export default function FingerChooser({ packAccent, onCardDraw, onBack, hideBack = false }) {
   const zoneRef = useRef(null)
 
   const { fingers, phase, countdown, attach, reset } = useMultiTouch()
@@ -61,25 +61,27 @@ export default function FingerChooser({ packAccent, onCardDraw, onBack }) {
         zIndex: 30,
         minHeight: '64px',
       }}>
-        <button
-          onClick={() => { reset(); onBack?.() }}
-          style={{
-            background: 'none',
-            border: 'none',
-            color: 'var(--on-surface-dim)',
-            fontFamily: 'var(--font-mono)',
-            fontSize: '14px',
-            cursor: 'pointer',
-            minHeight: '56px',
-            minWidth: '56px',
-            flexShrink: 0,
-            display: 'flex',
-            alignItems: 'center',
-            gap: '4px',
-          }}
-        >
-          ← Back
-        </button>
+        {!hideBack && (
+          <button
+            onClick={() => { reset(); onBack?.() }}
+            style={{
+              background: 'none',
+              border: 'none',
+              color: 'var(--on-surface-dim)',
+              fontFamily: 'var(--font-mono)',
+              fontSize: '14px',
+              cursor: 'pointer',
+              minHeight: '56px',
+              minWidth: '56px',
+              flexShrink: 0,
+              display: 'flex',
+              alignItems: 'center',
+              gap: '4px',
+            }}
+          >
+            ← Back
+          </button>
+        )}
         {statusText ? (
           <p style={{
             fontFamily: 'var(--font-body)',

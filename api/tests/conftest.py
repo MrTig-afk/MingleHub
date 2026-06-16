@@ -136,7 +136,12 @@ def _teardown_table(table_id):
         conn = await asyncpg.connect(os.environ["DATABASE_URL"])
         try:
             # Order matters: table_lobbies.converted_session_id references
-            # game_sessions, so lobbies must go before sessions.
+            # game_sessions, so lobbies must go before sessions. Likewise
+            # game_sessions.last_hot_seat_player_id references game_players,
+            # so that must be cleared before game_players rows can be deleted.
+            await conn.execute(
+                "UPDATE game_sessions SET last_hot_seat_player_id = NULL WHERE table_id = $1", table_id
+            )
             await conn.execute(
                 "DELETE FROM game_players WHERE session_id IN (SELECT id FROM game_sessions WHERE table_id = $1)",
                 table_id,

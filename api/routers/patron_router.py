@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 
 from api.db import get_pool
 from api.security import limiter, verify_api_key
-from api.services import lobby_service
+from api.services import lobby_service, round_service
 from api.services.notify import notify_error
 from api.services.nfc_crypto import decrypt_tag_key
 from api.services.nfc_verify import verify_signature
@@ -226,5 +226,34 @@ async def join_session(request: Request, session_id: str, body: JoinSessionReque
         raise
     except Exception:
         await notify_error("POST /patron/sessions/join failed 🚨", traceback.format_exc()[:500])
+        raise HTTPException(status_code=500, detail="Internal error")
+    return result
+
+
+@router.post("/sessions/{session_id}/select-hot-seat")
+@limiter.limit("60/minute")
+async def pick_hot_seat(request: Request, session_id: str, body: PhoneIdBody):
+    """gamespec.md Step 5 — Round Flow: the finger picker (running on the
+    session-origin phone) has chosen a finger; this resolves that to a
+    real game_players row and increments times_selected. Only the phone
+    that started the session may call this — the finger picker runs on
+    one physical device passed around the table, not on every phone."""
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            session = await round_service.get_session(conn, session_id)
+            if not session:
+                raise HTTPException(status_code=404, detail="Not found")
+            try:
+                result = await round_service.select_hot_seat(conn, session, body.phone_id)
+            except PermissionError:
+                raise HTTPException(status_code=403, detail="Only the table device can run the finger picker")
+            except ValueError as e:
+                detail = "Session has ended" if str(e) == "session_ended" else "Need at least 2 active players"
+                raise HTTPException(status_code=409, detail=detail)
+    except HTTPException:
+        raise
+    except Exception:
+        await notify_error("POST /patron/sessions/select-hot-seat failed 🚨", traceback.format_exc()[:500])
         raise HTTPException(status_code=500, detail="Internal error")
     return result

@@ -33,6 +33,7 @@ Thumbs.db
 
 # Local SSL certs (mkcert)
 *.pem
+uvicorn_dev*.log
 # code-review-graph
 .code-review-graph/
 .mcp.json

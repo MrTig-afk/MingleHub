@@ -72,6 +72,19 @@ export const joinSession = (sessionId, phoneId, name) =>
     return r.json()
   })
 
+// Called by the session-origin phone once the local finger picker has
+// chosen a finger — resolves that to a real game_players row server-side
+// and increments times_selected. Any other phone calling this gets a 403.
+export const pickHotSeat = (sessionId, phoneId) =>
+  fetch(`${BASE}/api/patron/sessions/${sessionId}/select-hot-seat`, {
+    method: 'POST',
+    headers: h,
+    body: JSON.stringify({ phone_id: phoneId }),
+  }).then(async (r) => {
+    if (!r.ok) throw new Error((await r.json()).detail || r.status)
+    return r.json()
+  })
+
 // Dev-only — stands in for a physical tag by computing the signature it
 // would produce for a given tag_uid + counter. 404s outside DEV_MODE.
 export const simulateTap = (tagUid, counter) =>

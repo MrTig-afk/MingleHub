@@ -239,10 +239,10 @@ async def start_game(
     await conn.execute(
         """
         INSERT INTO game_sessions (id, venue_id, table_id, group_label, player_count, player_names,
-                                    adults_only, started_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+                                    adults_only, origin_phone_id, started_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
         """,
-        session_id, lobby["venue_id"], lobby["table_id"], label, player_count, names, adults_only,
+        session_id, lobby["venue_id"], lobby["table_id"], label, player_count, names, adults_only, phone_id,
     )
     for name in names:
         await conn.execute(

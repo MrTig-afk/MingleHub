@@ -150,6 +150,25 @@ async def migrate():
         """)
         print("OK game_players table ready")
 
+        # ALTER rather than inside game_sessions' CREATE above, for two
+        # reasons: (1) CREATE TABLE IF NOT EXISTS no-ops against the
+        # already-existing dev/prod table, so a column added there would
+        # never actually land; (2) last_hot_seat_player_id references
+        # game_players, which doesn't exist yet when game_sessions is
+        # created above — the two tables have a circular dependency
+        # (game_players.session_id -> game_sessions, this -> game_players).
+        # gamespec: "Players place fingers on session-origin phone" — the
+        # phone that started the game is the one device the finger picker
+        # runs on; tracked server-side so it can't be spoofed by another
+        # phone at the table. last_hot_seat_player_id backs the "exclude
+        # the previous winner" rule for 3+ players (Finger Picker).
+        await conn.execute("""
+            ALTER TABLE game_sessions
+            ADD COLUMN IF NOT EXISTS origin_phone_id TEXT,
+            ADD COLUMN IF NOT EXISTS last_hot_seat_player_id UUID REFERENCES game_players(id)
+        """)
+        print("OK game_sessions.origin_phone_id / last_hot_seat_player_id ready")
+
         # Not in gamespec.md's table list — gamespec describes lobby *behavior*
         # (Player Flow -> Step 2) without naming a table for it. This is the
         # implementation detail needed to track "who's tapped in, who's host"

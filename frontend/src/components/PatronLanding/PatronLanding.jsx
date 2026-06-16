@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import JoinOrNewChooser from '../JoinOrNewChooser/JoinOrNewChooser'
 import Lobby from '../Lobby/Lobby'
+import RoundOrigin from '../RoundOrigin/RoundOrigin'
 import { fetchTap } from '../../services/patronApi'
 
 const PHONE_ID_KEY = 'minglehub_phone_id'
@@ -98,6 +99,23 @@ export default function PatronLanding() {
     )
   }
 
+  // gamespec: "Players place fingers on session-origin phone" — only the
+  // phone that started the game (host) runs the finger picker. Every other
+  // phone at the table — whether it was in the lobby before start ('started')
+  // or joined a session already in progress ('joined') — just watches.
+  // `joinedInfo` is shaped differently per path: the lobby-poll object
+  // (host_phone_id/converted_session_id) for 'started', or the join
+  // response (name/session_id) for 'joined' — never both, so this is safe.
+  if (status === 'started' && joinedInfo.host_phone_id === initialTap.phoneId) {
+    return (
+      <RoundOrigin
+        venueName={venue.venue_name}
+        sessionId={joinedInfo.converted_session_id}
+        phoneId={initialTap.phoneId}
+      />
+    )
+  }
+
   return (
     <div style={{
       minHeight: '100dvh',
@@ -120,16 +138,16 @@ export default function PatronLanding() {
         </h1>
       )}
 
-      {/* SCOPE NOTE: round engine (Chooser/Trivia/Roulette) isn't built yet —
-          this is a placeholder confirming the session/membership side of
-          things worked, until round UI lands in a later task. */}
+      {/* Non-origin phones — the finger picker only runs on the table device
+          (RoundOrigin, above). What happens after a Hot Seat player is
+          picked (Chooser/Trivia/Roulette) is later backlog work. */}
       {status === 'started' && (
         <>
           <h1 className="headline" style={{ fontFamily: 'var(--font-headline)' }}>
             Game started 🎉
           </h1>
           <p style={{ fontSize: '13px', color: 'var(--on-surface-dim)', fontFamily: 'var(--font-mono)' }}>
-            {joinedInfo.group_label} — {joinedInfo.player_count} players
+            Watch the table phone — place your finger when asked 👀
           </p>
         </>
       )}
@@ -140,7 +158,7 @@ export default function PatronLanding() {
             You're in! 🎉
           </h1>
           <p style={{ fontSize: '13px', color: 'var(--on-surface-dim)', fontFamily: 'var(--font-mono)' }}>
-            Playing as {joinedInfo.name}
+            Playing as {joinedInfo.name} — watch the table phone 👀
           </p>
         </>
       )}
