@@ -21,6 +21,30 @@ async def migrate():
         """)
         print("OK premium_interest table ready")
 
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS packs (
+                id          TEXT PRIMARY KEY,
+                name        TEXT NOT NULL,
+                description TEXT,
+                accent      TEXT NOT NULL,
+                icon        TEXT,
+                mode        TEXT NOT NULL DEFAULT 'party',
+                created_at  TIMESTAMPTZ DEFAULT NOW()
+            )
+        """)
+        print("OK packs table ready")
+
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS cards (
+                id      TEXT PRIMARY KEY,
+                pack_id TEXT NOT NULL REFERENCES packs(id),
+                type    TEXT NOT NULL,
+                text    TEXT NOT NULL,
+                flavour TEXT
+            )
+        """)
+        print("OK cards table ready")
+
         schema = await conn.fetch("""
             SELECT column_name, data_type, is_nullable, column_default
             FROM information_schema.columns
