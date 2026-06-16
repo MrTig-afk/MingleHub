@@ -16,6 +16,9 @@ from slowapi.errors import RateLimitExceeded
 from api.routers import packs
 from api.routers import stripe_router
 from api.routers import interest_router
+from api.routers import dev_auth_router
+from api.routers import dashboard_router
+from api.routers import admin_router
 from api.security import limiter, get_client_ip
 from api.services.notify import notify_error, notify_security
 
@@ -40,7 +43,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
     allow_methods=["GET", "POST"],
-    allow_headers=["X-API-Key", "Content-Type"],
+    allow_headers=["X-API-Key", "Content-Type", "Authorization"],
 )
 
 
@@ -73,4 +76,7 @@ async def server_error(request: Request, exc):
 app.include_router(packs.router)
 app.include_router(stripe_router.router)
 app.include_router(interest_router.router)
+app.include_router(dev_auth_router.router)
+app.include_router(dashboard_router.router)
+app.include_router(admin_router.router)
 handler = Mangum(app)
