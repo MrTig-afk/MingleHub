@@ -16,7 +16,8 @@ The full product spec — game rules, scoring, NFC verification, theme system, m
 | Platform schema (`venues`, `users`, `tables`) | ✅ Implemented |
 | Venue-scoped auth, role gating (venue_owner / venue_staff / admin) | ✅ Implemented — **dev-only stub auth**, real Clerk integration pending |
 | NFC tag pairing (`nfc_tags` schema, pair-tag endpoint, `/dashboard/pair-tags`) | ✅ Implemented — AES keys are dev-generated placeholders until real factory key provisioning is built |
-| NFC tap activation (SUN signature verification), QR fallback, lobby, Trivia, Roulette, theming, billing, dashboards | ⏳ Not started |
+| NFC tap verification (`/api/patron/tap`, public landing route) | ✅ Implemented — **dev-stub HMAC signature** standing in for real NTAG 424 DNA SDM/CMAC, see [NFC Tap Verification](#nfc-tap-verification) |
+| QR fallback, lobby, Trivia, Roulette, theming, billing, dashboards | ⏳ Not started |
 
 See `.claude/gamespec.md` → "What Needs To Be Built" for the full remaining scope.
 
@@ -123,6 +124,19 @@ Ties a physical tag's UID to a table — the prerequisite for every patron-facin
 - **Endpoints** (`api/routers/dashboard_router.py`): `GET /api/dashboard/tables`, `GET /api/dashboard/tags` (venue_owner/venue_staff), `POST /api/dashboard/pair-tag` (venue_owner only — table must belong to the caller's own venue; a `tag_uid` already paired to a *different* venue is rejected with 409 rather than re-pointed, per the BOLA pattern in `security.md`).
 - **No NFC hardware needed to test locally**: visit `/dashboard/pair-tags` in the frontend, sign in as a seeded dev owner, pick a table, and hit **"Simulate Tap (dev)"** — it generates a fake UID client-side and exercises the exact same backend pairing logic a real tap would. The real Web NFC read button (`Tap Tag to Pair`) only appears in browsers that support `NDEFReader` (Chrome on Android with a real tag).
 - **Tests**: `api/tests/test_nfc_pairing.py` — role gating, table-not-in-venue, re-pairing within a venue, cross-venue UID theft (BOLA), tag list never leaks `aes_key_encrypted`.
+
+---
+
+## NFC Tap Verification
+
+The actual patron-facing flow: a tap resolves to a venue + table only if its signature and counter check out — proving physical presence at the table.
+
+- **Public route**: `GET /api/patron/tap?venue_slug=&table_number=&tag_uid=&counter=&sig=` (`api/routers/patron_router.py`). Derives the venue from the slug via a public lookup only — never touches the `users` table. Every failure mode (unknown venue/table/tag, wrong signature, replayed/lower counter, revoked tag, tag/table venue mismatch) returns a generic 404/401 so a bad request can't be used to probe what exists.
+- **Replay protection**: `nfc_tags.counter_last_seen` must strictly increase on every successful tap — equal or lower is rejected outright.
+- **Signature scheme** (`api/services/nfc_verify.py`): **DEV-STUB** — HMAC-SHA256 over `tag_uid:counter` keyed by the tag's decrypted AES key. Has the same security property as the real thing (unforgeable without the key, replay-proof counter) but isn't byte-compatible with a real NTAG 424 DNA tag's Secure Dynamic Messaging output (AES-CBC + CMAC per NXP AN12196) — swapping that in only touches this file once real tag output is available to validate against.
+- **No NFC hardware needed to test locally**: on `/dashboard/pair-tags`, after pairing a tag, hit **"Open Game (tap #N)"** — it calls the dev-only `POST /api/dev/simulate-tap` (stands in for the physical tag, computing a real valid signature; 404s outside `DEV_MODE`) and opens the actual public landing route in a new tab, running the full verification path for real. **"Replay tap #N-1 (expect rejected)"** re-sends the previous counter to demonstrate the rejection path.
+- **Frontend**: `PatronLanding.jsx` — the public route itself (`/{venue-slug}/{table-number}`), parses the tap's query params and shows venue branding ("Playing at {Venue} 🍺") on success or an error otherwise. No lobby/session yet — that's the next slice.
+- **Tests**: `api/tests/test_patron_tap.py` — valid tap, replay/lower-counter rejection, wrong signature, unknown tag, cross-venue tag/table mismatch, revoked tag, malformed/unknown venue slug → 404.
 
 ---
 

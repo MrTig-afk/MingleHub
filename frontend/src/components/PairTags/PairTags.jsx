@@ -1,5 +1,6 @@
 import { useState } from 'react'
-import { devLogin, fetchTables, pairTag } from '../../services/dashboardApi'
+import { devLogin, fetchTables, fetchVenue, pairTag } from '../../services/dashboardApi'
+import { simulateTap as simulateTagSignature } from '../../services/patronApi'
 
 // Must match the clerk_user_id values seeded by scripts/seed_platform.py.
 // Only venue_owner accounts — pairing is owner-only per gamespec.md.
@@ -13,11 +14,13 @@ const supportsWebNfc = typeof window !== 'undefined' && 'NDEFReader' in window
 export default function PairTags() {
   const [clerkUserId, setClerkUserId] = useState(DEV_OWNERS[0].id)
   const [token, setToken] = useState(null)
+  const [venueSlug, setVenueSlug] = useState(null)
   const [tables, setTables] = useState([])
   const [tableNumber, setTableNumber] = useState(1)
   const [status, setStatus] = useState('idle') // idle | loading | error
   const [error, setError] = useState(null)
   const [lastPaired, setLastPaired] = useState(null)
+  const [nextTapCounter, setNextTapCounter] = useState(1)
 
   const signInAndLoadTables = async () => {
     setStatus('loading')
@@ -25,9 +28,10 @@ export default function PairTags() {
     try {
       const { token: newToken } = await devLogin(clerkUserId)
       setToken(newToken)
-      const loadedTables = await fetchTables(newToken)
+      const [loadedTables, venue] = await Promise.all([fetchTables(newToken), fetchVenue(newToken)])
       setTables(loadedTables)
       setTableNumber(loadedTables[0]?.table_number ?? 1)
+      setVenueSlug(venue.slug)
       setStatus('idle')
     } catch (e) {
       setError(e.message)
@@ -41,7 +45,27 @@ export default function PairTags() {
     try {
       const result = await pairTag(token, tagUid, tableNumber)
       setLastPaired(result)
+      setNextTapCounter(1) // a freshly-(re)paired tag's counter starts over
       setTables(await fetchTables(token))
+      setStatus('idle')
+    } catch (e) {
+      setError(e.message)
+      setStatus('error')
+    }
+  }
+
+  // Stands in for a real tap: asks the backend (acting as the tag) to
+  // compute a valid signature for this counter, then opens the exact
+  // public landing route a real tap would — proving the full NFC
+  // verification path end-to-end without any hardware.
+  const openGameTap = async (counter) => {
+    setStatus('loading')
+    setError(null)
+    try {
+      const { tag_uid, sig } = await simulateTagSignature(lastPaired.tag_uid, counter)
+      const params = new URLSearchParams({ tag_uid, counter, sig })
+      window.open(`/${venueSlug}/${lastPaired.table_number}?${params}`, '_blank')
+      if (counter >= nextTapCounter) setNextTapCounter(counter + 1)
       setStatus('idle')
     } catch (e) {
       setError(e.message)
@@ -156,6 +180,32 @@ export default function PairTags() {
             {JSON.stringify(lastPaired, null, 2)}
           </pre>
         </div>
+      )}
+
+      {lastPaired && (
+        <>
+          <p style={{ fontSize: '13px', color: 'var(--on-surface-dim)' }}>
+            Now simulate a patron tapping this tag — opens the real public
+            landing route and runs it through actual NFC signature
+            verification (no hardware needed).
+          </p>
+          <button
+            onClick={() => openGameTap(nextTapCounter)}
+            disabled={status === 'loading'}
+            style={buttonStyle}
+          >
+            Open Game (tap #{nextTapCounter})
+          </button>
+          {nextTapCounter > 1 && (
+            <button
+              onClick={() => openGameTap(nextTapCounter - 1)}
+              disabled={status === 'loading'}
+              style={{ ...buttonStyle, background: 'var(--tertiary)' }}
+            >
+              Replay tap #{nextTapCounter - 1} (expect rejected)
+            </button>
+          )}
+        </>
       )}
     </div>
   )
