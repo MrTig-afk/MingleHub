@@ -37,6 +37,12 @@ def client():
     from api.index import app
     with TestClient(app) as c:
         yield c
+    # The asyncpg pool (api.db._pool) is bound to this module's event loop,
+    # which TestClient just tore down. Reset it so the next test module's
+    # TestClient (a new event loop) creates a fresh pool instead of reusing
+    # a dead one — otherwise every DB call fails with "Event loop is closed".
+    import api.db
+    api.db._pool = None
 
 
 @pytest.fixture

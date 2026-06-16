@@ -93,6 +93,21 @@ async def migrate():
         """)
         print("OK tables table ready")
 
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS nfc_tags (
+                id                  UUID PRIMARY KEY,
+                venue_id            UUID NOT NULL REFERENCES venues(id),
+                table_id            UUID REFERENCES tables(id),
+                tag_uid             TEXT UNIQUE NOT NULL,
+                aes_key_encrypted   TEXT NOT NULL,
+                status              TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'revoked', 'replacement_pending')),
+                counter_last_seen   BIGINT,
+                paired_at           TIMESTAMP,
+                created_at          TIMESTAMP DEFAULT NOW()
+            )
+        """)
+        print("OK nfc_tags table ready")
+
         schema = await conn.fetch("""
             SELECT column_name, data_type, is_nullable, column_default
             FROM information_schema.columns

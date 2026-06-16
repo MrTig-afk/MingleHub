@@ -35,3 +35,19 @@ export const fetchAdminPing = (token) =>
     if (!r.ok) throw new Error((await r.json()).detail || r.status)
     return r.json()
   })
+
+export const fetchTables = (token) =>
+  fetch(`${BASE}/api/dashboard/tables`, { headers: h(token) }).then(async (r) => {
+    if (!r.ok) throw new Error((await r.json()).detail || r.status)
+    return r.json()
+  })
+
+export const pairTag = (token, tagUid, tableNumber) =>
+  fetch(`${BASE}/api/dashboard/pair-tag`, {
+    method: 'POST',
+    headers: h(token),
+    body: JSON.stringify({ tag_uid: tagUid, table_number: tableNumber }),
+  }).then(async (r) => {
+    if (!r.ok) throw new Error((await r.json()).detail || r.status)
+    return r.json()
+  })

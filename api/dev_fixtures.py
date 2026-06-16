@@ -16,6 +16,7 @@ VENUE_A_ID = _id("venue-a")
 VENUE_B_ID = _id("venue-b")
 
 VENUE_A_TABLE_ID = _id("venue-a-table-1")
+VENUE_A_TABLE_2_ID = _id("venue-a-table-2")  # second table — lets tests move a tag between tables
 VENUE_B_TABLE_ID = _id("venue-b-table-1")
 
 OWNER_A_ID = _id("owner-a")

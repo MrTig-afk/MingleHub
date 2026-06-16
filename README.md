@@ -15,7 +15,8 @@ The full product spec — game rules, scoring, NFC verification, theme system, m
 | Finger picker | ✅ Implemented |
 | Platform schema (`venues`, `users`, `tables`) | ✅ Implemented |
 | Venue-scoped auth, role gating (venue_owner / venue_staff / admin) | ✅ Implemented — **dev-only stub auth**, real Clerk integration pending |
-| NFC tap activation, QR fallback, lobby, Trivia, Roulette, theming, billing, dashboards | ⏳ Not started |
+| NFC tag pairing (`nfc_tags` schema, pair-tag endpoint, `/dashboard/pair-tags`) | ✅ Implemented — AES keys are dev-generated placeholders until real factory key provisioning is built |
+| NFC tap activation (SUN signature verification), QR fallback, lobby, Trivia, Roulette, theming, billing, dashboards | ⏳ Not started |
 
 See `.claude/gamespec.md` → "What Needs To Be Built" for the full remaining scope.
 
@@ -56,6 +57,7 @@ Fill in `api/.env`:
 | `API_KEY` | Shared key the frontend sends as `X-API-Key` |
 | `DEV_MODE` | `true` locally — relaxes CORS and enables `/api/auth/dev-login` |
 | `SESSION_SECRET` | Random value signing dev session tokens (see [Platform Foundation](#platform-foundation)) |
+| `NFC_KEY_ENCRYPTION_SECRET` | Encrypts `nfc_tags.aes_key_encrypted` at rest. Generate with `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"` |
 | `NTFY_*` | Optional — ntfy.sh topics for error/security/payment alerts |
 | `STRIPE_*` | Optional — only needed for checkout/webhook testing |
 
@@ -109,6 +111,18 @@ The DB and auth layer every other feature depends on:
 - **Proof endpoints**: `GET /api/dashboard/me`, `GET /api/dashboard/venue` (venue_owner/venue_staff), `GET /api/admin/ping` (admin only).
 - **Dev-login UI**: visit `/dashboard` in the frontend to sign in as a seeded dev user and see the above endpoints' responses live.
 - **Tests**: `api/tests/test_auth.py` — missing/invalid tokens, cross-venue isolation, role gating in both directions.
+
+---
+
+## NFC Tag Pairing
+
+Ties a physical tag's UID to a table — the prerequisite for every patron-facing flow in `gamespec.md` (no tap, no session).
+
+- **Schema**: `nfc_tags` (`venue_id`, `table_id`, `tag_uid`, `aes_key_encrypted`, `status`, `counter_last_seen`, `paired_at`).
+- **Encryption at rest**: `api/services/nfc_crypto.py` encrypts each tag's AES key with Fernet before it touches the DB; the key is never returned by any API response. **Dev note**: real NTAG 424 DNA tags arrive factory-programmed with their own AES key — until an admin/ops provisioning flow exists to load those, `pair_tag` generates a random placeholder key for any UID it hasn't seen before.
+- **Endpoints** (`api/routers/dashboard_router.py`): `GET /api/dashboard/tables`, `GET /api/dashboard/tags` (venue_owner/venue_staff), `POST /api/dashboard/pair-tag` (venue_owner only — table must belong to the caller's own venue; a `tag_uid` already paired to a *different* venue is rejected with 409 rather than re-pointed, per the BOLA pattern in `security.md`).
+- **No NFC hardware needed to test locally**: visit `/dashboard/pair-tags` in the frontend, sign in as a seeded dev owner, pick a table, and hit **"Simulate Tap (dev)"** — it generates a fake UID client-side and exercises the exact same backend pairing logic a real tap would. The real Web NFC read button (`Tap Tag to Pair`) only appears in browsers that support `NDEFReader` (Chrome on Android with a real tag).
+- **Tests**: `api/tests/test_nfc_pairing.py` — role gating, table-not-in-venue, re-pairing within a venue, cross-venue UID theft (BOLA), tag list never leaks `aes_key_encrypted`.
 
 ---
 
