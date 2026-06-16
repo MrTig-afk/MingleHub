@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import { useState } from 'react'
 import UpgradePrompt from '../UpgradePrompt/UpgradePrompt'
 import { FREE_TIER } from '../../config'
 
@@ -25,13 +25,13 @@ export default function GameSummary({ sessionStats, pack, isMixMode, onPlayAgain
     }
     const text = buildShareText(sessionStats, pack, isMixMode)
     if (navigator.share) {
-      try { await navigator.share({ title: 'FirstMove Recap', text }) } catch {}
+      try { await navigator.share({ title: 'FirstMove Recap', text }) } catch { /* user cancelled the share sheet */ }
     } else {
       try {
         await navigator.clipboard.writeText(text)
         setCopyDone(true)
         setTimeout(() => setCopyDone(false), 2000)
-      } catch {}
+      } catch { /* clipboard write denied — silently ignored */ }
     }
   }
 

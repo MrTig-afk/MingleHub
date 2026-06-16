@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import { useState } from 'react'
 import UpgradePrompt from '../UpgradePrompt/UpgradePrompt'
 import { FREE_TIER } from '../../config'
 

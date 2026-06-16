@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { FREE_TIER, FREE_TIER_CARD_LIMIT } from '../../config'
 
 const CATEGORY_META = {
@@ -18,7 +18,7 @@ const CATEGORY_META = {
 
 const TIMER_TOTAL = 10
 
-export default function CardReveal({ card, pack, onComplete, onSkip, onNewCard, onRedraw, onEndGame, onBack, canSkip, skipsRemaining, showRedraw, devMode, packCardIndex }) {
+export default function CardReveal({ card, pack, onComplete, onNewCard, onRedraw, onEndGame, onBack, canSkip, skipsRemaining, showRedraw, devMode, packCardIndex }) {
   const [timeLeft, setTimeLeft] = useState(TIMER_TOTAL)
   const [toast, setToast] = useState(null) // null | 'skipped' | 'completed'
   const [showEndConfirm, setShowEndConfirm] = useState(false)
@@ -37,6 +37,9 @@ export default function CardReveal({ card, pack, onComplete, onSkip, onNewCard, 
     expiryFiredRef.current = true
     if (devMode) return
     const willSkip = card?.type === 'hard_pass' || canSkip
+    // Reacting to the countdown timer (an external system) hitting zero —
+    // shows the toast once, guarded by expiryFiredRef above.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setToast(willSkip ? 'skipped' : 'completed')
     const id = setTimeout(() => {
       willSkip ? onNewCard() : onComplete()

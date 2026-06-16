@@ -116,7 +116,8 @@ async def migrate():
         """)
         print("\nSchema:")
         for col in schema:
-            print(f"  {col['column_name']:15} {col['data_type']:30} nullable={col['is_nullable']} default={col['column_default']}")
+            default = col["column_default"]
+            print(f"  {col['column_name']:15} {col['data_type']:30} nullable={col['is_nullable']} default={default}")
     finally:
         await conn.close()
 

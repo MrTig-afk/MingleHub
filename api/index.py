@@ -61,6 +61,7 @@ async def security_headers(request: Request, call_next):
 
 _NOISE_PATHS = {"/favicon.ico", "/robots.txt", "/sitemap.xml", "/.well-known"}
 
+
 @app.exception_handler(404)
 async def not_found(request: Request, exc):
     path = request.url.path

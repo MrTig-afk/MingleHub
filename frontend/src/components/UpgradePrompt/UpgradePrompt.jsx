@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { captureInterest } from '../../services/api'
 
 const FEATURES = [
@@ -47,6 +47,10 @@ export default function UpgradePrompt({ reason, mode, onDismiss }) {
       body: `Someone tapped Upgrade to Premium\nReason: ${reason}\nMode: ${mode ?? 'unknown'}`,
       headers: { Title: 'Upgrade tap 💰', Priority: 'default' },
     }).catch(() => {})
+    // Intentionally fire-once on mount — reason/mode are fixed for this
+    // prompt's lifetime, and adding them as deps would resend the
+    // notification on every re-render if either ever changed.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const interestDone = interestStatus === 'success' || interestStatus === 'duplicate'

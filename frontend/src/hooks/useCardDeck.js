@@ -26,6 +26,10 @@ export function useCardDeck(mode = 'party') {
   })
 
   useEffect(() => {
+    // Resets loading back to true on every mode change (initial mount
+    // already starts loading via useState(true) above) — necessary so a
+    // mode switch re-shows the loading state while the new fetch is in flight.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setLoading(true)
     fetchPacks(mode)
       .then(data => { setPacks(data); setLoading(false) })

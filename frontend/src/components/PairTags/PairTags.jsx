@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { devLogin, fetchTables, fetchVenue, pairTag } from '../../services/dashboardApi'
 import { simulateTap as simulateTagSignature } from '../../services/patronApi'
 
@@ -54,11 +54,20 @@ export default function PairTags() {
     }
   }
 
+  // Guards against a double-tap firing this twice for the same counter
+  // before the disabled-button re-render lands (the React state update is
+  // async; a fast double-tap on mobile can beat it). Two requests racing
+  // for the same counter would otherwise see one succeed and one correctly
+  // — but confusingly — get rejected as a replay.
+  const tapInFlightRef = useRef(false)
+
   // Stands in for a real tap: asks the backend (acting as the tag) to
   // compute a valid signature for this counter, then opens the exact
   // public landing route a real tap would — proving the full NFC
   // verification path end-to-end without any hardware.
   const openGameTap = async (counter) => {
+    if (tapInFlightRef.current) return
+    tapInFlightRef.current = true
     setStatus('loading')
     setError(null)
     try {
@@ -70,6 +79,8 @@ export default function PairTags() {
     } catch (e) {
       setError(e.message)
       setStatus('error')
+    } finally {
+      tapInFlightRef.current = false
     }
   }
 

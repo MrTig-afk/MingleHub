@@ -57,7 +57,14 @@ export function useMultiTouch(onChosen) {
   // ID of the last picked finger. Not reset between rounds so the 3+ exclusion
   // also prevents back-to-back at the start of the next round.
   const lastWinnerIdRef = useRef(null)
+  // Mirrors latest state into refs so the touch-event callbacks below
+  // (useCallback with stable deps, attached once via `attach`) always read
+  // current values without forcing the listeners to be torn down and
+  // reattached on every fingers/phase change — required here since touch
+  // listeners reattaching mid-gesture would drop in-flight touches.
+  // eslint-disable-next-line react-hooks/refs
   fingersRef.current = fingers
+  // eslint-disable-next-line react-hooks/refs
   phaseRef.current = phase
 
   const clearTimers = useCallback(() => {
@@ -173,6 +180,9 @@ export function useMultiTouch(onChosen) {
     if (count === 0) {
       if (phase === STATES.COUNTDOWN) {
         clearTimers()
+        // Reacting to fingers dropping to 0 mid-countdown (an external
+        // touch event) — resets the countdown display back to its start value.
+        // eslint-disable-next-line react-hooks/set-state-in-effect
         setCountdown(3)
       }
       if (phase !== STATES.IDLE) setPhase(STATES.IDLE)

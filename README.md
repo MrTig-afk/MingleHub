@@ -100,6 +100,26 @@ Update `vite.config.js`'s cert paths to match, set `VITE_API_URL` in `frontend/.
 python -m pytest api/tests/ -v
 ```
 
+`-v` prints every test name with its own pass/fail line (see [CI](#ci) below for the same thing running automatically on every push).
+
+### Linting
+
+```bash
+python -m flake8 api scripts   # backend
+cd frontend && npm run lint    # frontend
+```
+
+---
+
+## CI
+
+`.github/workflows/ci.yml` runs on every push and pull request:
+
+- **backend job**: `flake8` (config in `.flake8`), then `pytest -v` against an ephemeral `postgres:16` service container — no real Neon credentials needed. `DATABASE_SSL=disable` (see `api/db.py`) lets the app connect to that plain local container; real deployments are untouched and still default to `ssl=require`.
+- **frontend job**: `eslint .`, then `npm run build`.
+
+Both jobs' full output (every file/test, not just a summary) is visible in the Actions tab for each run.
+
 ---
 
 ## Platform Foundation
@@ -134,9 +154,13 @@ The actual patron-facing flow: a tap resolves to a venue + table only if its sig
 - **Public route**: `GET /api/patron/tap?venue_slug=&table_number=&tag_uid=&counter=&sig=` (`api/routers/patron_router.py`). Derives the venue from the slug via a public lookup only — never touches the `users` table. Every failure mode (unknown venue/table/tag, wrong signature, replayed/lower counter, revoked tag, tag/table venue mismatch) returns a generic 404/401 so a bad request can't be used to probe what exists.
 - **Replay protection**: `nfc_tags.counter_last_seen` must strictly increase on every successful tap — equal or lower is rejected outright.
 - **Signature scheme** (`api/services/nfc_verify.py`): **DEV-STUB** — HMAC-SHA256 over `tag_uid:counter` keyed by the tag's decrypted AES key. Has the same security property as the real thing (unforgeable without the key, replay-proof counter) but isn't byte-compatible with a real NTAG 424 DNA tag's Secure Dynamic Messaging output (AES-CBC + CMAC per NXP AN12196) — swapping that in only touches this file once real tag output is available to validate against.
-- **No NFC hardware needed to test locally**: on `/dashboard/pair-tags`, after pairing a tag, hit **"Open Game (tap #N)"** — it calls the dev-only `POST /api/dev/simulate-tap` (stands in for the physical tag, computing a real valid signature; 404s outside `DEV_MODE`) and opens the actual public landing route in a new tab, running the full verification path for real. **"Replay tap #N-1 (expect rejected)"** re-sends the previous counter to demonstrate the rejection path.
+- **No NFC hardware needed to test locally**: on `/dashboard/pair-tags`, after pairing a tag, hit **"Open Game (tap #N)"** — it calls the dev-only `POST /api/dev/simulate-tap` (stands in for the physical tag, computing a real valid signature; 404s outside `DEV_MODE`) and opens the actual public landing route in a new tab, running the full verification path for real.
+  - Each click of **"Open Game"** advances to the next counter and should always succeed (`Playing at {Venue} 🍺`).
+  - **"Replay tap #N-1 (expect rejected)"** deliberately re-sends the *previous* counter — this one is supposed to fail (`Tap didn't go through` / `Invalid or expired tag`). If a fresh "Open Game" tap ever shows that error, something's actually wrong; if it's the Replay button, that's the rejection path working correctly.
+  - A guard in `PairTags.jsx` prevents a double-tap from firing the same counter twice (which would otherwise show one success and one confusing "expired" rejection for what looks like the same tap).
 - **Frontend**: `PatronLanding.jsx` — the public route itself (`/{venue-slug}/{table-number}`), parses the tap's query params and shows venue branding ("Playing at {Venue} 🍺") on success or an error otherwise. No lobby/session yet — that's the next slice.
 - **Tests**: `api/tests/test_patron_tap.py` — valid tap, replay/lower-counter rejection, wrong signature, unknown tag, cross-venue tag/table mismatch, revoked tag, malformed/unknown venue slug → 404.
+- **Testing on your phone**: same LAN setup as [Testing on a phone over your LAN](#testing-on-a-phone-over-your-lan) — visit `https://<your-lan-ip>:<frontend-port>/dashboard/pair-tags`, sign in, pair a tag, then use the buttons above. "Open Game" opens the public landing route in a new tab on your phone, exactly as a real tap would.
 
 ---
 
