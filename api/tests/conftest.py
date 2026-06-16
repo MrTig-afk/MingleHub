@@ -1,6 +1,8 @@
 import asyncio
 import os
+import random
 import sys
+import uuid
 
 import asyncpg
 import pytest
@@ -11,6 +13,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 sys.path.insert(0, ROOT)
 load_dotenv(os.path.join(ROOT, "api", ".env"))
 
+from api.dev_fixtures import OWNER_A_CLERK_ID, VENUE_A_ID  # noqa: E402
 from scripts.seed_platform import seed as seed_platform  # noqa: E402
 
 
@@ -58,3 +61,88 @@ def dev_login(client, api_key_header, clerk_user_id):
     )
     assert resp.status_code == 200, resp.text
     return resp.json()["token"]
+
+
+def fresh_tag_uid():
+    # A real tag UID is fixed in hardware — tests use a random one each run
+    # so reseeding/rerunning the suite never collides with a previous tag_uid.
+    return f"test-tag-{uuid.uuid4()}"
+
+
+@pytest.fixture(scope="module")
+def owner_a_token(client):
+    # One login reused by every test needing it in a module — logging in
+    # fresh per test trips dev-login's 20/minute rate limit once combined
+    # with other test modules' own dev-logins in the same run.
+    return dev_login(client, {"X-API-Key": os.environ["API_KEY"]}, OWNER_A_CLERK_ID)
+
+
+def pair_tag(client, api_key_header, token, table_number):
+    """Pairs a fresh tag to a table and returns its tag_uid."""
+    headers = {**api_key_header, "Authorization": f"Bearer {token}"}
+    tag_uid = fresh_tag_uid()
+    resp = client.post(
+        "/api/dashboard/pair-tag",
+        headers=headers,
+        json={"tag_uid": tag_uid, "table_number": table_number},
+    )
+    assert resp.status_code == 200, resp.text
+    return tag_uid
+
+
+def simulate_tap(client, api_key_header, tag_uid, counter):
+    resp = client.post(
+        "/api/dev/simulate-tap",
+        headers=api_key_header,
+        json={"tag_uid": tag_uid, "counter": counter},
+    )
+    assert resp.status_code == 200, resp.text
+    return resp.json()["sig"]
+
+
+@pytest.fixture
+def fresh_table():
+    """A brand-new table on venue A, isolated to one test.
+
+    Lobby/session tests can't safely share table 1/2 across test
+    functions — leftover lobbies and active sessions from one test would
+    leak into the next (no per-test transaction rollback here, see
+    `client`/`_seed_dev_fixtures` above). Each test gets its own
+    table_number instead, torn down afterwards.
+    """
+    table_number = 100_000 + random.randint(0, 899_999)  # well clear of seeded tables 1/2
+    table_id = str(uuid.uuid4())
+
+    async def _create():
+        conn = await asyncpg.connect(os.environ["DATABASE_URL"])
+        try:
+            await conn.execute(
+                "INSERT INTO tables (id, venue_id, table_number) VALUES ($1, $2, $3)",
+                table_id, VENUE_A_ID, table_number,
+            )
+        finally:
+            await conn.close()
+    asyncio.run(_create())
+
+    yield {"table_id": table_id, "table_number": table_number, "venue_slug": "lions-den"}
+
+    async def _teardown():
+        conn = await asyncpg.connect(os.environ["DATABASE_URL"])
+        try:
+            # Order matters: table_lobbies.converted_session_id references
+            # game_sessions, so lobbies must go before sessions.
+            await conn.execute(
+                "DELETE FROM game_players WHERE session_id IN (SELECT id FROM game_sessions WHERE table_id = $1)",
+                table_id,
+            )
+            await conn.execute(
+                "DELETE FROM table_lobby_phones WHERE lobby_id IN (SELECT id FROM table_lobbies WHERE table_id = $1)",
+                table_id,
+            )
+            await conn.execute("DELETE FROM table_lobbies WHERE table_id = $1", table_id)
+            await conn.execute("DELETE FROM game_sessions WHERE table_id = $1", table_id)
+            await conn.execute("DELETE FROM nfc_tags WHERE table_id = $1", table_id)
+            await conn.execute("DELETE FROM tables WHERE id = $1", table_id)
+        finally:
+            await conn.close()
+    asyncio.run(_teardown())

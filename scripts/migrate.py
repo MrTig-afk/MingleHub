@@ -108,6 +108,84 @@ async def migrate():
         """)
         print("OK nfc_tags table ready")
 
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS game_sessions (
+                id                   UUID PRIMARY KEY,
+                venue_id             UUID NOT NULL REFERENCES venues(id),
+                table_id             UUID NOT NULL REFERENCES tables(id),
+                group_label          TEXT,
+                player_count         INTEGER NOT NULL,
+                player_names         JSONB,
+                adults_only          BOOLEAN DEFAULT FALSE,
+                theme_key_at_start   TEXT,
+                selection_mode       TEXT,
+
+                started_at           TIMESTAMP,
+                ended_at             TIMESTAMP,
+                end_reason           TEXT,
+
+                total_rounds         INTEGER DEFAULT 0,
+                cards_completed      INTEGER DEFAULT 0,
+                cards_skipped        INTEGER DEFAULT 0,
+                trivia_correct       INTEGER DEFAULT 0,
+                trivia_wrong         INTEGER DEFAULT 0,
+                total_score          INTEGER DEFAULT 0,
+                scores               JSONB,
+
+                created_at           TIMESTAMP DEFAULT NOW()
+            )
+        """)
+        print("OK game_sessions table ready")
+
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS game_players (
+                id              UUID PRIMARY KEY,
+                session_id      UUID NOT NULL REFERENCES game_sessions(id),
+                name            TEXT NOT NULL,
+                score           INTEGER DEFAULT 0,
+                times_selected  INTEGER DEFAULT 0,
+                left_early      BOOLEAN DEFAULT FALSE,
+                left_at         TIMESTAMP
+            )
+        """)
+        print("OK game_players table ready")
+
+        # Not in gamespec.md's table list — gamespec describes lobby *behavior*
+        # (Player Flow -> Step 2) without naming a table for it. This is the
+        # implementation detail needed to track "who's tapped in, who's host"
+        # before Setup completes and a real game_sessions row exists.
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS table_lobbies (
+                id                    UUID PRIMARY KEY,
+                venue_id              UUID NOT NULL REFERENCES venues(id),
+                table_id              UUID NOT NULL REFERENCES tables(id),
+                status                TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'converted', 'expired')),
+                host_phone_id         TEXT,
+                converted_session_id  UUID REFERENCES game_sessions(id),
+                created_at            TIMESTAMP DEFAULT NOW()
+            )
+        """)
+        print("OK table_lobbies table ready")
+
+        # Only one *open* lobby per table at a time — once converted/expired,
+        # a fresh tap (or "start a new group") can open another.
+        await conn.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS one_open_lobby_per_table
+            ON table_lobbies (table_id) WHERE status = 'open'
+        """)
+        print("OK one_open_lobby_per_table index ready")
+
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS table_lobby_phones (
+                id          UUID PRIMARY KEY,
+                lobby_id    UUID NOT NULL REFERENCES table_lobbies(id),
+                phone_id    TEXT NOT NULL,
+                joined_at   TIMESTAMP DEFAULT NOW(),
+                UNIQUE (lobby_id, phone_id)
+            )
+        """)
+        print("OK table_lobby_phones table ready")
+
         schema = await conn.fetch("""
             SELECT column_name, data_type, is_nullable, column_default
             FROM information_schema.columns

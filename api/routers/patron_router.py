@@ -1,10 +1,13 @@
 import re
 import traceback
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from pydantic import BaseModel, Field
 
 from api.db import get_pool
 from api.security import limiter, verify_api_key
+from api.services import lobby_service
 from api.services.notify import notify_error
 from api.services.nfc_crypto import decrypt_tag_key
 from api.services.nfc_verify import verify_signature
@@ -23,6 +26,7 @@ async def tap(
     tag_uid: str = Query(...),
     counter: int = Query(..., ge=0),
     sig: str = Query(...),
+    phone_id: Optional[str] = Query(None, max_length=64),
 ):
     """Resolves an NFC tap into a venue/table, proving physical presence.
 
@@ -76,16 +80,148 @@ async def tap(
                 "UPDATE nfc_tags SET counter_last_seen = $1 WHERE tag_uid = $2",
                 counter, tag_uid,
             )
+
+            # Lobby/session resolution only runs when the caller supplies a
+            # phone_id — keeps this endpoint's original pure-verification
+            # contract (and its existing tests) unchanged when it's omitted.
+            table_state = None
+            if phone_id:
+                table_state = await lobby_service.resolve_table_state(
+                    conn, str(venue["id"]), str(table["id"]), table_number, phone_id,
+                )
     except HTTPException:
         raise
     except Exception:
         await notify_error("GET /patron/tap failed 🚨", traceback.format_exc()[:500])
         raise HTTPException(status_code=500, detail="Internal error")
 
-    return {
+    response = {
         "venue_name": venue["name"],
         "venue_slug": venue["slug"],
         "table_number": table_number,
         "content_ceiling": table["content_ceiling"],
         "restrict_adult_content": venue["restrict_adult_content"],
     }
+    if table_state:
+        response["table_state"] = table_state
+    return response
+
+
+class PhoneIdBody(BaseModel):
+    phone_id: str = Field(min_length=1, max_length=64)
+
+
+class StartGameRequest(PhoneIdBody):
+    player_count: int = Field(ge=lobby_service.MIN_PLAYERS, le=lobby_service.MAX_PLAYERS)
+    player_names: Optional[list[str]] = None
+    adults_only: bool = False
+    group_label: Optional[str] = Field(None, max_length=100)
+
+
+class JoinSessionRequest(BaseModel):
+    phone_id: str = Field(min_length=1, max_length=64)
+    name: Optional[str] = Field(None, max_length=60)
+
+
+@router.get("/lobby/{lobby_id}")
+@limiter.limit("60/minute")
+async def poll_lobby(request: Request, lobby_id: str):
+    """Polled by every phone in the lobby (no realtime infra yet) to learn
+    when a host is chosen and when the host starts the game."""
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            state = await lobby_service.get_lobby_state(conn, lobby_id)
+    except Exception:
+        await notify_error("GET /patron/lobby/{id} failed 🚨", traceback.format_exc()[:500])
+        raise HTTPException(status_code=500, detail="Internal error")
+
+    if not state:
+        raise HTTPException(status_code=404, detail="Not found")
+    return state
+
+
+@router.post("/lobby/{lobby_id}/claim-host")
+@limiter.limit("30/minute")
+async def claim_lobby_host(request: Request, lobby_id: str, body: PhoneIdBody):
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            if not await lobby_service.is_lobby_member(conn, lobby_id, body.phone_id):
+                raise HTTPException(status_code=403, detail="Not in this lobby")
+            result = await lobby_service.claim_host(conn, lobby_id, body.phone_id)
+    except HTTPException:
+        raise
+    except Exception:
+        await notify_error("POST /patron/lobby/claim-host failed 🚨", traceback.format_exc()[:500])
+        raise HTTPException(status_code=500, detail="Internal error")
+    return result
+
+
+@router.post("/lobby/{lobby_id}/start")
+@limiter.limit("30/minute")
+async def start_lobby(request: Request, lobby_id: str, body: StartGameRequest):
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            lobby = await lobby_service.get_lobby(conn, lobby_id)
+            if not lobby:
+                raise HTTPException(status_code=404, detail="Not found")
+            try:
+                result = await lobby_service.start_game(
+                    conn, lobby, body.phone_id, body.player_count,
+                    body.player_names, body.adults_only, body.group_label,
+                )
+            except PermissionError:
+                raise HTTPException(status_code=403, detail="Only the host can start the game")
+            except ValueError as e:
+                detail = "Lobby already started" if str(e) == "lobby_not_open" else "Invalid player count"
+                raise HTTPException(status_code=409 if str(e) == "lobby_not_open" else 422, detail=detail)
+    except HTTPException:
+        raise
+    except Exception:
+        await notify_error("POST /patron/lobby/start failed 🚨", traceback.format_exc()[:500])
+        raise HTTPException(status_code=500, detail="Internal error")
+    return result
+
+
+@router.post("/table/{table_id}/new-group")
+@limiter.limit("30/minute")
+async def new_group(request: Request, table_id: str, body: PhoneIdBody):
+    """"Start a new group at this table" from the Join-or-New chooser."""
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            venue_id = await conn.fetchval("SELECT venue_id FROM tables WHERE id = $1", table_id)
+            if not venue_id:
+                raise HTTPException(status_code=404, detail="Not found")
+            try:
+                result = await lobby_service.start_new_group(conn, str(venue_id), table_id, body.phone_id)
+            except ValueError:
+                raise HTTPException(status_code=409, detail="This table is full")
+    except HTTPException:
+        raise
+    except Exception:
+        await notify_error("POST /patron/table/new-group failed 🚨", traceback.format_exc()[:500])
+        raise HTTPException(status_code=500, detail="Internal error")
+    return result
+
+
+@router.post("/sessions/{session_id}/join")
+@limiter.limit("30/minute")
+async def join_session(request: Request, session_id: str, body: JoinSessionRequest):
+    """"Join their game" from the Join-or-New chooser — adds this phone as
+    a new player on an already-active session."""
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            try:
+                result = await lobby_service.join_existing_session(conn, session_id, body.name)
+            except LookupError:
+                raise HTTPException(status_code=404, detail="Not found")
+    except HTTPException:
+        raise
+    except Exception:
+        await notify_error("POST /patron/sessions/join failed 🚨", traceback.format_exc()[:500])
+        raise HTTPException(status_code=500, detail="Internal error")
+    return result

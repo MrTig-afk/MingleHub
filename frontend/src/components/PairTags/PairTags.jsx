@@ -65,6 +65,12 @@ export default function PairTags() {
   // compute a valid signature for this counter, then opens the exact
   // public landing route a real tap would — proving the full NFC
   // verification path end-to-end without any hardware.
+  //
+  // A fresh phone_id is generated per click (carried in the URL — see
+  // PatronLanding.jsx's resolvePhoneId) so each "Open Game" click
+  // simulates a *different* phone tapping in. Open it multiple times to
+  // simulate multiple phones joining the same lobby; each opens in a new
+  // tab so you can watch them all update live.
   const openGameTap = async (counter) => {
     if (tapInFlightRef.current) return
     tapInFlightRef.current = true
@@ -72,7 +78,7 @@ export default function PairTags() {
     setError(null)
     try {
       const { tag_uid, sig } = await simulateTagSignature(lastPaired.tag_uid, counter)
-      const params = new URLSearchParams({ tag_uid, counter, sig })
+      const params = new URLSearchParams({ tag_uid, counter, sig, phone_id: crypto.randomUUID() })
       window.open(`/${venueSlug}/${lastPaired.table_number}?${params}`, '_blank')
       if (counter >= nextTapCounter) setNextTapCounter(counter + 1)
       setStatus('idle')

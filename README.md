@@ -17,7 +17,8 @@ The full product spec — game rules, scoring, NFC verification, theme system, m
 | Venue-scoped auth, role gating (venue_owner / venue_staff / admin) | ✅ Implemented — **dev-only stub auth**, real Clerk integration pending |
 | NFC tag pairing (`nfc_tags` schema, pair-tag endpoint, `/dashboard/pair-tags`) | ✅ Implemented — AES keys are dev-generated placeholders until real factory key provisioning is built |
 | NFC tap verification (`/api/patron/tap`, public landing route) | ✅ Implemented — **dev-stub HMAC signature** standing in for real NTAG 424 DNA SDM/CMAC, see [NFC Tap Verification](#nfc-tap-verification) |
-| QR fallback, lobby, Trivia, Roulette, theming, billing, dashboards | ⏳ Not started |
+| Lobby + Join-or-New chooser (`game_sessions`/`game_players`/`table_lobbies` schema, host election, up to 3 groups per table) | ✅ Implemented — session/membership routing only, see [Lobby + Join-or-New](#lobby--join-or-new) for the scope boundary |
+| QR fallback, Setup screen, Trivia, Roulette, theming, billing, dashboards | ⏳ Not started |
 
 See `.claude/gamespec.md` → "What Needs To Be Built" for the full remaining scope.
 
@@ -161,6 +162,29 @@ The actual patron-facing flow: a tap resolves to a venue + table only if its sig
 - **Frontend**: `PatronLanding.jsx` — the public route itself (`/{venue-slug}/{table-number}`), parses the tap's query params and shows venue branding ("Playing at {Venue} 🍺") on success or an error otherwise. No lobby/session yet — that's the next slice.
 - **Tests**: `api/tests/test_patron_tap.py` — valid tap, replay/lower-counter rejection, wrong signature, unknown tag, cross-venue tag/table mismatch, revoked tag, malformed/unknown venue slug → 404.
 - **Testing on your phone**: same LAN setup as [Testing on a phone over your LAN](#testing-on-a-phone-over-your-lan) — visit `https://<your-lan-ip>:<frontend-port>/dashboard/pair-tags`, sign in, pair a tag, then use the buttons above. "Open Game" opens the public landing route in a new tab on your phone, exactly as a real tap would.
+
+---
+
+## Lobby + Join-or-New
+
+Once a tap verifies, it has to resolve to *something*: an empty table starts a lobby, a table mid-game offers join-or-new, a table with 3 active groups says it's full. This slice builds that routing and the membership plumbing underneath it — not the round engine itself.
+
+- **Scope boundary**: this is session/membership routing only. Once a session starts, the patron lands on a placeholder "Game started 🎉" screen — Chooser/Trivia/Roulette round UI is separate, later backlog work (#18/#19/#20), as is the polished host Setup screen with the Adults Only toggle (#16), which `Lobby.jsx` currently stands in for with a minimal inline form.
+- **Schema** (added in `scripts/migrate.py`, after `nfc_tags`):
+  - `table_lobbies` — one row per "table is waiting to start a game" window. `status` is `open` → `converted` (a session started) or `expired`. A partial unique index (`one_open_lobby_per_table`) enforces at most one *open* lobby per table at the DB level — a safety net behind the app-level race handling below.
+  - `table_lobby_phones` — which phones have tapped into a given lobby (`UNIQUE (lobby_id, phone_id)`, so a re-tap from the same phone is a no-op, not a duplicate).
+  - `game_sessions` / `game_players` — the actual game, exactly per `gamespec.md`'s schema (group label, player count/names, adults_only, theme, round counters, scores). A lobby's `converted_session_id` points here once a host starts the game.
+- **Patron flow** (`api/services/lobby_service.py`, wired into `api/routers/patron_router.py`):
+  1. `GET /api/patron/tap` now takes an optional `phone_id` — when present, the response includes `table_state` describing what this phone should see: `lobby` (join/host an open lobby), `join_or_new` (1-2 active groups — show the chooser), or `table_full` (3 active groups, the gamespec-specified cap).
+  2. `GET /api/patron/lobby/{lobby_id}` — polled every 2s by the frontend; returns phone count, host, and status (flips to `converted` once a host starts the game).
+  3. `POST /api/patron/lobby/{lobby_id}/claim-host` — first phone to call this becomes host (atomic `UPDATE ... WHERE host_phone_id IS NULL`); everyone else gets told who already won the race.
+  4. `POST /api/patron/lobby/{lobby_id}/start` — host-only, validates player count (2-8 per `gamespec.md`), creates the `game_sessions`/`game_players` rows, marks the lobby `converted`.
+  5. `POST /api/patron/table/{table_id}/new-group` — starts a second/third lobby at a table that already has an active session (rejected once 3 groups already exist).
+  6. `POST /api/patron/sessions/{session_id}/join` — adds a player to an already-started session (the "join their game" path from the chooser).
+- **Concurrency**: two phones tapping the same empty table within milliseconds of each other both race to create the lobby — `_get_or_create_open_lobby()` catches the resulting `UniqueViolationError` from the partial index and re-queries instead of erroring. Host election is a single atomic `UPDATE`, not a read-then-write, so there's no window for two phones to both become host.
+- **Phone identity**: each browser generates a `phone_id` (`crypto.randomUUID()`) once and persists it in `localStorage`, so reloads/re-taps from the same phone are recognized rather than treated as a new participant. A `?phone_id=` URL override exists purely for dev/testing (see below) — a real tag's NDEF payload never carries one.
+- **No NFC hardware or second phone needed to test locally**: pair a tag on `/dashboard/pair-tags`, then click **"Open Game"** — each click mints a fresh `phone_id` and opens the public landing route in a new tab, simulating a *different* phone tapping the same table. Open it 2-3 times to watch a lobby fill up, claim host from one tab, set player count, and start — the other tabs' polling picks up the `converted` state within ~2s. Tap again after a session is active to see the join-or-new chooser, and a 4th simulated group to see "This table is full."
+- **Tests**: `api/tests/test_lobby.py` (13 tests) — lobby creation on first tap, second phone joining the same lobby, idempotent re-tap, host-claim race, start validation (host-only, player count bounds), join-or-new and table-full responses (including that `table_id` is present for the new-group call), joining an existing session, rejecting a join to an ended session, and the 3-groups-per-table cap. Uses a new function-scoped `fresh_table` fixture (`api/tests/conftest.py`) so stateful session/lobby tests don't interfere with each other.
 
 ---
 

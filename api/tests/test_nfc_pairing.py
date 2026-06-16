@@ -1,6 +1,5 @@
 import asyncio
 import os
-import uuid
 
 import asyncpg
 import pytest
@@ -10,14 +9,8 @@ from api.dev_fixtures import (
     OWNER_B_CLERK_ID,
     STAFF_A_CLERK_ID,
 )
-from api.tests.conftest import dev_login
+from api.tests.conftest import dev_login, fresh_tag_uid
 from api.tests.test_auth import auth_header
-
-
-def _fresh_uid():
-    # A real tag UID is fixed in hardware — tests use a random one each run
-    # so reseeding/rerunning the suite never collides with a previous tag_uid.
-    return f"test-tag-{uuid.uuid4()}"
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -46,7 +39,7 @@ def test_pair_tag_requires_venue_owner(client, api_key_header):
     resp = client.post(
         "/api/dashboard/pair-tag",
         headers=headers,
-        json={"tag_uid": _fresh_uid(), "table_number": 1},
+        json={"tag_uid": fresh_tag_uid(), "table_number": 1},
     )
     assert resp.status_code == 403
 
@@ -54,7 +47,7 @@ def test_pair_tag_requires_venue_owner(client, api_key_header):
 def test_pair_tag_creates_new_tag_for_owners_table(client, api_key_header):
     token = dev_login(client, api_key_header, OWNER_A_CLERK_ID)
     headers = {**api_key_header, **auth_header(token)}
-    tag_uid = _fresh_uid()
+    tag_uid = fresh_tag_uid()
 
     resp = client.post(
         "/api/dashboard/pair-tag",
@@ -75,7 +68,7 @@ def test_pair_tag_rejects_table_not_in_venue(client, api_key_header):
     resp = client.post(
         "/api/dashboard/pair-tag",
         headers=headers,
-        json={"tag_uid": _fresh_uid(), "table_number": 999},
+        json={"tag_uid": fresh_tag_uid(), "table_number": 999},
     )
     assert resp.status_code == 404
 
@@ -83,7 +76,7 @@ def test_pair_tag_rejects_table_not_in_venue(client, api_key_header):
 def test_pair_tag_moves_existing_tag_within_same_venue(client, api_key_header):
     token = dev_login(client, api_key_header, OWNER_A_CLERK_ID)
     headers = {**api_key_header, **auth_header(token)}
-    tag_uid = _fresh_uid()
+    tag_uid = fresh_tag_uid()
 
     first = client.post(
         "/api/dashboard/pair-tag",
@@ -107,7 +100,7 @@ def test_pair_tag_rejects_uid_already_owned_by_other_venue(client, api_key_heade
     """BOLA proof: owner B can't claim a tag_uid owner A already paired."""
     token_a = dev_login(client, api_key_header, OWNER_A_CLERK_ID)
     token_b = dev_login(client, api_key_header, OWNER_B_CLERK_ID)
-    tag_uid = _fresh_uid()
+    tag_uid = fresh_tag_uid()
 
     paired = client.post(
         "/api/dashboard/pair-tag",
@@ -127,7 +120,7 @@ def test_pair_tag_rejects_uid_already_owned_by_other_venue(client, api_key_heade
 def test_list_tags_returns_only_own_venue_tags(client, api_key_header):
     token_a = dev_login(client, api_key_header, OWNER_A_CLERK_ID)
     token_b = dev_login(client, api_key_header, OWNER_B_CLERK_ID)
-    tag_uid = _fresh_uid()
+    tag_uid = fresh_tag_uid()
 
     client.post(
         "/api/dashboard/pair-tag",
