@@ -1,0 +1,42 @@
+# original cloned repo this project was forked from — never tracked here
+FirstMove/
+
+# env files
+.env
+.env.local
+.env*.local
+
+# Python
+__pycache__/
+*.py[cod]
+venv/
+.venv/
+*.egg-info/
+scripts/seed.py
+
+# Node
+node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Vercel
+.vercel/
+
+# Claude
+.claude/
+claude/
+CLAUDE.md
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local SSL certs (mkcert)
+*.pem
+# code-review-graph
+.code-review-graph/
+.mcp.json
+.cursorrules
+.windsurfrules
+AGENTS.md
+GEMINI.md
