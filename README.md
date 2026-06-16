@@ -1,28 +1,23 @@
-# FirstMove
+# MingleHub
 
-A social card game PWA for groups. Everyone places a finger on the screen, the app picks someone, and they draw a prompt from the deck.
+MingleHub is a tap-to-play group game platform for bars, pubs, breweries, and social venues. Patrons tap an NFC tag (or scan a QR fallback) at their table — no app install, no login — and play a round of **Chooser**, **Trivia**, or **Roulette** straight from the browser. Venues manage tables, themes, and billing from a dashboard; admins manage the platform across all venues.
 
-**[Play it here](https://first-move-one.vercel.app/)**
+The full product spec — game rules, scoring, NFC verification, theme system, multi-phone Trivia flow, and database schema — lives in `.claude/gamespec.md`. That document is the source of truth; this README covers what's implemented so far and how to run it locally.
 
-## What It Does
+---
 
-- **Finger picker** — everyone puts a finger down and FirstMove randomly chooses who goes next.
-- **Deck-based prompts** — pick a category, draw a card, and keep the round moving.
-- **Complete, skip, or redraw** — no awkward waiting around.
-- **Game summary** — see completed cards, skipped cards, and who got picked the most.
-- **Built for phones** — made for quick group play straight from the browser.
+## Current Status
 
-### Decks
+| Area | Status |
+|---|---|
+| Chooser round (card draw, complete/skip/redraw, scoring) | ✅ Implemented |
+| Card decks (Icebreakers, Truth, Dares, Compliments, Dirty, Deep, Party, + university decks) | ✅ Implemented |
+| Finger picker | ✅ Implemented |
+| Platform schema (`venues`, `users`, `tables`) | ✅ Implemented |
+| Venue-scoped auth, role gating (venue_owner / venue_staff / admin) | ✅ Implemented — **dev-only stub auth**, real Clerk integration pending |
+| NFC tap activation, QR fallback, lobby, Trivia, Roulette, theming, billing, dashboards | ⏳ Not started |
 
-| | Name | Description |
-|---|---|---|
-| 🌊 | **Icebreakers** | Easy prompts to warm up the room |
-| 🔍 | **Truth** | Honest questions and real answers |
-| 🔥 | **Dares** | Physical and social challenges |
-| 💛 | **Compliments** | Wholesome cards for good vibes |
-| 💋 | **Dirty** | For the brave ones |
-| 🌌 | **Deep** | Meaningful questions for actual conversations |
-| 🎉 | **Party** | Chaotic cards for louder rounds |
+See `.claude/gamespec.md` → "What Needs To Be Built" for the full remaining scope.
 
 ---
 
@@ -38,59 +33,102 @@ A social card game PWA for groups. Everyone places a finger on the screen, the a
 
 ---
 
-## Branch: `PWA_polished_single` — Free Tier + Mode System
+## Local Development
 
-### Free tier limits
+### Prerequisites
 
-| # | Feature | Detail |
-|---|---|---|
-| 1 | **Haptic on finger reveal** | 400ms vibration when the chosen finger is revealed. Android only — iOS does not support the Vibration API. |
-| 2 | **10-second card timer** | Countdown badge top-right of card screen, coloured to match the active category. Goes red at ≤3s. On expiry: auto-skips if skip is available; force-completes if skip already used. Toast notification fades in above the buttons. Timer has no enforcement in dev mode. |
-| 3 | **20-card session limit** | After 20 cards the upgrade modal appears. Count resets when app is closed or backgrounded. |
-| 4 | **1 skip per round** | Skip available once per card. Using it (manually or via timer auto-skip) locks it for that round. Completing a card grants a fresh skip for the next. |
-| 5 | **Per-pack card counter** | `1/20` badge inside the glass card (top-right). Increments per deck, resets when switching to a new pack. |
-| 6 | **Locked decks** | Unlocked decks depend on mode (see below). All others are greyed out with 🔒. Tapping a locked deck shows the upgrade modal. |
-| 7 | **Upgrade prompt** | Two-screen modal: feature list → email capture. Email stored in Neon `premium_interest` table and notified via ntfy. |
-| 8 | **Session reset on close** | All session state fully resets on background/close — navigates back to home screen so next open starts fresh. |
+- Python 3.11+
+- Node 18+
+- A Neon (Postgres) project — dev/test branch, never production data
 
-### Party / Uni modes
+### 1. Environment variables
 
-A **Party / Uni toggle pill** is always visible in the top-right corner of the home screen. Defaults to Party on open.
+```bash
+cp api/.env.example api/.env
+cp frontend/.env.local.example frontend/.env.local
+```
 
-| Mode | Unlocked decks |
+Fill in `api/.env`:
+
+| Variable | Notes |
 |---|---|
-| 🔥 Party | Icebreakers, Dares, Compliments |
-| 🎓 Uni | Debate, Freshers, Would You Rather |
+| `DATABASE_URL` | Your dev Neon connection string |
+| `API_KEY` | Shared key the frontend sends as `X-API-Key` |
+| `DEV_MODE` | `true` locally — relaxes CORS and enables `/api/auth/dev-login` |
+| `SESSION_SECRET` | Random value signing dev session tokens (see [Platform Foundation](#platform-foundation)) |
+| `NTFY_*` | Optional — ntfy.sh topics for error/security/payment alerts |
+| `STRIPE_*` | Optional — only needed for checkout/webhook testing |
 
-### Upgrade prompt
+### 2. Database setup
 
-When the card limit or a locked deck is tapped, a two-screen modal appears:
+```bash
+python scripts/migrate.py          # creates all tables
+python scripts/seed.py              # loads card decks from content/*.json
+python scripts/seed_platform.py     # seeds dev venues/users for auth testing
+```
 
-**Screen 1 — Features:** full premium feature list + "Upgrade to Premium →" CTA.
+### 3. Run the backend
 
-**Screen 2 — Notify:** email input. Submitting calls `POST /api/interest`, stores the email in the `premium_interest` table on Neon, and fires an ntfy notification to the owner. Shows success, duplicate, or error state inline.
+```bash
+python -m uvicorn api.index:app --reload
+```
 
-Tapping the prompt also fires a background ntfy notification on mount (trigger reason + mode) as a backup signal. All ntfy channels send with Content-Type: text/plain so notifications arrive as readable messages, not file attachments. Payment infrastructure (Stripe) is wired on the backend but not connected to the CTA — the interest list comes first.
+### 4. Run the frontend
 
-#### Uni content decks
-Four university-themed decks are included for Uni mode:
+```bash
+cd frontend
+npm install
+npm run dev
+```
 
-| | Deck | Description |
-|---|---|---|
-| ⚡ | **Debate** | 30 debatable statements — argue a side |
-| 🎒 | **Freshers** | 35 first-year icebreaker prompts |
-| 🌶️ | **Hot Takes** | 30 spicy campus opinions |
-| 🤔 | **Would You Rather** | 26 uni-themed dilemmas |
+### Testing on a phone over your LAN
+
+`frontend/vite.config.js` serves HTTPS using mkcert certs (PWA features and the dashboard's bearer-token auth both need HTTPS). To test from a phone on the same Wi-Fi network:
+
+```bash
+mkcert -cert-file <your-lan-ip>.pem -key-file <your-lan-ip>-key.pem <your-lan-ip> localhost 127.0.0.1
+```
+
+Update `vite.config.js`'s cert paths to match, set `VITE_API_URL` in `frontend/.env.local` to `https://<your-lan-ip>:8000`, run the backend with `--host 0.0.0.0 --ssl-keyfile=... --ssl-certfile=...`, and the frontend with `npm run dev -- --host`. Visit `https://<your-lan-ip>:5173` from your phone.
+
+### Running tests
+
+```bash
+python -m pytest api/tests/ -v
+```
 
 ---
 
-## Latest updates
+## Platform Foundation
 
-- **Deck mixing** — select two or more decks and play a combined shuffled session; category header updates per card to show which pack it came from
-- **Shareable game recap** — share session stats after the game ends (dev mode only; free tier sees upgrade prompt)
-- **Card screen centred layout** — card vertically centred between header and buttons on mobile; category badge sits inside the centred group so badge + card move as one unit
-- **Redraw is dev-only** — free tier never sees the redraw button; redraw is unlimited in dev mode
-- **Dev mode toast suppression** — timer countdown and all notifications fully suppressed in dev mode; buttons never blocked by toast state
-- **Finger picker: 2-finger minimum** — countdown only starts when at least 2 players have a finger down; a single finger shows "Add at least one more player"
-- **Finger picker: fair selection** — uses `crypto.getRandomValues` with rejection sampling to eliminate modulo bias; with 3+ players the previous winner is excluded from the pool to prevent immediate back-to-back picks
-- **Finger picker: countdown clamped** — countdown display can never show a negative number; race condition between the tick interval and the selection timeout is fully guarded
+The DB and auth layer every other feature depends on:
+
+- **Schema**: `venues`, `users`, `tables` (full columns per `gamespec.md`), plus `packs`/`cards`/`premium_interest` from the carried-over card-game foundation.
+- **Auth**: `api/auth.py` provides `get_current_user`/`require_role` — `venue_id` and `role` are always derived server-side from the authenticated user, never accepted from the client (BOLA-safe by construction).
+- **Dev-only stub**: until a Clerk dev instance is wired in, sessions are HMAC-signed tokens issued by `POST /api/auth/dev-login` (404s outside `DEV_MODE`). The dependency contract (`get_current_user`/`require_role`) is the permanent pattern — swapping in real Clerk verification later won't change route handlers.
+- **Proof endpoints**: `GET /api/dashboard/me`, `GET /api/dashboard/venue` (venue_owner/venue_staff), `GET /api/admin/ping` (admin only).
+- **Dev-login UI**: visit `/dashboard` in the frontend to sign in as a seeded dev user and see the above endpoints' responses live.
+- **Tests**: `api/tests/test_auth.py` — missing/invalid tokens, cross-venue isolation, role gating in both directions.
+
+---
+
+## Card Decks (Chooser round content)
+
+| | Name | Description |
+|---|---|---|
+| 🌊 | **Icebreakers** | Easy prompts to warm up the room |
+| 🔍 | **Truth** | Honest questions and real answers |
+| 🔥 | **Dares** | Physical and social challenges |
+| 💛 | **Compliments** | Wholesome cards for good vibes |
+| 💋 | **Dirty** | For the brave ones |
+| 🌌 | **Deep** | Meaningful questions for actual conversations |
+| 🎉 | **Party** | Chaotic cards for louder rounds |
+| ⚡ | **Debate** | 30 debatable statements — argue a side |
+| 🎒 | **Freshers** | 35 first-year icebreaker prompts |
+| 🌶️ | **Hot Takes** | 30 spicy campus opinions |
+| 🤔 | **Would You Rather** | 26 dilemmas |
+
+### Round mechanics
+
+- **Finger picker** — players place a finger on screen; the app randomly selects who goes next using `crypto.getRandomValues` with rejection sampling (no modulo bias); with 3+ players the previous winner is excluded from immediate re-selection.
+- **Complete, skip, or redraw** — see `gamespec.md`'s scoring/redraw-penalty rules for how this maps to the full game once wired into a real session.
