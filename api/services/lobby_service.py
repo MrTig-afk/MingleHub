@@ -128,7 +128,11 @@ async def _join_lobby_phone(conn, lobby_id, phone_id: str) -> int:
 
 async def get_lobby_state(conn, lobby_id: str) -> dict | None:
     lobby = await conn.fetchrow(
-        "SELECT id, status, host_phone_id, converted_session_id, created_at FROM table_lobbies WHERE id = $1",
+        """
+        SELECT l.id, l.status, l.host_phone_id, l.converted_session_id, l.created_at, t.table_number
+        FROM table_lobbies l JOIN tables t ON t.id = l.table_id
+        WHERE l.id = $1
+        """,
         lobby_id,
     )
     if not lobby:
@@ -142,6 +146,7 @@ async def get_lobby_state(conn, lobby_id: str) -> dict | None:
         "host_phone_id": lobby["host_phone_id"],
         "converted_session_id": str(lobby["converted_session_id"]) if lobby["converted_session_id"] else None,
         "phone_count": phone_count,
+        "table_number": lobby["table_number"],
         "created_at": lobby["created_at"].isoformat(),
     }
 
@@ -195,6 +200,25 @@ async def next_group_label(conn, table_id: str) -> str:
     return f"Table {table_number} Group {count + 1}"
 
 
+async def adults_only_allowed(conn, venue_id: str, table_id: str) -> bool:
+    """gamespec.md: Adults Only Content Controls — precedence order:
+    1. venue.restrict_adult_content ON overrides everything (toggle never available).
+    2. tables.content_ceiling must be 'adults_allowed', not 'standard'.
+    A patron can choose less than the ceiling allows, never more — enforced
+    here rather than trusted from the client, same BOLA pattern as everywhere else."""
+    row = await conn.fetchrow(
+        """
+        SELECT v.restrict_adult_content, t.content_ceiling
+        FROM venues v JOIN tables t ON t.venue_id = v.id
+        WHERE v.id = $1 AND t.id = $2
+        """,
+        venue_id, table_id,
+    )
+    if not row:
+        return False
+    return not row["restrict_adult_content"] and row["content_ceiling"] == "adults_allowed"
+
+
 async def start_game(
     conn, lobby: dict, phone_id: str, player_count: int,
     player_names: list[str] | None, adults_only: bool, group_label: str | None,
@@ -205,6 +229,8 @@ async def start_game(
         raise PermissionError("not_host")
     if not (MIN_PLAYERS <= player_count <= MAX_PLAYERS):
         raise ValueError("invalid_player_count")
+    if adults_only and not await adults_only_allowed(conn, lobby["venue_id"], lobby["table_id"]):
+        raise ValueError("adults_only_not_allowed")
 
     names = player_names or [f"Player {i + 1}" for i in range(player_count)]
     label = group_label or await next_group_label(conn, lobby["table_id"])

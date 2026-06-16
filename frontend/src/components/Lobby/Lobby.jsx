@@ -3,20 +3,19 @@ import { claimHost, pollLobby, startGame } from '../../services/patronApi'
 
 const POLL_MS = 2000
 
-// gamespec.md Player Flow Step 2 — shown when the first phone taps and no
-// session exists yet. Polls instead of using realtime infra (none wired up
-// yet) so every phone in the lobby sees phone count / host / start updates
-// within ~2s of each other.
-//
-// SCOPE NOTE: "Setup screen: host flow + Adults Only toggle" is its own
-// backlog task. The inline form below (player count + optional names) is a
-// minimal placeholder so Start Game works end-to-end today — the Adults
-// Only toggle and richer host UI land when that task is built.
-export default function Lobby({ venueName, lobbyId, phoneId, onGameStarted }) {
+// gamespec.md Player Flow Step 2 + Step 4 — shown when the first phone taps
+// and no session exists yet (Lobby), and once a host is chosen, doubles as
+// the Setup screen (player count/names, optional group label, Adults Only
+// toggle). Polls instead of using realtime infra (none wired up yet) so
+// every phone in the lobby sees phone count / host / start updates within
+// ~2s of each other.
+export default function Lobby({ venueName, lobbyId, phoneId, adultsOnlyAllowed, onGameStarted }) {
   const [state, setState] = useState(null)
   const [error, setError] = useState(null)
   const [playerCount, setPlayerCount] = useState(2)
   const [namesText, setNamesText] = useState('')
+  const [groupLabel, setGroupLabel] = useState('')
+  const [adultsOnly, setAdultsOnly] = useState(false)
   const [starting, setStarting] = useState(false)
   const startedRef = useRef(false)
 
@@ -58,7 +57,13 @@ export default function Lobby({ venueName, lobbyId, phoneId, onGameStarted }) {
       const names = namesText.trim()
         ? namesText.split(',').map((n) => n.trim()).filter(Boolean)
         : null
-      await startGame(lobbyId, { phoneId, playerCount, playerNames: names, adultsOnly: false })
+      await startGame(lobbyId, {
+        phoneId,
+        playerCount,
+        playerNames: names,
+        adultsOnly: adultsOnlyAllowed && adultsOnly,
+        groupLabel: groupLabel.trim() || null,
+      })
       // onGameStarted fires from the next poll tick once status flips to
       // 'converted' — keeps host and joiners on the exact same trigger.
     } catch (e) {
@@ -95,6 +100,24 @@ export default function Lobby({ venueName, lobbyId, phoneId, onGameStarted }) {
               placeholder="Kaushik, Sarah, James" style={inputStyle}
             />
           </label>
+          <label style={labelStyle}>
+            Group name (optional)
+            <input
+              type="text" value={groupLabel} onChange={(e) => setGroupLabel(e.target.value)}
+              placeholder={`Table ${state.table_number ?? ''} Group 1`} style={inputStyle}
+            />
+          </label>
+          {/* gamespec: Adults Only Toggle — default OFF, hidden entirely
+              (not just disabled) unless the venue/table allow it. */}
+          {adultsOnlyAllowed && (
+            <label style={{ ...labelStyle, flexDirection: 'row', alignItems: 'center', gap: '10px' }}>
+              <input
+                type="checkbox" checked={adultsOnly}
+                onChange={(e) => setAdultsOnly(e.target.checked)}
+              />
+              Adults Only 🔥
+            </label>
+          )}
           <button onClick={handleStart} disabled={starting} style={buttonStyle}>
             {starting ? 'Starting…' : 'Start Game'}
           </button>

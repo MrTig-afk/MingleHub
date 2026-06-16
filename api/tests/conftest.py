@@ -46,6 +46,12 @@ def client():
     # a dead one — otherwise every DB call fails with "Event loop is closed".
     import api.db
     api.db._pool = None
+    # api.security.limiter is a process-wide singleton, so rate-limit
+    # counters would otherwise carry over between test modules (e.g.
+    # test_lobby.py's many /api/patron/tap calls exhausting the 30/minute
+    # budget before test_patron_tap.py's own tap tests run).
+    from api.security import limiter
+    limiter.reset()
 
 
 @pytest.fixture
@@ -100,8 +106,7 @@ def simulate_tap(client, api_key_header, tag_uid, counter):
     return resp.json()["sig"]
 
 
-@pytest.fixture
-def fresh_table():
+def _create_table(content_ceiling="standard"):
     """A brand-new table on venue A, isolated to one test.
 
     Lobby/session tests can't safely share table 1/2 across test
@@ -117,15 +122,16 @@ def fresh_table():
         conn = await asyncpg.connect(os.environ["DATABASE_URL"])
         try:
             await conn.execute(
-                "INSERT INTO tables (id, venue_id, table_number) VALUES ($1, $2, $3)",
-                table_id, VENUE_A_ID, table_number,
+                "INSERT INTO tables (id, venue_id, table_number, content_ceiling) VALUES ($1, $2, $3, $4)",
+                table_id, VENUE_A_ID, table_number, content_ceiling,
             )
         finally:
             await conn.close()
     asyncio.run(_create())
+    return {"table_id": table_id, "table_number": table_number, "venue_slug": "lions-den"}
 
-    yield {"table_id": table_id, "table_number": table_number, "venue_slug": "lions-den"}
 
+def _teardown_table(table_id):
     async def _teardown():
         conn = await asyncpg.connect(os.environ["DATABASE_URL"])
         try:
@@ -146,3 +152,36 @@ def fresh_table():
         finally:
             await conn.close()
     asyncio.run(_teardown())
+
+
+@pytest.fixture
+def fresh_table():
+    """A standard-ceiling table — Adults Only can never be enabled here."""
+    info = _create_table("standard")
+    yield info
+    _teardown_table(info["table_id"])
+
+
+@pytest.fixture
+def adults_allowed_table():
+    """A table whose content ceiling permits Adults Only, for testing the
+    Setup screen's toggle gating (gamespec: Adults Only Content Controls)."""
+    info = _create_table("adults_allowed")
+    yield info
+    _teardown_table(info["table_id"])
+
+
+@pytest.fixture
+def venue_a_restricts_adult_content():
+    """Temporarily flips venue A's global "Restrict adult content" switch
+    ON, to test that it overrides a table's content_ceiling (gamespec:
+    venue-wide toggle is layer 1, takes precedence over everything)."""
+    async def _set(value):
+        conn = await asyncpg.connect(os.environ["DATABASE_URL"])
+        try:
+            await conn.execute("UPDATE venues SET restrict_adult_content = $1 WHERE id = $2", value, VENUE_A_ID)
+        finally:
+            await conn.close()
+    asyncio.run(_set(True))
+    yield
+    asyncio.run(_set(False))

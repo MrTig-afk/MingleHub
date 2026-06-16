@@ -276,3 +276,50 @@ def test_new_group_rejects_when_table_already_has_three_groups(client, api_key_h
     fourth_tap = _tap_with_phone(client, api_key_header, venue_slug, table_number, tag_uid, 99, _fresh_phone())
     assert fourth_tap["table_state"]["phase"] == "table_full"
     assert len(fourth_tap["table_state"]["groups"]) == 3
+
+
+# gamespec.md: Adults Only Content Controls — the toggle is gated by the
+# table's content_ceiling and the venue's restrict_adult_content switch,
+# enforced server-side rather than trusted from the client.
+
+def test_start_rejects_adults_only_on_standard_table(client, api_key_header, owner_a_token, fresh_table):
+    tag_uid = pair_tag(client, api_key_header, owner_a_token, fresh_table["table_number"])
+    phone_id = _fresh_phone()
+    body = _tap_with_phone(
+        client, api_key_header, fresh_table["venue_slug"], fresh_table["table_number"], tag_uid, 1, phone_id
+    )
+    lobby_id = body["table_state"]["lobby_id"]
+    _claim_host(client, api_key_header, lobby_id, phone_id)
+
+    resp = _start(client, api_key_header, lobby_id, phone_id, adults_only=True)
+    assert resp.status_code == 422
+
+
+def test_start_allows_adults_only_on_adults_allowed_table(client, api_key_header, owner_a_token, adults_allowed_table):
+    tag_uid = pair_tag(client, api_key_header, owner_a_token, adults_allowed_table["table_number"])
+    phone_id = _fresh_phone()
+    body = _tap_with_phone(
+        client, api_key_header, adults_allowed_table["venue_slug"], adults_allowed_table["table_number"],
+        tag_uid, 1, phone_id,
+    )
+    lobby_id = body["table_state"]["lobby_id"]
+    _claim_host(client, api_key_header, lobby_id, phone_id)
+
+    resp = _start(client, api_key_header, lobby_id, phone_id, adults_only=True)
+    assert resp.status_code == 200, resp.text
+
+
+def test_start_rejects_adults_only_when_venue_restricts_even_if_table_allows(
+    client, api_key_header, owner_a_token, adults_allowed_table, venue_a_restricts_adult_content
+):
+    tag_uid = pair_tag(client, api_key_header, owner_a_token, adults_allowed_table["table_number"])
+    phone_id = _fresh_phone()
+    body = _tap_with_phone(
+        client, api_key_header, adults_allowed_table["venue_slug"], adults_allowed_table["table_number"],
+        tag_uid, 1, phone_id,
+    )
+    lobby_id = body["table_state"]["lobby_id"]
+    _claim_host(client, api_key_header, lobby_id, phone_id)
+
+    resp = _start(client, api_key_header, lobby_id, phone_id, adults_only=True)
+    assert resp.status_code == 422

@@ -18,7 +18,8 @@ The full product spec — game rules, scoring, NFC verification, theme system, m
 | NFC tag pairing (`nfc_tags` schema, pair-tag endpoint, `/dashboard/pair-tags`) | ✅ Implemented — AES keys are dev-generated placeholders until real factory key provisioning is built |
 | NFC tap verification (`/api/patron/tap`, public landing route) | ✅ Implemented — **dev-stub HMAC signature** standing in for real NTAG 424 DNA SDM/CMAC, see [NFC Tap Verification](#nfc-tap-verification) |
 | Lobby + Join-or-New chooser (`game_sessions`/`game_players`/`table_lobbies` schema, host election, up to 3 groups per table) | ✅ Implemented — session/membership routing only, see [Lobby + Join-or-New](#lobby--join-or-new) for the scope boundary |
-| QR fallback, Setup screen, Trivia, Roulette, theming, billing, dashboards | ⏳ Not started |
+| Setup screen + Adults Only toggle (player count/names, group label, server-enforced content gating) | ✅ Implemented — see [Setup Screen + Adults Only Toggle](#setup-screen--adults-only-toggle) |
+| QR fallback, Trivia, Roulette, theming, billing, dashboards | ⏳ Not started |
 
 See `.claude/gamespec.md` → "What Needs To Be Built" for the full remaining scope.
 
@@ -169,7 +170,7 @@ The actual patron-facing flow: a tap resolves to a venue + table only if its sig
 
 Once a tap verifies, it has to resolve to *something*: an empty table starts a lobby, a table mid-game offers join-or-new, a table with 3 active groups says it's full. This slice builds that routing and the membership plumbing underneath it — not the round engine itself.
 
-- **Scope boundary**: this is session/membership routing only. Once a session starts, the patron lands on a placeholder "Game started 🎉" screen — Chooser/Trivia/Roulette round UI is separate, later backlog work (#18/#19/#20), as is the polished host Setup screen with the Adults Only toggle (#16), which `Lobby.jsx` currently stands in for with a minimal inline form.
+- **Scope boundary**: this is session/membership routing only. Once a session starts, the patron lands on a placeholder "Game started 🎉" screen — Chooser/Trivia/Roulette round UI is separate, later backlog work (#18/#19/#20). The host Setup screen (player count/names, group label, Adults Only toggle) lives inline in `Lobby.jsx` once a host is chosen — see [Setup Screen + Adults Only Toggle](#setup-screen--adults-only-toggle).
 - **Schema** (added in `scripts/migrate.py`, after `nfc_tags`):
   - `table_lobbies` — one row per "table is waiting to start a game" window. `status` is `open` → `converted` (a session started) or `expired`. A partial unique index (`one_open_lobby_per_table`) enforces at most one *open* lobby per table at the DB level — a safety net behind the app-level race handling below.
   - `table_lobby_phones` — which phones have tapped into a given lobby (`UNIQUE (lobby_id, phone_id)`, so a re-tap from the same phone is a no-op, not a duplicate).
@@ -184,7 +185,21 @@ Once a tap verifies, it has to resolve to *something*: an empty table starts a l
 - **Concurrency**: two phones tapping the same empty table within milliseconds of each other both race to create the lobby — `_get_or_create_open_lobby()` catches the resulting `UniqueViolationError` from the partial index and re-queries instead of erroring. Host election is a single atomic `UPDATE`, not a read-then-write, so there's no window for two phones to both become host.
 - **Phone identity**: each browser generates a `phone_id` (`crypto.randomUUID()`) once and persists it in `localStorage`, so reloads/re-taps from the same phone are recognized rather than treated as a new participant. A `?phone_id=` URL override exists purely for dev/testing (see below) — a real tag's NDEF payload never carries one.
 - **No NFC hardware or second phone needed to test locally**: pair a tag on `/dashboard/pair-tags`, then click **"Open Game"** — each click mints a fresh `phone_id` and opens the public landing route in a new tab, simulating a *different* phone tapping the same table. Open it 2-3 times to watch a lobby fill up, claim host from one tab, set player count, and start — the other tabs' polling picks up the `converted` state within ~2s. Tap again after a session is active to see the join-or-new chooser, and a 4th simulated group to see "This table is full."
-- **Tests**: `api/tests/test_lobby.py` (13 tests) — lobby creation on first tap, second phone joining the same lobby, idempotent re-tap, host-claim race, start validation (host-only, player count bounds), join-or-new and table-full responses (including that `table_id` is present for the new-group call), joining an existing session, rejecting a join to an ended session, and the 3-groups-per-table cap. Uses a new function-scoped `fresh_table` fixture (`api/tests/conftest.py`) so stateful session/lobby tests don't interfere with each other.
+- **Tests**: `api/tests/test_lobby.py` (16 tests) — lobby creation on first tap, second phone joining the same lobby, idempotent re-tap, host-claim race, start validation (host-only, player count bounds), join-or-new and table-full responses (including that `table_id` is present for the new-group call), joining an existing session, rejecting a join to an ended session, the 3-groups-per-table cap, and the Adults Only gating covered below. Uses a function-scoped `fresh_table` fixture (`api/tests/conftest.py`) so stateful session/lobby tests don't interfere with each other.
+
+---
+
+## Setup Screen + Adults Only Toggle
+
+Once a phone claims host in the lobby, the same screen (`Lobby.jsx`) becomes the Setup screen from `gamespec.md` Step 4 — player count, optional names, an optional custom group label, and the Adults Only toggle, all submitted together to `POST /api/patron/lobby/{lobby_id}/start`.
+
+- **Adults Only gating** (`lobby_service.adults_only_allowed`, gamespec: *Adults Only Content Controls*) — two layers, checked **server-side** on start, not just hidden client-side:
+  1. `venues.restrict_adult_content` ON overrides everything — the toggle never appears and any `adults_only: true` is rejected regardless of the table.
+  2. `tables.content_ceiling` must be `adults_allowed`, not the default `standard`.
+  A patron can choose less than the table's ceiling allows, never more. The frontend computes the same check (`!venue.restrict_adult_content && venue.content_ceiling === 'adults_allowed'`) from the fields `GET /api/patron/tap` already returns, so the toggle is hidden entirely rather than shown-then-rejected — but the backend re-validates regardless, the same BOLA-safe pattern used everywhere else (never trust a client-supplied flag for something access-controlled).
+- **Group label**: optional free-text field; left blank, `start_game` auto-generates "Table N Group M" via `next_group_label()` (existing Lobby + Join-or-New logic).
+- **No NFC hardware needed to test locally**: same multi-tab simulation as [Lobby + Join-or-New](#lobby--join-or-new) — claim host from one tab, you'll see the player-count slider, names field, group-label field, and (only on a table whose `content_ceiling` is `adults_allowed`) the Adults Only checkbox. The seeded dev tables (`lions-den` table 1/2) are `standard` ceiling, so the toggle won't appear on them by design — it's exercised in tests against a dedicated `adults_allowed_table` fixture instead.
+- **Tests**: `test_start_rejects_adults_only_on_standard_table`, `test_start_allows_adults_only_on_adults_allowed_table`, `test_start_rejects_adults_only_when_venue_restricts_even_if_table_allows` (in `api/tests/test_lobby.py`) — the last one proves the venue-wide switch overrides a table that would otherwise allow it.
 
 ---
 

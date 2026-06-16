@@ -175,8 +175,11 @@ async def start_lobby(request: Request, lobby_id: str, body: StartGameRequest):
             except PermissionError:
                 raise HTTPException(status_code=403, detail="Only the host can start the game")
             except ValueError as e:
-                detail = "Lobby already started" if str(e) == "lobby_not_open" else "Invalid player count"
-                raise HTTPException(status_code=409 if str(e) == "lobby_not_open" else 422, detail=detail)
+                if str(e) == "lobby_not_open":
+                    raise HTTPException(status_code=409, detail="Lobby already started")
+                if str(e) == "adults_only_not_allowed":
+                    raise HTTPException(status_code=422, detail="Adults Only is not available at this table")
+                raise HTTPException(status_code=422, detail="Invalid player count")
     except HTTPException:
         raise
     except Exception:
