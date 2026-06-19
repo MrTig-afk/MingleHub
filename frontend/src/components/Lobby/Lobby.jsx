@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { claimHost, pollLobby, setLobbyName, startGame } from '../../services/patronApi'
+import useSessionChannel from '../../hooks/useSessionChannel'
 
 const POLL_MS = 2000
 
@@ -7,7 +8,7 @@ const POLL_MS = 2000
 // and no session exists yet (Lobby). After the host claims, doubles as the
 // Setup screen: shows the roster of names from lobby phones, optional group
 // label, Adults Only toggle, and Start. Every phone first enters their name.
-export default function Lobby({ venueName, lobbyId, phoneId, adultsOnlyAllowed, onGameStarted }) {
+export default function Lobby({ venueName, lobbyId, phoneId, tableId, adultsOnlyAllowed, onGameStarted }) {
   const [state, setState] = useState(null)
   const [error, setError] = useState(null)
   const [myName, setMyName] = useState('')
@@ -18,6 +19,9 @@ export default function Lobby({ venueName, lobbyId, phoneId, adultsOnlyAllowed, 
   const [starting, setStarting] = useState(false)
   const startedRef = useRef(false)
   const [hasJoined, setHasJoined] = useState(false)
+  // tickRef holds the current poll function so realtime events can trigger
+  // an immediate poll without re-subscribing.
+  const tickRef = useRef(null)
 
   useEffect(() => {
     let cancelled = false
@@ -39,10 +43,24 @@ export default function Lobby({ venueName, lobbyId, phoneId, adultsOnlyAllowed, 
         if (!cancelled) setError(e.message)
       }
     }
+    tickRef.current = tick
     tick()
     const id = setInterval(tick, POLL_MS)
-    return () => { cancelled = true; clearInterval(id) }
+    return () => {
+      cancelled = true
+      clearInterval(id)
+      tickRef.current = null
+    }
   }, [lobbyId, onGameStarted, phoneId, hasSetName])
+
+  // Realtime: when a lobby_update event arrives, immediately trigger a poll
+  // to get the latest canonical state. The poll remains the primary source
+  // of truth — realtime only accelerates delivery.
+  useSessionChannel(tableId, phoneId, (event) => {
+    if (event === 'lobby_update' && tickRef.current) {
+      tickRef.current()
+    }
+  })
 
   const isHost = state?.host_phone_id === phoneId
   const noHostYet = state && !state.host_phone_id

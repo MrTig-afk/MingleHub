@@ -89,6 +89,7 @@ export default function PatronLanding() {
         venueName={venue.venue_name}
         lobbyId={tableState.lobby_id}
         phoneId={initialTap.phoneId}
+        tableId={venue.table_id}
         // gamespec: Adults Only Toggle — venue-wide restrict_adult_content
         // overrides the table's own content_ceiling. Server re-validates
         // this on start (lobby_service.adults_only_allowed); this only

@@ -136,6 +136,16 @@ export const redrawRound = (roundId, phoneId) =>
     return r.json()
   })
 
+export const fetchChannelAuth = (tableId, phoneId) =>
+  fetch(`${BASE}/api/patron/channel-auth`, {
+    method: 'POST',
+    headers: h,
+    body: JSON.stringify({ phone_id: phoneId, table_id: tableId }),
+  }).then(async (r) => {
+    if (!r.ok) throw new Error((await r.json()).detail || r.status)
+    return r.json()
+  })
+
 // Dev-only — stands in for a physical tag by computing the signature it
 // would produce for a given tag_uid + counter. 404s outside DEV_MODE.
 export const simulateTap = (tagUid, counter) =>

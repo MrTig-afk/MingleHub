@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 
 from api.db import get_pool
 from api.security import limiter, verify_api_key
-from api.services import chooser_service, lobby_service, round_service
+from api.services import chooser_service, lobby_service, realtime_auth, round_service
 from api.services.notify import notify_error
 from api.services.nfc_crypto import decrypt_tag_key
 from api.services.nfc_verify import verify_signature
@@ -109,6 +109,7 @@ async def tap(
         "table_number": table_number,
         "content_ceiling": table["content_ceiling"],
         "restrict_adult_content": venue["restrict_adult_content"],
+        "table_id": str(table["id"]),
     }
     if table_state:
         response["table_state"] = table_state
@@ -135,6 +136,10 @@ class SetNameRequest(PhoneIdBody):
 class JoinSessionRequest(BaseModel):
     phone_id: str = Field(min_length=1, max_length=64)
     name: Optional[str] = Field(None, max_length=60)
+
+
+class ChannelAuthRequest(PhoneIdBody):
+    table_id: str = Field(min_length=1)
 
 
 @router.get("/lobby/{lobby_id}")
@@ -222,6 +227,72 @@ async def start_lobby(request: Request, lobby_id: str, body: StartGameRequest):
         await notify_error("POST /patron/lobby/start failed 🚨", traceback.format_exc()[:500])
         raise HTTPException(status_code=500, detail="Internal error")
     return result
+
+
+@router.post("/channel-auth")
+@limiter.limit("30/minute")
+async def channel_auth(request: Request, body: ChannelAuthRequest):
+    """BOLA-guarded: returns a short-lived Realtime token scoped to the
+    table's broadcast channel, only if this phone belongs to an open lobby
+    or active session at the table.
+
+    Returns {"realtime_enabled": false} (200) when SUPABASE_* env vars
+    are unset. Returns 403 if the phone is not a member.
+
+    The BOLA membership check runs BEFORE is_enabled() so a non-member
+    always gets 403 regardless of env configuration.
+    """
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            # BOLA check: phone must be in an open lobby OR active session at this table.
+            is_member = await conn.fetchval(
+                """
+                SELECT EXISTS (
+                    SELECT 1 FROM table_lobby_phones tlp
+                    JOIN table_lobbies tl ON tl.id = tlp.lobby_id
+                    WHERE tl.table_id = $1 AND tl.status = 'open' AND tlp.phone_id = $2
+                )
+                """,
+                body.table_id, body.phone_id,
+            )
+            if not is_member:
+                is_member = await conn.fetchval(
+                    """
+                    SELECT EXISTS (
+                        SELECT 1 FROM game_sessions
+                        WHERE table_id = $1 AND ended_at IS NULL AND origin_phone_id = $2
+                    )
+                    """,
+                    body.table_id, body.phone_id,
+                )
+            if not is_member:
+                is_member = await conn.fetchval(
+                    """
+                    SELECT EXISTS (
+                        SELECT 1 FROM game_sessions gs
+                        JOIN table_lobbies tl ON tl.converted_session_id = gs.id
+                        JOIN table_lobby_phones tlp ON tlp.lobby_id = tl.id
+                        WHERE gs.table_id = $1 AND gs.ended_at IS NULL AND tlp.phone_id = $2
+                    )
+                    """,
+                    body.table_id, body.phone_id,
+                )
+            if not is_member:
+                raise HTTPException(status_code=403, detail="Not a member at this table")
+
+        # BOLA passed. Check if realtime is enabled.
+        if not realtime_auth.is_enabled():
+            return {"realtime_enabled": False}
+
+        channel = f"table:{body.table_id}"
+        result = realtime_auth.mint_channel_token(channel, body.phone_id)
+        return {"realtime_enabled": True, **result}
+    except HTTPException:
+        raise
+    except Exception:
+        await notify_error("POST /patron/channel-auth failed", traceback.format_exc()[:500])
+        raise HTTPException(status_code=500, detail="Internal error")
 
 
 @router.post("/table/{table_id}/new-group")

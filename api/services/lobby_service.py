@@ -19,6 +19,8 @@ import uuid
 
 import asyncpg
 
+from api.services.realtime_service import publish as rt_publish
+
 MAX_GROUPS_PER_TABLE = 3
 MIN_PLAYERS = 2
 MAX_PLAYERS = 8
@@ -103,6 +105,11 @@ async def resolve_table_state(conn, venue_id: str, table_id: str, table_number: 
 
     lobby = await _get_or_create_open_lobby(conn, venue_id, table_id)
     phone_count = await _join_lobby_phone(conn, lobby["id"], phone_id)
+    await rt_publish(
+        f"table:{table_id}",
+        "lobby_update",
+        {"lobby_id": str(lobby["id"]), "phone_count": phone_count},
+    )
     return {
         "phase": "lobby",
         "lobby_id": str(lobby["id"]),
@@ -123,6 +130,11 @@ async def start_new_group(conn, venue_id: str, table_id: str, phone_id: str) -> 
 
     lobby = await _get_or_create_open_lobby(conn, venue_id, table_id)
     phone_count = await _join_lobby_phone(conn, lobby["id"], phone_id)
+    await rt_publish(
+        f"table:{table_id}",
+        "lobby_update",
+        {"lobby_id": str(lobby["id"]), "phone_count": phone_count},
+    )
     return {
         "lobby_id": str(lobby["id"]),
         "phone_count": phone_count,
@@ -241,6 +253,15 @@ async def set_lobby_phone_name(conn, lobby_id: str, phone_id: str, name: str) ->
     )
     if not row:
         raise LookupError("phone_not_in_lobby")
+    table_id = await conn.fetchval(
+        "SELECT table_id FROM table_lobbies WHERE id = $1", lobby_id
+    )
+    if table_id:
+        await rt_publish(
+            f"table:{table_id}",
+            "lobby_update",
+            {"lobby_id": lobby_id, "name_updated": True},
+        )
     return {"phone_id": row["phone_id"], "name": row["name"]}
 
 
@@ -262,6 +283,15 @@ async def claim_host(conn, lobby_id: str, phone_id: str) -> dict:
         phone_id, lobby_id,
     )
     if row:
+        table_id = await conn.fetchval(
+            "SELECT table_id FROM table_lobbies WHERE id = $1", lobby_id
+        )
+        if table_id:
+            await rt_publish(
+                f"table:{table_id}",
+                "lobby_update",
+                {"lobby_id": lobby_id, "host_phone_id": phone_id},
+            )
         return {"you_are_host": True, "host_phone_id": phone_id}
 
     current = await conn.fetchval("SELECT host_phone_id FROM table_lobbies WHERE id = $1", lobby_id)
@@ -345,6 +375,15 @@ async def start_game(
     await conn.execute(
         "UPDATE table_lobbies SET status = 'converted', converted_session_id = $1 WHERE id = $2",
         session_id, lobby["id"],
+    )
+    await rt_publish(
+        f"table:{lobby['table_id']}",
+        "lobby_update",
+        {
+            "lobby_id": str(lobby["id"]),
+            "status": "converted",
+            "session_id": session_id,
+        },
     )
     return {"session_id": session_id, "group_label": label, "player_count": player_count,
             "adults_only": adults_only}
