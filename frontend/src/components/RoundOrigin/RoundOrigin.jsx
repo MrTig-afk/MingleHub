@@ -1,26 +1,53 @@
 import { useState } from 'react'
 import ChooserRound from '../ChooserRound/ChooserRound'
 import FingerChooser from '../FingerChooser/FingerChooser'
+import TriviaOriginRound from '../Trivia/TriviaOriginRound'
 import { pickHotSeat } from '../../services/patronApi'
 
-// gamespec.md Step 5 — Round Flow, Finger Picker section. Renders only on
-// the session-origin phone (the one that started the game) — everyone
-// else's screen shows a "watch the table phone" placeholder instead.
-//
-// After the finger picker resolves a hot-seat player, renders ChooserRound
-// which draws a card and handles Complete/Skip/Redraw. When ChooserRound
-// calls onRoundComplete(), hotSeat is cleared back to null and the finger
-// picker resets for the next round.
-export default function RoundOrigin({ venueName, sessionId, phoneId, adultsOnly, playerCount = 2 }) {
+// Round-type cadence stand-in until the weighted theme engine exists. Trivia is
+// NOT something anyone taps to start -- the game surfaces it automatically.
+// TRIVIA_EVERY fires Trivia on every Nth round: 1 = EVERY round is Trivia (so the
+// very first round, immediately after Start, is Trivia -- a deliberate diagnostic
+// setting to confirm the Trivia flow works in isolation). Use 3 for the real
+// rhythm (rounds 1 & 2 Chooser, round 3 Trivia), or 0/null for a random ~50/50
+// mix -- NOTE random mode must store the per-round decision in state rather than
+// computing it inline below, or it would re-roll on every render.
+// (gamespec: "draws from a weighted pool of round types".)
+const TRIVIA_EVERY = 1
+
+function decideRoundType(roundNumber) {
+  if (!TRIVIA_EVERY) return Math.random() < 0.5 ? 'trivia' : 'chooser'
+  return roundNumber % TRIVIA_EVERY === 0 ? 'trivia' : 'chooser'
+}
+
+// gamespec.md Step 5 — Round Flow, on the session-origin phone. Everyone else's
+// phone runs SessionParticipant. The origin's round engine decides each round's
+// type automatically (no manual picker): a Chooser round runs the finger picker
+// -> ChooserRound; a Trivia round runs TriviaOriginRound, which auto-enters with
+// a brief "get ready" splash on all phones. Finishing a round advances to the
+// next one. The round counter is persisted per session so a re-tap or reload of
+// the table phone resumes the right round (NFC re-taps are normal mid-session).
+export default function RoundOrigin({ venueName, sessionId, phoneId, tableId, adultsOnly, playerCount = 2 }) {
+  const roundKey = `mh_round_${sessionId}`
+  const [roundNumber, setRoundNumber] = useState(() => {
+    const saved = Number(localStorage.getItem(roundKey))
+    return saved >= 1 ? saved : 1
+  })
   const [hotSeat, setHotSeat] = useState(null)
   const [error, setError] = useState(null)
   const [picking, setPicking] = useState(false)
-  // Cross-round memory of recent winners' screen positions. Lives here (not in
-  // the picker) because FingerChooser unmounts/remounts every round when
-  // ChooserRound takes over — so the picker can't remember across rounds on its
-  // own. The picker weights each pick away from these spots so the selection
-  // spreads around the table instead of clustering on one person/area.
   const [recentWinners, setRecentWinners] = useState([])
+
+  // Derive the type directly from the (persisted) round number so it can't
+  // drift out of sync with the counter across re-renders/remounts.
+  const roundType = decideRoundType(roundNumber)
+
+  const advanceRound = () => {
+    const next = roundNumber + 1
+    localStorage.setItem(roundKey, String(next))
+    setHotSeat(null)
+    setRoundNumber(next)
+  }
 
   const handleChosen = async () => {
     setPicking(true)
@@ -35,6 +62,19 @@ export default function RoundOrigin({ venueName, sessionId, phoneId, adultsOnly,
     }
   }
 
+  // --- Trivia round (auto-entered) ---
+  if (roundType === 'trivia') {
+    return (
+      <TriviaOriginRound
+        sessionId={sessionId}
+        phoneId={phoneId}
+        tableId={tableId}
+        onDone={advanceRound}
+      />
+    )
+  }
+
+  // --- Chooser round ---
   if (hotSeat) {
     return (
       <ChooserRound
@@ -42,11 +82,12 @@ export default function RoundOrigin({ venueName, sessionId, phoneId, adultsOnly,
         phoneId={phoneId}
         hotSeat={hotSeat}
         adultsOnly={adultsOnly}
-        onRoundComplete={() => setHotSeat(null)}
+        onRoundComplete={advanceRound}
       />
     )
   }
 
+  const nextIsTrivia = decideRoundType(roundNumber + 1) === 'trivia'
   return (
     <div style={{ position: 'relative', minHeight: '100dvh' }}>
       <FingerChooser
@@ -54,8 +95,7 @@ export default function RoundOrigin({ venueName, sessionId, phoneId, adultsOnly,
         requiredFingers={playerCount}
         recentWinnerPositions={recentWinners}
         // Keep only the last 3 winning spots — a sliding window the picker
-        // steers away from, so it avoids the recent areas without permanently
-        // ruling anyone out over a long session.
+        // steers away from so selection spreads around the table.
         onWinnerChosen={(pos) => setRecentWinners((prev) => [...prev, pos].slice(-3))}
         hideBack
       />
@@ -65,6 +105,10 @@ export default function RoundOrigin({ venueName, sessionId, phoneId, adultsOnly,
           {error && <p style={{ margin: 0, color: 'var(--tertiary)' }}>{error}</p>}
         </div>
       )}
+      {/* Round indicator — also confirms the table phone is on the latest build. */}
+      <p style={roundBadgeStyle}>
+        Round {roundNumber} · Chooser{nextIsTrivia ? '  ·  🧠 Trivia next' : ''}
+      </p>
       <p style={venueLabelStyle}>{venueName}</p>
     </div>
   )
@@ -84,6 +128,17 @@ const bannerStyle = {
   zIndex: 40,
 }
 
+const roundBadgeStyle = {
+  position: 'fixed',
+  top: 'calc(env(safe-area-inset-top, 0px) + 22px)',
+  left: 'var(--safe-margin)',
+  margin: 0,
+  fontSize: '11px',
+  color: 'var(--on-surface-dim)',
+  fontFamily: 'var(--font-mono)',
+  zIndex: 30,
+}
+
 const venueLabelStyle = {
   position: 'fixed',
   top: 'calc(env(safe-area-inset-top, 0px) + 22px)',
@@ -94,5 +149,3 @@ const venueLabelStyle = {
   fontFamily: 'var(--font-mono)',
   zIndex: 30,
 }
-
-

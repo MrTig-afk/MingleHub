@@ -253,9 +253,110 @@ async def migrate():
         """)
         print("OK table_lobby_phones.name ready")
 
+        # Bind each game_players row to the phone it represents. Needed by the
+        # Trivia round (Round Type 2): every player answers on their own device,
+        # so a phone's answer must score the right person (Scoring -> Discernibility
+        # Principle). Populated at lobby start_game and join_existing_session.
+        # Nullable so pre-existing rows and any non-phone player stay valid.
+        await conn.execute("""
+            ALTER TABLE game_players
+            ADD COLUMN IF NOT EXISTS phone_id TEXT
+        """)
+        print("OK game_players.phone_id ready")
+
+        # gamespec Round Type 2 -- Trivia. The question bank. correct_option is
+        # server-side only and is NEVER sent to the browser before a phone answers
+        # (security.md #97 / coding-practices MingleHub Rules).
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS trivia_questions (
+                id              UUID PRIMARY KEY,
+                question        TEXT NOT NULL,
+                option_a        TEXT NOT NULL,
+                option_b        TEXT NOT NULL,
+                option_c        TEXT NOT NULL,
+                option_d        TEXT NOT NULL,
+                correct_option  TEXT NOT NULL CHECK (correct_option IN ('A', 'B', 'C', 'D')),
+                category        TEXT NOT NULL,
+                is_adults_only  BOOLEAN DEFAULT FALSE,
+                created_at      TIMESTAMP DEFAULT NOW()
+            )
+        """)
+        print("OK trivia_questions table ready")
+
+        # One trivia round per session-round: tracks the 5 chosen questions, the
+        # gather/in-progress/complete lifecycle, and which question is live (with
+        # the timestamp the 20s timer is measured from). Distinct from `rounds`
+        # (one analytics row per round); a trivia round spans 5 questions x N phones.
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS trivia_rounds (
+                id                           UUID PRIMARY KEY,
+                session_id                   UUID NOT NULL REFERENCES game_sessions(id),
+                status                       TEXT NOT NULL DEFAULT 'gathering'
+                    CHECK (status IN ('gathering', 'in_progress', 'complete', 'abandoned_at_gather')),
+                question_ids                 UUID[] NOT NULL,
+                category                     TEXT,
+                adults_only                  BOOLEAN DEFAULT FALSE,
+                current_index                INTEGER NOT NULL DEFAULT 0,
+                current_question_started_at  TIMESTAMP,
+                created_at                   TIMESTAMP DEFAULT NOW(),
+                started_at                   TIMESTAMP,
+                ended_at                     TIMESTAMP
+            )
+        """)
+        print("OK trivia_rounds table ready")
+
+        # Only one active (gathering/in_progress) trivia round per session at a
+        # time -- a second `start` while one is live is a no-op/conflict, not a
+        # second row. Partial unique index, same pattern as one_open_lobby_per_table.
+        await conn.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS one_active_trivia_round_per_session
+            ON trivia_rounds (session_id) WHERE status IN ('gathering', 'in_progress')
+        """)
+        print("OK one_active_trivia_round_per_session index ready")
+
+        # Phones that joined a trivia round's gather. player_id binds the phone to
+        # its game_players row so scoring lands on the right person.
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS trivia_participants (
+                id               UUID PRIMARY KEY,
+                trivia_round_id  UUID NOT NULL REFERENCES trivia_rounds(id),
+                phone_id         TEXT NOT NULL,
+                player_id        UUID NOT NULL REFERENCES game_players(id),
+                joined_at        TIMESTAMP DEFAULT NOW(),
+                UNIQUE (trivia_round_id, phone_id)
+            )
+        """)
+        print("OK trivia_participants table ready")
+
+        # One answer per phone per question. is_correct/before_timer/score_awarded
+        # are all computed server-side (the client never sees correct_option until
+        # after it has answered). The UNIQUE guard makes re-submits a no-op (409).
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS trivia_answers (
+                id                UUID PRIMARY KEY,
+                trivia_round_id   UUID NOT NULL REFERENCES trivia_rounds(id),
+                question_id       UUID NOT NULL REFERENCES trivia_questions(id),
+                question_index    INTEGER NOT NULL,
+                phone_id          TEXT NOT NULL,
+                player_id         UUID NOT NULL REFERENCES game_players(id),
+                selected_option   TEXT NOT NULL CHECK (selected_option IN ('A', 'B', 'C', 'D')),
+                is_correct        BOOLEAN NOT NULL,
+                before_timer      BOOLEAN NOT NULL,
+                time_to_answer_ms INTEGER,
+                score_awarded     INTEGER NOT NULL DEFAULT 0,
+                answered_at       TIMESTAMP DEFAULT NOW(),
+                UNIQUE (trivia_round_id, question_index, phone_id)
+            )
+        """)
+        print("OK trivia_answers table ready")
+
         from scripts.seed_bar_cards import seed as seed_bar_cards  # noqa: E402
         await seed_bar_cards(conn)
         print("OK bar_cards seeded")
+
+        from scripts.seed_trivia_questions import seed as seed_trivia_questions  # noqa: E402
+        await seed_trivia_questions(conn)
+        print("OK trivia_questions seeded")
 
         schema = await conn.fetch("""
             SELECT column_name, data_type, is_nullable, column_default
