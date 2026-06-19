@@ -6,14 +6,14 @@ import { pickHotSeat } from '../../services/patronApi'
 
 // Round-type cadence stand-in until the weighted theme engine exists. Trivia is
 // NOT something anyone taps to start -- the game surfaces it automatically
-// between Chooser rounds. CADENCE === 'every3' fires Trivia on every 3rd round
-// (easy to reach while testing); switch to 'random' for a ~50/50 mix once the
-// flow is signed off. (gamespec: "draws from a weighted pool of round types".)
-const CADENCE = 'every3' // 'every3' | 'random'
+// between Chooser rounds. TRIVIA_EVERY fires Trivia on every Nth round (set to 2
+// while testing so it comes up fast); set to 0/null for a random ~50/50 mix once
+// the flow is signed off. (gamespec: "draws from a weighted pool of round types".)
+const TRIVIA_EVERY = 2
 
 function decideRoundType(roundNumber) {
-  if (CADENCE === 'random') return Math.random() < 0.5 ? 'trivia' : 'chooser'
-  return roundNumber % 3 === 0 ? 'trivia' : 'chooser'
+  if (!TRIVIA_EVERY) return Math.random() < 0.5 ? 'trivia' : 'chooser'
+  return roundNumber % TRIVIA_EVERY === 0 ? 'trivia' : 'chooser'
 }
 
 // gamespec.md Step 5 — Round Flow, on the session-origin phone. Everyone else's
@@ -21,22 +21,28 @@ function decideRoundType(roundNumber) {
 // type automatically (no manual picker): a Chooser round runs the finger picker
 // -> ChooserRound; a Trivia round runs TriviaOriginRound, which auto-enters with
 // a brief "get ready" splash on all phones. Finishing a round advances to the
-// next one.
+// next one. The round counter is persisted per session so a re-tap or reload of
+// the table phone resumes the right round (NFC re-taps are normal mid-session).
 export default function RoundOrigin({ venueName, sessionId, phoneId, tableId, adultsOnly, playerCount = 2 }) {
-  const [roundNumber, setRoundNumber] = useState(1)
-  const [roundType, setRoundType] = useState(() => decideRoundType(1))
+  const roundKey = `mh_round_${sessionId}`
+  const [roundNumber, setRoundNumber] = useState(() => {
+    const saved = Number(localStorage.getItem(roundKey))
+    return saved >= 1 ? saved : 1
+  })
   const [hotSeat, setHotSeat] = useState(null)
   const [error, setError] = useState(null)
   const [picking, setPicking] = useState(false)
-  // Cross-round memory of recent winners' screen positions: FingerChooser
-  // unmounts each round, so the picker can't remember on its own.
   const [recentWinners, setRecentWinners] = useState([])
+
+  // Derive the type directly from the (persisted) round number so it can't
+  // drift out of sync with the counter across re-renders/remounts.
+  const roundType = decideRoundType(roundNumber)
 
   const advanceRound = () => {
     const next = roundNumber + 1
+    localStorage.setItem(roundKey, String(next))
     setHotSeat(null)
     setRoundNumber(next)
-    setRoundType(decideRoundType(next))
   }
 
   const handleChosen = async () => {
@@ -77,6 +83,7 @@ export default function RoundOrigin({ venueName, sessionId, phoneId, tableId, ad
     )
   }
 
+  const nextIsTrivia = decideRoundType(roundNumber + 1) === 'trivia'
   return (
     <div style={{ position: 'relative', minHeight: '100dvh' }}>
       <FingerChooser
@@ -94,6 +101,10 @@ export default function RoundOrigin({ venueName, sessionId, phoneId, tableId, ad
           {error && <p style={{ margin: 0, color: 'var(--tertiary)' }}>{error}</p>}
         </div>
       )}
+      {/* Round indicator — also confirms the table phone is on the latest build. */}
+      <p style={roundBadgeStyle}>
+        Round {roundNumber} · Chooser{nextIsTrivia ? '  ·  🧠 Trivia next' : ''}
+      </p>
       <p style={venueLabelStyle}>{venueName}</p>
     </div>
   )
@@ -111,6 +122,17 @@ const bannerStyle = {
   fontFamily: 'var(--font-mono)',
   fontSize: '13px',
   zIndex: 40,
+}
+
+const roundBadgeStyle = {
+  position: 'fixed',
+  top: 'calc(env(safe-area-inset-top, 0px) + 22px)',
+  left: 'var(--safe-margin)',
+  margin: 0,
+  fontSize: '11px',
+  color: 'var(--on-surface-dim)',
+  fontFamily: 'var(--font-mono)',
+  zIndex: 30,
 }
 
 const venueLabelStyle = {

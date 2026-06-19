@@ -32,14 +32,28 @@ export default function TriviaOriginRound({ sessionId, phoneId, tableId, onDone 
   const roundIdRef = useRef(null)
   const pollRef = useRef(null)
 
-  // Open the round on mount (auto-enrolls all active members).
+  // Open the round on mount (auto-enrolls all active members). start is
+  // idempotent, so a StrictMode double-mount / re-tap returns the same round.
   useEffect(() => {
     let cancelled = false
     startTrivia(sessionId, phoneId)
-      .then((data) => {
+      .then(async (data) => {
         if (cancelled) return
         roundIdRef.current = data.trivia_round_id
         setJoinedCount(data.joined_count ?? 0)
+        if (data.status === 'in_progress') {
+          // Resuming an already-started round (re-tap mid-Trivia) -- jump to the
+          // live question rather than replaying the get-ready splash.
+          try {
+            const cur = await fetchTriviaCurrent(sessionId, phoneId)
+            if (cancelled) return
+            if (cur.question) {
+              setQuestion(cur.question)
+              setPhase('question')
+              return
+            }
+          } catch { /* fall through to get-ready */ }
+        }
         setPhase('getready')
       })
       .catch(() => {

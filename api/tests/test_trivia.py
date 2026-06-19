@@ -410,10 +410,12 @@ def test_leaderboard_endpoint_and_leave(client, api_key_header, owner_a_token, f
     assert left_rows[0]["name"] == "Player 2"
 
 
-def test_start_twice_conflicts(client, api_key_header, owner_a_token, fresh_table):
+def test_start_is_idempotent_for_origin(client, api_key_header, owner_a_token, fresh_table):
+    # The origin re-calling start (StrictMode remount, retry, re-tap) must get the
+    # SAME active round back, not an error -- otherwise the client bails out of Trivia.
     s = _setup_session(client, api_key_header, owner_a_token, fresh_table, num_phones=2)
     first = _start(client, api_key_header, s["session_id"], s["origin"])
     assert first.status_code == 200, first.text
     second = _start(client, api_key_header, s["session_id"], s["origin"])
-    assert second.status_code == 409
-    assert second.json()["detail"] == "trivia_already_active"
+    assert second.status_code == 200, second.text
+    assert second.json()["trivia_round_id"] == first.json()["trivia_round_id"]

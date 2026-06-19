@@ -109,17 +109,27 @@ async def start_trivia(conn, session_id: str, phone_id: str) -> dict:
     if session["origin_phone_id"] != phone_id:
         raise PermissionError("not_origin_phone")
 
-    # One active trivia round per session (also enforced by a partial unique
-    # index) -- surface a clean conflict rather than a DB error.
-    existing = await conn.fetchval(
+    # Idempotent for the origin: if a round is already active, return it rather
+    # than erroring. The origin legitimately re-calls start on a remount (React
+    # StrictMode double-invokes mount effects), a retry, or a re-tap -- a 409
+    # there would make the client bail out of the Trivia round entirely. The
+    # partial unique index still blocks a genuine second concurrent round.
+    existing = await conn.fetchrow(
         """
-        SELECT id FROM trivia_rounds
+        SELECT id, status, question_ids FROM trivia_rounds
         WHERE session_id = $1 AND status IN ('gathering', 'in_progress')
+        ORDER BY created_at DESC
+        LIMIT 1
         """,
         session_id,
     )
     if existing:
-        raise ValueError("trivia_already_active")
+        return {
+            "trivia_round_id": str(existing["id"]),
+            "status": existing["status"],
+            "joined_count": await _participant_count(conn, existing["id"]),
+            "num_questions": len(existing["question_ids"]),
+        }
 
     # Everyone present plays -- enroll all active members (a phone is bound to
     # its player via game_players.phone_id). Checked before creating the round
