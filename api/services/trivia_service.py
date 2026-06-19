@@ -89,11 +89,17 @@ async def _answered_count(conn, trivia_round_id, question_index: int) -> int:
 
 
 async def start_trivia(conn, session_id: str, phone_id: str) -> dict:
-    """Open the Trivia gather phase. Origin-phone only.
+    """Open a Trivia round. Origin-phone only.
 
-    Picks NUM_QUESTIONS questions (respecting the session's adults_only flag),
-    creates the trivia_round in 'gathering', and auto-joins the origin phone
-    as the first participant. Broadcasts trivia:gather.
+    Trivia surfaces automatically between Chooser rounds (the origin's round
+    engine decides the type) -- there is no manual gather/tap-to-join. So EVERY
+    active session member is auto-enrolled as a participant, and the round opens
+    in the brief 'gathering' (get-ready) state before the first question. Picks
+    NUM_QUESTIONS questions (respecting adults_only) and broadcasts trivia:gather
+    as the "get ready" signal to all phones.
+
+    Raises not_enough_players if fewer than 2 active members remain (the round
+    engine then runs a different round type instead).
     """
     session = await _get_session(conn, session_id)
     if not session:
@@ -114,6 +120,19 @@ async def start_trivia(conn, session_id: str, phone_id: str) -> dict:
     )
     if existing:
         raise ValueError("trivia_already_active")
+
+    # Everyone present plays -- enroll all active members (a phone is bound to
+    # its player via game_players.phone_id). Checked before creating the round
+    # so a <2 session never leaves an orphan round behind.
+    members = await conn.fetch(
+        """
+        SELECT id, phone_id FROM game_players
+        WHERE session_id = $1 AND left_early = FALSE AND phone_id IS NOT NULL
+        """,
+        session_id,
+    )
+    if len(members) < MIN_PARTICIPANTS:
+        raise ValueError("not_enough_players")
 
     adults_only = session["adults_only"]
     question_rows = await conn.fetch(
@@ -137,21 +156,17 @@ async def start_trivia(conn, session_id: str, phone_id: str) -> dict:
         """,
         trivia_round_id, session_id, question_ids, adults_only,
     )
-
-    # Auto-join the origin phone if it owns a player row (it normally does --
-    # it was in the lobby). gamespec: already-joined phones join automatically.
-    origin_player = await _resolve_player(conn, session_id, phone_id)
-    if origin_player and not origin_player["left_early"]:
+    for m in members:
         await conn.execute(
             """
             INSERT INTO trivia_participants (id, trivia_round_id, phone_id, player_id)
             VALUES ($1, $2, $3, $4)
             ON CONFLICT (trivia_round_id, phone_id) DO NOTHING
             """,
-            str(uuid.uuid4()), trivia_round_id, phone_id, origin_player["id"],
+            str(uuid.uuid4()), trivia_round_id, m["phone_id"], m["id"],
         )
 
-    joined_count = await _participant_count(conn, trivia_round_id)
+    joined_count = len(members)
     await rt_publish(
         _channel(session["table_id"]),
         "trivia:gather",
@@ -159,7 +174,6 @@ async def start_trivia(conn, session_id: str, phone_id: str) -> dict:
             "session_id": session_id,
             "trivia_round_id": trivia_round_id,
             "joined_count": joined_count,
-            "gather_seconds": 60,
         },
     )
     return {

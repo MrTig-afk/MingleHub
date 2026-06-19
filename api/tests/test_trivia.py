@@ -201,21 +201,24 @@ def test_start_requires_origin_phone(client, api_key_header, owner_a_token, fres
     assert resp.status_code == 403
 
 
-def test_start_opens_gather_and_autojoins_origin(client, api_key_header, owner_a_token, fresh_table):
+def test_start_enrolls_all_active_members(client, api_key_header, owner_a_token, fresh_table):
+    # Trivia is auto-entered between rounds, so every active phone is enrolled
+    # at start -- no manual tap-to-join.
     s = _setup_session(client, api_key_header, owner_a_token, fresh_table, num_phones=2)
     resp = _start(client, api_key_header, s["session_id"], s["origin"])
     assert resp.status_code == 200, resp.text
     data = resp.json()
     assert data["status"] == "gathering"
-    assert data["joined_count"] == 1  # origin auto-joined
+    assert data["joined_count"] == 2  # both members auto-enrolled
     assert data["num_questions"] == 5
 
 
-def test_begin_requires_two_participants(client, api_key_header, owner_a_token, fresh_table):
+def test_start_requires_two_active_players(client, api_key_header, owner_a_token, fresh_table):
     s = _setup_session(client, api_key_header, owner_a_token, fresh_table, num_phones=2)
-    rid = _start(client, api_key_header, s["session_id"], s["origin"]).json()["trivia_round_id"]
-    # Only origin joined so far -> begin must refuse.
-    resp = _begin(client, api_key_header, rid, s["origin"])
+    # One player leaves -> only 1 active -> Trivia can't run (engine picks another type).
+    leave = _leave(client, api_key_header, s["session_id"], s["phones"][1])
+    assert leave.status_code == 200, leave.text
+    resp = _start(client, api_key_header, s["session_id"], s["origin"])
     assert resp.status_code == 409
     assert resp.json()["detail"] == "not_enough_players"
 
@@ -321,14 +324,22 @@ def test_answer_twice_rejected(client, api_key_header, owner_a_token, fresh_tabl
     assert second.json()["detail"] == "already_answered"
 
 
-def test_member_not_participant_cannot_answer(client, api_key_header, owner_a_token, fresh_table):
-    s = _setup_session(client, api_key_header, owner_a_token, fresh_table, num_phones=3)
+def test_member_joining_after_start_cannot_answer(client, api_key_header, owner_a_token, fresh_table):
+    # Everyone active at start is auto-enrolled. A phone that joins the session
+    # AFTER the round started is a member but not a participant -> can't answer.
+    s = _setup_session(client, api_key_header, owner_a_token, fresh_table, num_phones=2)
     rid = _start(client, api_key_header, s["session_id"], s["origin"]).json()["trivia_round_id"]
-    _join(client, api_key_header, rid, s["phones"][1])  # phones[2] is a member but does NOT join
     _begin(client, api_key_header, rid, s["origin"])
 
+    late_phone = _fresh_phone()
+    joined = client.post(
+        f"/api/patron/sessions/{s['session_id']}/join",
+        headers=api_key_header, json={"phone_id": late_phone, "name": "Late"},
+    )
+    assert joined.status_code == 200, joined.text
+
     _qid, correct = _question_key(rid, 0)
-    resp = _answer(client, api_key_header, rid, s["phones"][2], 0, correct)
+    resp = _answer(client, api_key_header, rid, late_phone, 0, correct)
     assert resp.status_code == 403
 
 

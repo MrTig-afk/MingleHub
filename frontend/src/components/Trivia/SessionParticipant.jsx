@@ -2,26 +2,25 @@ import { useEffect, useRef, useState } from 'react'
 import AnswerTiles from './AnswerTiles'
 import Leaderboard from './Leaderboard'
 import useSessionChannel from '../../hooks/useSessionChannel'
-import { answerTrivia, fetchTriviaCurrent, joinTrivia, leaveSession } from '../../services/patronApi'
+import { answerTrivia, fetchTriviaCurrent, leaveSession } from '../../services/patronApi'
 
 const POLL_MS = 2000
 
 // The non-origin (joined) phone's view of a session. Default state is the
-// between-rounds leaderboard (gamespec: Between-Rounds Screen). When the origin
-// starts a Trivia round, this auto-joins the gather, shows the live question with
-// A/B/C/D tiles, and reveals the result per phone. Realtime accelerates delivery;
-// the 2s poll of trivia/current is the source of truth (and the only path when
-// Supabase realtime is not configured).
+// between-rounds leaderboard (gamespec: Between-Rounds Screen). Trivia is
+// auto-entered by the origin's round engine — every active phone is enrolled
+// server-side, so this phone shows a brief "get ready" splash, then the live
+// question with A/B/C/D tiles, and reveals the result per phone. Realtime
+// accelerates delivery; the 2s poll of trivia/current is the source of truth
+// (and the only path when Supabase realtime is not configured).
 export default function SessionParticipant({ venueName, sessionId, phoneId, tableId }) {
   const [state, setState] = useState(null)
   const [localReveal, setLocalReveal] = useState(null) // { index, data } — instant feedback pre-poll
   const [left, setLeft] = useState(false)
   const [error, setError] = useState(null)
-  const joinedRoundRef = useRef(null)
   const pollRef = useRef(null)
 
-  // Poll trivia/current and react to it: auto-join the gather once per round
-  // (gamespec: already-joined phones join automatically; new joiners on tap).
+  // Poll trivia/current as the source of truth for this phone's view.
   useEffect(() => {
     if (left) return
     let cancelled = false
@@ -30,11 +29,6 @@ export default function SessionParticipant({ venueName, sessionId, phoneId, tabl
         const data = await fetchTriviaCurrent(sessionId, phoneId)
         if (cancelled) return
         setState(data)
-        if (data.phase === 'gather' && !data.is_participant
-            && joinedRoundRef.current !== data.trivia_round_id) {
-          joinedRoundRef.current = data.trivia_round_id
-          joinTrivia(data.trivia_round_id, phoneId).catch((e) => setError(e.message))
-        }
       } catch (e) {
         if (!cancelled) setError(e.message)
       }
@@ -80,11 +74,10 @@ export default function SessionParticipant({ venueName, sessionId, phoneId, tabl
   if (state.phase === 'gather') {
     return (
       <Screen>
-        <h1 style={headlineStyle}>Trivia starting! 🧠</h1>
-        <p style={dimMono}>
-          {state.is_participant ? "You're in — get ready" : 'Joining…'}
-        </p>
-        <p style={dimMono}>[{state.joined_count} phone{state.joined_count === 1 ? '' : 's'} joined]</p>
+        <p style={{ fontSize: '44px', margin: 0 }}>🧠</p>
+        <h1 style={headlineStyle}>Trivia round!</h1>
+        <p style={dimMono}>Get ready — answer on your own phone</p>
+        <p style={dimMono}>[{state.joined_count} playing]</p>
         {error && <p style={errStyle}>{error}</p>}
       </Screen>
     )
