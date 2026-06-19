@@ -21,6 +21,9 @@ load_dotenv()
 
 # Order doesn't matter with CASCADE, but listing children-first documents intent.
 GAME_STATE_TABLES = [
+    "trivia_answers",
+    "trivia_participants",
+    "trivia_rounds",
     "game_players",
     "rounds",
     "table_lobby_phones",

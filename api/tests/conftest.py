@@ -16,6 +16,7 @@ load_dotenv(os.path.join(ROOT, "api", ".env"))
 from api.dev_fixtures import OWNER_A_CLERK_ID, VENUE_A_ID  # noqa: E402
 from scripts.seed_bar_cards import seed as seed_bar_cards  # noqa: E402
 from scripts.seed_platform import seed as seed_platform  # noqa: E402
+from scripts.seed_trivia_questions import seed as seed_trivia_questions  # noqa: E402
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -31,6 +32,7 @@ def _seed_dev_fixtures():
         try:
             await seed_platform(conn)
             await seed_bar_cards(conn)
+            await seed_trivia_questions(conn)
         finally:
             await conn.close()
 
@@ -158,6 +160,23 @@ def _teardown_table(table_id):
             # must be deleted before game_players.
             await conn.execute(
                 "UPDATE game_sessions SET last_hot_seat_player_id = NULL WHERE table_id = $1", table_id
+            )
+            # Trivia rows reference game_players / game_sessions / trivia_rounds,
+            # so they must be cleared before those parent rows can be deleted.
+            sessions_subq = "SELECT id FROM game_sessions WHERE table_id = $1"
+            await conn.execute(
+                f"DELETE FROM trivia_answers WHERE trivia_round_id IN "
+                f"(SELECT id FROM trivia_rounds WHERE session_id IN ({sessions_subq}))",
+                table_id,
+            )
+            await conn.execute(
+                f"DELETE FROM trivia_participants WHERE trivia_round_id IN "
+                f"(SELECT id FROM trivia_rounds WHERE session_id IN ({sessions_subq}))",
+                table_id,
+            )
+            await conn.execute(
+                f"DELETE FROM trivia_rounds WHERE session_id IN ({sessions_subq})",
+                table_id,
             )
             await conn.execute(
                 """

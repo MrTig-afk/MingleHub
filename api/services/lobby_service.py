@@ -367,10 +367,12 @@ async def start_game(
         """,
         session_id, lobby["venue_id"], lobby["table_id"], label, player_count, names, adults_only, phone_id,
     )
-    for name in names:
+    # Bind each player to the phone it represents so Trivia can score the
+    # right person (the phone answers on its own device) -- see game_players.phone_id.
+    for i, row in enumerate(phone_rows):
         await conn.execute(
-            "INSERT INTO game_players (id, session_id, name) VALUES ($1, $2, $3)",
-            str(uuid.uuid4()), session_id, name,
+            "INSERT INTO game_players (id, session_id, name, phone_id) VALUES ($1, $2, $3, $4)",
+            str(uuid.uuid4()), session_id, names[i], row["phone_id"],
         )
     await conn.execute(
         "UPDATE table_lobbies SET status = 'converted', converted_session_id = $1 WHERE id = $2",
@@ -389,17 +391,28 @@ async def start_game(
             "adults_only": adults_only}
 
 
-async def join_existing_session(conn, session_id: str, name: str | None) -> dict:
+async def join_existing_session(conn, session_id: str, name: str | None, phone_id: str | None = None) -> dict:
     session = await conn.fetchrow(
         "SELECT id FROM game_sessions WHERE id = $1 AND ended_at IS NULL", session_id
     )
     if not session:
         raise LookupError("session_not_found_or_ended")
 
+    # Re-tap idempotency: a phone that already has a player row in this session
+    # resumes as that player rather than spawning a duplicate -- Trivia relies on
+    # phone_id -> player_id being 1:1 for per-phone scoring.
+    if phone_id:
+        existing = await conn.fetchrow(
+            "SELECT id, name FROM game_players WHERE session_id = $1 AND phone_id = $2",
+            session_id, phone_id,
+        )
+        if existing:
+            return {"session_id": session_id, "player_id": str(existing["id"]), "name": existing["name"]}
+
     player_id = str(uuid.uuid4())
     player_name = name or "New Player"
     await conn.execute(
-        "INSERT INTO game_players (id, session_id, name) VALUES ($1, $2, $3)",
-        player_id, session_id, player_name,
+        "INSERT INTO game_players (id, session_id, name, phone_id) VALUES ($1, $2, $3, $4)",
+        player_id, session_id, player_name, phone_id,
     )
     return {"session_id": session_id, "player_id": player_id, "name": player_name}

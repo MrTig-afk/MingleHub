@@ -138,6 +138,103 @@ export const redrawRound = (roundId, phoneId) =>
     return r.json()
   })
 
+// --- Trivia round (gamespec Round Type 2). The origin phone drives start/begin/
+// next/finish; every joined phone answers via answerTrivia. The correct answer
+// is returned only in answerTrivia's response (after the phone has answered).
+export const startTrivia = (sessionId, phoneId) =>
+  fetch(`${BASE}/api/patron/sessions/${sessionId}/trivia/start`, {
+    method: 'POST',
+    headers: h,
+    body: JSON.stringify({ phone_id: phoneId }),
+  }).then(async (r) => {
+    if (!r.ok) throw new Error((await r.json()).detail || r.status)
+    return r.json()
+  })
+
+export const joinTrivia = (roundId, phoneId) =>
+  fetch(`${BASE}/api/patron/trivia/${roundId}/join`, {
+    method: 'POST',
+    headers: h,
+    body: JSON.stringify({ phone_id: phoneId }),
+  }).then(async (r) => {
+    if (!r.ok) throw new Error((await r.json()).detail || r.status)
+    return r.json()
+  })
+
+export const beginTrivia = (roundId, phoneId) =>
+  fetch(`${BASE}/api/patron/trivia/${roundId}/begin`, {
+    method: 'POST',
+    headers: h,
+    body: JSON.stringify({ phone_id: phoneId }),
+  }).then(async (r) => {
+    if (!r.ok) throw new Error((await r.json()).detail || r.status)
+    return r.json()
+  })
+
+export const answerTrivia = (roundId, phoneId, questionIndex, selectedOption) =>
+  fetch(`${BASE}/api/patron/trivia/${roundId}/answer`, {
+    method: 'POST',
+    headers: h,
+    body: JSON.stringify({ phone_id: phoneId, question_index: questionIndex, selected_option: selectedOption }),
+  }).then(async (r) => {
+    if (!r.ok) throw new Error((await r.json()).detail || r.status)
+    return r.json()
+  })
+
+export const nextTrivia = (roundId, phoneId) =>
+  fetch(`${BASE}/api/patron/trivia/${roundId}/next`, {
+    method: 'POST',
+    headers: h,
+    body: JSON.stringify({ phone_id: phoneId }),
+  }).then(async (r) => {
+    if (!r.ok) throw new Error((await r.json()).detail || r.status)
+    return r.json()
+  })
+
+export const finishTrivia = (roundId, phoneId) =>
+  fetch(`${BASE}/api/patron/trivia/${roundId}/finish`, {
+    method: 'POST',
+    headers: h,
+    body: JSON.stringify({ phone_id: phoneId }),
+  }).then(async (r) => {
+    if (!r.ok) throw new Error((await r.json()).detail || r.status)
+    return r.json()
+  })
+
+export const abandonTrivia = (roundId, phoneId) =>
+  fetch(`${BASE}/api/patron/trivia/${roundId}/abandon`, {
+    method: 'POST',
+    headers: h,
+    body: JSON.stringify({ phone_id: phoneId }),
+  }).then(async (r) => {
+    if (!r.ok) throw new Error((await r.json()).detail || r.status)
+    return r.json()
+  })
+
+export const fetchTriviaCurrent = (sessionId, phoneId) =>
+  fetch(`${BASE}/api/patron/sessions/${sessionId}/trivia/current?phone_id=${encodeURIComponent(phoneId)}`, {
+    headers: h,
+  }).then(async (r) => {
+    if (!r.ok) throw new Error((await r.json()).detail || r.status)
+    return r.json()
+  })
+
+export const fetchLeaderboard = (sessionId) =>
+  fetch(`${BASE}/api/patron/sessions/${sessionId}/leaderboard`, { headers: h }).then(async (r) => {
+    if (!r.ok) throw new Error((await r.json()).detail || r.status)
+    return r.json()
+  })
+
+export const leaveSession = (sessionId, phoneId) =>
+  fetch(`${BASE}/api/patron/sessions/${sessionId}/leave`, {
+    method: 'POST',
+    headers: h,
+    body: JSON.stringify({ phone_id: phoneId }),
+  }).then(async (r) => {
+    if (!r.ok) throw new Error((await r.json()).detail || r.status)
+    return r.json()
+  })
+
 export const fetchChannelAuth = (tableId, phoneId) =>
   fetch(`${BASE}/api/patron/channel-auth`, {
     method: 'POST',

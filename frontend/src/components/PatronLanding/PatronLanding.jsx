@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import JoinOrNewChooser from '../JoinOrNewChooser/JoinOrNewChooser'
 import Lobby from '../Lobby/Lobby'
 import RoundOrigin from '../RoundOrigin/RoundOrigin'
+import SessionParticipant from '../Trivia/SessionParticipant'
 import { fetchTap } from '../../services/patronApi'
 
 const PHONE_ID_KEY = 'minglehub_phone_id'
@@ -128,33 +129,20 @@ export default function PatronLanding() {
           venueName={venue.venue_name}
           sessionId={ts.session_id}
           phoneId={initialTap.phoneId}
+          tableId={venue.table_id}
           adultsOnly={ts.adults_only}
           playerCount={ts.player_count}
         />
       )
     }
-    // Non-origin participant — same placeholder as the 'started' non-host view.
+    // Non-origin participant resuming — back into the between-rounds / Trivia view.
     return (
-      <div style={{
-        minHeight: '100dvh',
-        background: 'var(--bg-floor)',
-        color: 'var(--on-surface)',
-        fontFamily: 'var(--font-body)',
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: '16px',
-        padding: '24px',
-        textAlign: 'center',
-      }}>
-        <h1 className="headline" style={{ fontFamily: 'var(--font-headline)' }}>
-          Welcome back
-        </h1>
-        <p style={{ fontSize: '13px', color: 'var(--on-surface-dim)', fontFamily: 'var(--font-mono)' }}>
-          Watch the table phone — place your finger when asked
-        </p>
-      </div>
+      <SessionParticipant
+        venueName={venue.venue_name}
+        sessionId={ts.session_id}
+        phoneId={initialTap.phoneId}
+        tableId={venue.table_id}
+      />
     )
   }
 
@@ -171,8 +159,35 @@ export default function PatronLanding() {
         venueName={venue.venue_name}
         sessionId={joinedInfo.converted_session_id}
         phoneId={initialTap.phoneId}
+        tableId={venue.table_id}
         adultsOnly={sessionAdultsOnly}
         playerCount={sessionPlayerCount}
+      />
+    )
+  }
+
+  // Non-origin phones — once a session is live they get the participant view
+  // (between-rounds leaderboard, and Trivia gather/answer when the origin runs
+  // a Trivia round). 'started' = was in the lobby; 'joined' = joined an
+  // in-progress group via Join-or-New.
+  if (status === 'started') {
+    return (
+      <SessionParticipant
+        venueName={venue.venue_name}
+        sessionId={joinedInfo.converted_session_id}
+        phoneId={initialTap.phoneId}
+        tableId={venue.table_id}
+      />
+    )
+  }
+
+  if (status === 'joined') {
+    return (
+      <SessionParticipant
+        venueName={venue.venue_name}
+        sessionId={joinedInfo.session_id}
+        phoneId={initialTap.phoneId}
+        tableId={venue.table_id}
       />
     )
   }
@@ -197,31 +212,6 @@ export default function PatronLanding() {
         <h1 className="headline" style={{ fontFamily: 'var(--font-headline)' }}>
           Playing at {venue.venue_name} 🍺
         </h1>
-      )}
-
-      {/* Non-origin phones — the finger picker only runs on the table device
-          (RoundOrigin, above). What happens after a Hot Seat player is
-          picked (Chooser/Trivia/Roulette) is later backlog work. */}
-      {status === 'started' && (
-        <>
-          <h1 className="headline" style={{ fontFamily: 'var(--font-headline)' }}>
-            Game started 🎉
-          </h1>
-          <p style={{ fontSize: '13px', color: 'var(--on-surface-dim)', fontFamily: 'var(--font-mono)' }}>
-            Watch the table phone — place your finger when asked 👀
-          </p>
-        </>
-      )}
-
-      {status === 'joined' && (
-        <>
-          <h1 className="headline" style={{ fontFamily: 'var(--font-headline)' }}>
-            You're in! 🎉
-          </h1>
-          <p style={{ fontSize: '13px', color: 'var(--on-surface-dim)', fontFamily: 'var(--font-mono)' }}>
-            Playing as {joinedInfo.name} — watch the table phone 👀
-          </p>
-        </>
       )}
 
       {status === 'error' && (

@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 
 from api.db import get_pool
 from api.security import limiter, verify_api_key
-from api.services import chooser_service, lobby_service, realtime_auth, round_service
+from api.services import chooser_service, lobby_service, realtime_auth, round_service, trivia_service
 from api.services.notify import notify_error
 from api.services.nfc_crypto import decrypt_tag_key
 from api.services.nfc_verify import verify_signature
@@ -140,6 +140,11 @@ class JoinSessionRequest(BaseModel):
 
 class ChannelAuthRequest(PhoneIdBody):
     table_id: str = Field(min_length=1)
+
+
+class AnswerRequest(PhoneIdBody):
+    question_index: int = Field(ge=0)
+    selected_option: str = Field(pattern="^[ABCD]$")
 
 
 @router.get("/lobby/{lobby_id}")
@@ -326,7 +331,7 @@ async def join_session(request: Request, session_id: str, body: JoinSessionReque
         pool = await get_pool()
         async with pool.acquire() as conn:
             try:
-                result = await lobby_service.join_existing_session(conn, session_id, body.name)
+                result = await lobby_service.join_existing_session(conn, session_id, body.name, body.phone_id)
             except LookupError:
                 raise HTTPException(status_code=404, detail="Not found")
     except HTTPException:
@@ -465,5 +470,202 @@ async def redraw_round(request: Request, round_id: str, body: PhoneIdBody):
         raise
     except Exception:
         await notify_error("POST /patron/rounds/redraw failed 🚨", traceback.format_exc()[:500])
+        raise HTTPException(status_code=500, detail="Internal error")
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Trivia round (gamespec.md: Round Type 2 -- Trivia). Multi-phone; every player
+# answers on their own device. correct_option is checked server-side only and
+# never sent to the browser before the phone answers.
+# ---------------------------------------------------------------------------
+
+async def _run_trivia(label: str, coro):
+    """Shared error mapping for trivia service calls: LookupError -> 404,
+    PermissionError -> 403, ValueError -> 409 (detail = the service's reason)."""
+    try:
+        return await coro
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="Not allowed for this phone")
+    except LookupError:
+        raise HTTPException(status_code=404, detail="Not found")
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+
+
+@router.post("/sessions/{session_id}/trivia/start")
+@limiter.limit("30/minute")
+async def trivia_start(request: Request, session_id: str, body: PhoneIdBody):
+    """Origin opens the Trivia gather phase (picks 5 questions, auto-joins)."""
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            result = await _run_trivia(
+                "start", trivia_service.start_trivia(conn, session_id, body.phone_id)
+            )
+    except HTTPException:
+        raise
+    except Exception:
+        await notify_error("POST /patron/trivia/start failed 🚨", traceback.format_exc()[:500])
+        raise HTTPException(status_code=500, detail="Internal error")
+    return result
+
+
+@router.post("/trivia/{round_id}/join")
+@limiter.limit("60/minute")
+async def trivia_join(request: Request, round_id: str, body: PhoneIdBody):
+    """A session-member phone joins the gather (idempotent)."""
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            result = await _run_trivia(
+                "join", trivia_service.join_trivia(conn, round_id, body.phone_id)
+            )
+    except HTTPException:
+        raise
+    except Exception:
+        await notify_error("POST /patron/trivia/join failed 🚨", traceback.format_exc()[:500])
+        raise HTTPException(status_code=500, detail="Internal error")
+    return result
+
+
+@router.post("/trivia/{round_id}/begin")
+@limiter.limit("30/minute")
+async def trivia_begin(request: Request, round_id: str, body: PhoneIdBody):
+    """Origin taps "Start Trivia": gather -> first question (needs >=2 joined)."""
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            result = await _run_trivia(
+                "begin", trivia_service.begin_trivia(conn, round_id, body.phone_id)
+            )
+    except HTTPException:
+        raise
+    except Exception:
+        await notify_error("POST /patron/trivia/begin failed 🚨", traceback.format_exc()[:500])
+        raise HTTPException(status_code=500, detail="Internal error")
+    return result
+
+
+@router.post("/trivia/{round_id}/answer")
+@limiter.limit("120/minute")
+async def trivia_answer(request: Request, round_id: str, body: AnswerRequest):
+    """A participant answers the current question. Server-side check only."""
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            result = await _run_trivia(
+                "answer",
+                trivia_service.submit_answer(
+                    conn, round_id, body.phone_id, body.question_index, body.selected_option
+                ),
+            )
+    except HTTPException:
+        raise
+    except Exception:
+        await notify_error("POST /patron/trivia/answer failed 🚨", traceback.format_exc()[:500])
+        raise HTTPException(status_code=500, detail="Internal error")
+    return result
+
+
+@router.post("/trivia/{round_id}/next")
+@limiter.limit("60/minute")
+async def trivia_next(request: Request, round_id: str, body: PhoneIdBody):
+    """Origin advances to the next question."""
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            result = await _run_trivia(
+                "next", trivia_service.next_question(conn, round_id, body.phone_id)
+            )
+    except HTTPException:
+        raise
+    except Exception:
+        await notify_error("POST /patron/trivia/next failed 🚨", traceback.format_exc()[:500])
+        raise HTTPException(status_code=500, detail="Internal error")
+    return result
+
+
+@router.post("/trivia/{round_id}/finish")
+@limiter.limit("30/minute")
+async def trivia_finish(request: Request, round_id: str, body: PhoneIdBody):
+    """Origin finishes after the last question -> leaderboard."""
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            result = await _run_trivia(
+                "finish", trivia_service.finish_trivia(conn, round_id, body.phone_id)
+            )
+    except HTTPException:
+        raise
+    except Exception:
+        await notify_error("POST /patron/trivia/finish failed 🚨", traceback.format_exc()[:500])
+        raise HTTPException(status_code=500, detail="Internal error")
+    return result
+
+
+@router.post("/trivia/{round_id}/abandon")
+@limiter.limit("30/minute")
+async def trivia_abandon(request: Request, round_id: str, body: PhoneIdBody):
+    """Origin abandons during gather (fewer than 2 phones joined)."""
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            result = await _run_trivia(
+                "abandon", trivia_service.abandon_trivia(conn, round_id, body.phone_id)
+            )
+    except HTTPException:
+        raise
+    except Exception:
+        await notify_error("POST /patron/trivia/abandon failed 🚨", traceback.format_exc()[:500])
+        raise HTTPException(status_code=500, detail="Internal error")
+    return result
+
+
+@router.get("/sessions/{session_id}/trivia/current")
+@limiter.limit("120/minute")
+async def trivia_current(request: Request, session_id: str, phone_id: str = Query(..., max_length=64)):
+    """Poll fallback for joined phones — current Trivia view for this phone
+    (no correct_option for the live question)."""
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            state = await trivia_service.get_current_state(conn, session_id, phone_id)
+    except Exception:
+        await notify_error("GET /patron/trivia/current failed 🚨", traceback.format_exc()[:500])
+        raise HTTPException(status_code=500, detail="Internal error")
+    if state is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    return state
+
+
+@router.get("/sessions/{session_id}/leaderboard")
+@limiter.limit("120/minute")
+async def session_leaderboard(request: Request, session_id: str):
+    """Per-player session leaderboard (between-rounds screen)."""
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            result = await trivia_service.session_leaderboard(conn, session_id)
+    except Exception:
+        await notify_error("GET /patron/leaderboard failed 🚨", traceback.format_exc()[:500])
+        raise HTTPException(status_code=500, detail="Internal error")
+    return result
+
+
+@router.post("/sessions/{session_id}/leave")
+@limiter.limit("30/minute")
+async def leave_session(request: Request, session_id: str, body: PhoneIdBody):
+    """Basic leave-mid-session: mark this phone's player left_early."""
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            result = await _run_trivia(
+                "leave", trivia_service.leave_session(conn, session_id, body.phone_id)
+            )
+    except HTTPException:
+        raise
+    except Exception:
+        await notify_error("POST /patron/sessions/leave failed 🚨", traceback.format_exc()[:500])
         raise HTTPException(status_code=500, detail="Internal error")
     return result
