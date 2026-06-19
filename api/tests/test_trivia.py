@@ -14,6 +14,7 @@ import uuid
 import asyncpg
 import pytest
 
+from api.services import trivia_service
 from api.tests.conftest import pair_tag, simulate_tap
 
 
@@ -408,6 +409,34 @@ def test_leaderboard_endpoint_and_leave(client, api_key_header, owner_a_token, f
     left_rows = [r for r in board2 if r["left_early"]]
     assert len(left_rows) == 1
     assert left_rows[0]["name"] == "Player 2"
+
+
+def test_concurrent_start_is_race_safe(client, api_key_header, owner_a_token, fresh_table):
+    # React StrictMode fires the mount effect twice, so the origin issues two
+    # concurrent start calls. They race past the "already active?" SELECT, and the
+    # one_active_trivia_round_per_session index rejects the loser's INSERT -- which
+    # must be caught and returned idempotently, not surfaced as a 500 (a 500 makes
+    # the client bail out of Trivia entirely). Three concurrent starts on separate
+    # connections must all succeed and return the same round.
+    s = _setup_session(client, api_key_header, owner_a_token, fresh_table, num_phones=2)
+    sid, origin = s["session_id"], s["origin"]
+
+    async def _race():
+        pool = await asyncpg.create_pool(os.environ["DATABASE_URL"], min_size=3, max_size=5)
+        try:
+            async def call():
+                async with pool.acquire() as conn:
+                    return await trivia_service.start_trivia(conn, sid, origin)
+            return await asyncio.gather(call(), call(), call(), return_exceptions=True)
+        finally:
+            await pool.close()
+
+    results = asyncio.run(_race())
+    round_ids = set()
+    for r in results:
+        assert not isinstance(r, Exception), f"concurrent start raised: {r!r}"
+        round_ids.add(r["trivia_round_id"])
+    assert len(round_ids) == 1, f"expected one shared round, got {round_ids}"
 
 
 def test_start_is_idempotent_for_origin(client, api_key_header, owner_a_token, fresh_table):

@@ -16,6 +16,8 @@ has answered (security.md / coding-practices MingleHub Rules).
 """
 import uuid
 
+import asyncpg
+
 from api.services.realtime_service import publish as rt_publish
 
 NUM_QUESTIONS = 5
@@ -159,13 +161,37 @@ async def start_trivia(conn, session_id: str, phone_id: str) -> dict:
     question_ids = [r["id"] for r in question_rows]
 
     trivia_round_id = str(uuid.uuid4())
-    await conn.execute(
-        """
-        INSERT INTO trivia_rounds (id, session_id, status, question_ids, adults_only)
-        VALUES ($1, $2, 'gathering', $3, $4)
-        """,
-        trivia_round_id, session_id, question_ids, adults_only,
-    )
+    try:
+        await conn.execute(
+            """
+            INSERT INTO trivia_rounds (id, session_id, status, question_ids, adults_only)
+            VALUES ($1, $2, 'gathering', $3, $4)
+            """,
+            trivia_round_id, session_id, question_ids, adults_only,
+        )
+    except asyncpg.UniqueViolationError:
+        # A concurrent start won the race and created the round first (the
+        # SELECT above can't see an uncommitted insert, so the one_active_trivia_
+        # round_per_session index is the real guard). React StrictMode fires the
+        # mount effect twice -> two concurrent start calls; returning the winner's
+        # round idempotently here is what stops the loser 500ing and the client
+        # bailing out of Trivia entirely.
+        existing = await conn.fetchrow(
+            """
+            SELECT id, status, question_ids FROM trivia_rounds
+            WHERE session_id = $1 AND status IN ('gathering', 'in_progress')
+            ORDER BY created_at DESC LIMIT 1
+            """,
+            session_id,
+        )
+        if existing:
+            return {
+                "trivia_round_id": str(existing["id"]),
+                "status": existing["status"],
+                "joined_count": await _participant_count(conn, existing["id"]),
+                "num_questions": len(existing["question_ids"]),
+            }
+        raise
     for m in members:
         await conn.execute(
             """
