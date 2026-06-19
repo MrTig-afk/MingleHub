@@ -6,10 +6,13 @@ import { pickHotSeat } from '../../services/patronApi'
 
 // Round-type cadence stand-in until the weighted theme engine exists. Trivia is
 // NOT something anyone taps to start -- the game surfaces it automatically
-// between Chooser rounds. TRIVIA_EVERY fires Trivia on every Nth round (set to 2
-// while testing so it comes up fast); set to 0/null for a random ~50/50 mix once
-// the flow is signed off. (gamespec: "draws from a weighted pool of round types".)
-const TRIVIA_EVERY = 2
+// between Chooser rounds. TRIVIA_EVERY fires Trivia on every Nth round: 3 means
+// rounds 1 & 2 are Chooser and round 3 is Trivia (then 4 & 5 Chooser, 6 Trivia,
+// ...). Set to 0/null for a random ~50/50 mix once the flow is signed off --
+// NOTE that random mode must store the per-round decision in state rather than
+// computing it inline below, or it would re-roll on every render.
+// (gamespec: "draws from a weighted pool of round types".)
+const TRIVIA_EVERY = 3
 
 function decideRoundType(roundNumber) {
   if (!TRIVIA_EVERY) return Math.random() < 0.5 ? 'trivia' : 'chooser'
