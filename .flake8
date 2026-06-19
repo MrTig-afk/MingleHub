@@ -1,0 +1,6 @@
+[flake8]
+max-line-length = 130
+# index.py inserts sys.path before importing api.* — intentional, not an
+# import-order mistake (it's how the app finds itself when run directly).
+extend-ignore = E402
+exclude = venv,.venv,node_modules,frontend,.pytest_cache

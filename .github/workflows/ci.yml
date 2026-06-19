@@ -1,0 +1,78 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    services:
+      # Ephemeral, isolated DB for this run only — no real Neon credentials
+      # needed in CI. DATABASE_SSL=disable below matches its plain (no-TLS)
+      # local setup; real deployments still default to ssl=require (db.py).
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: mh
+          POSTGRES_PASSWORD: mh
+          POSTGRES_DB: minglehub_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgresql://mh:mh@localhost:5432/minglehub_ci
+      DATABASE_SSL: disable
+      API_KEY: ci-key
+      DEV_MODE: "true"
+      SESSION_SECRET: ci-session-secret
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r api/requirements.txt
+
+      - name: Lint (flake8)
+        run: python -m flake8 api scripts
+
+      - name: Generate dev-only NFC encryption key
+        # A fresh throwaway Fernet key per run — never reused, never a real secret.
+        run: echo "NFC_KEY_ENCRYPTION_SECRET=$(python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())')" >> "$GITHUB_ENV"
+
+      - name: Migrate + seed dev fixtures
+        run: |
+          python scripts/migrate.py
+          python scripts/seed_platform.py
+
+      - name: Run tests
+        run: python -m pytest api/tests/ -v
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - run: npm ci
+
+      - name: Lint (eslint)
+        run: npm run lint
+
+      - name: Build
+        run: npm run build

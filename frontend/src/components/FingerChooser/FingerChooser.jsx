@@ -1,12 +1,17 @@
-import React, { useRef, useEffect } from 'react'
+import { useRef, useEffect } from 'react'
 import { useMultiTouch, STATES } from '../../hooks/useMultiTouch'
 
 const ACCENT_COLORS = ['#ecb2ff', '#00eefc', '#e7006e', '#FFD700', '#FF6B35', '#4169E1', '#ffb1c3']
 
-export default function FingerChooser({ packAccent, onCardDraw, onBack }) {
+export default function FingerChooser({
+  packAccent, onCardDraw, onBack, hideBack = false, requiredFingers = 2,
+  recentWinnerPositions = [], onWinnerChosen,
+}) {
   const zoneRef = useRef(null)
+  const reportedRef = useRef(false)
 
-  const { fingers, phase, countdown, attach, reset } = useMultiTouch()
+  const { fingers, phase, countdown, attach, reset } =
+    useMultiTouch(undefined, requiredFingers, recentWinnerPositions)
 
   useEffect(() => {
     if (!zoneRef.current) return
@@ -15,8 +20,22 @@ export default function FingerChooser({ packAccent, onCardDraw, onBack }) {
 
   useEffect(() => {
     if (phase === STATES.CHOSEN) {
-      try { if ('vibrate' in navigator) navigator.vibrate(400) } catch {}
+      try { if ('vibrate' in navigator) navigator.vibrate(400) } catch { /* vibration not supported */ }
+      // Report the winning finger's position up to RoundOrigin once per pick,
+      // so it can be remembered and steered away from next round. fingers can't
+      // change during CHOSEN (move/end handlers are inert), and reportedRef
+      // guards against a double-report if this effect re-runs.
+      if (!reportedRef.current) {
+        const chosen = [...fingers.values()].find((f) => f.state === 'chosen')
+        if (chosen) {
+          onWinnerChosen?.({ x: chosen.x, y: chosen.y })
+          reportedRef.current = true
+        }
+      }
+    } else {
+      reportedRef.current = false
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase])
 
   useEffect(() => {
@@ -31,8 +50,9 @@ export default function FingerChooser({ packAccent, onCardDraw, onBack }) {
 
   const statusText = (() => {
     if (phase === STATES.WAITING) {
-      return fingers.size < 2
-        ? 'Add at least one more player'
+      const remaining = requiredFingers - fingers.size
+      return remaining > 0
+        ? `Waiting for ${remaining} more finger${remaining === 1 ? '' : 's'}`
         : `${fingers.size} fingers — hold still…`
     }
     if (phase === STATES.CHOSEN) return 'Tap the glowing dot to draw'
@@ -61,25 +81,27 @@ export default function FingerChooser({ packAccent, onCardDraw, onBack }) {
         zIndex: 30,
         minHeight: '64px',
       }}>
-        <button
-          onClick={() => { reset(); onBack?.() }}
-          style={{
-            background: 'none',
-            border: 'none',
-            color: 'var(--on-surface-dim)',
-            fontFamily: 'var(--font-mono)',
-            fontSize: '14px',
-            cursor: 'pointer',
-            minHeight: '56px',
-            minWidth: '56px',
-            flexShrink: 0,
-            display: 'flex',
-            alignItems: 'center',
-            gap: '4px',
-          }}
-        >
-          ← Back
-        </button>
+        {!hideBack && (
+          <button
+            onClick={() => { reset(); onBack?.() }}
+            style={{
+              background: 'none',
+              border: 'none',
+              color: 'var(--on-surface-dim)',
+              fontFamily: 'var(--font-mono)',
+              fontSize: '14px',
+              cursor: 'pointer',
+              minHeight: '56px',
+              minWidth: '56px',
+              flexShrink: 0,
+              display: 'flex',
+              alignItems: 'center',
+              gap: '4px',
+            }}
+          >
+            ← Back
+          </button>
+        )}
         {statusText ? (
           <p style={{
             fontFamily: 'var(--font-body)',
@@ -161,6 +183,11 @@ export default function FingerChooser({ packAccent, onCardDraw, onBack }) {
                   ? `0 0 60px ${color}, 0 0 120px ${color}88, inset 0 0 30px ${color}44`
                   : `0 0 24px ${color}99, 0 0 48px ${color}44`,
                 transition: 'all 0.25s ease',
+                // gamespec: "the selected finger glows and pulses" — a
+                // continuous pulse (not just the one-time grow-on-select
+                // transition above) so the winner stays obviously
+                // identifiable even after fingers lift off the screen.
+                animation: isChosen ? 'finger-pulse 1.1s ease-in-out infinite' : 'none',
                 pointerEvents: 'none',
                 display: 'flex',
                 alignItems: 'center',
@@ -212,6 +239,10 @@ export default function FingerChooser({ packAccent, onCardDraw, onBack }) {
         @keyframes pulse {
           0%, 100% { transform: scale(1); opacity: 0.8; }
           50% { transform: scale(1.1); opacity: 1; }
+        }
+        @keyframes finger-pulse {
+          0%, 100% { transform: translate(-50%, -50%) scale(1); }
+          50% { transform: translate(-50%, -50%) scale(1.12); }
         }
       `}</style>
     </div>

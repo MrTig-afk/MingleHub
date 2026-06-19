@@ -1,9 +1,11 @@
 import asyncio
 import asyncpg
 import os
+import sys
 from dotenv import load_dotenv
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, ROOT)
 load_dotenv(os.path.join(ROOT, 'api', '.env'))
 
 
@@ -21,6 +23,240 @@ async def migrate():
         """)
         print("OK premium_interest table ready")
 
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS packs (
+                id          TEXT PRIMARY KEY,
+                name        TEXT NOT NULL,
+                description TEXT,
+                accent      TEXT NOT NULL,
+                icon        TEXT,
+                mode        TEXT NOT NULL DEFAULT 'party',
+                created_at  TIMESTAMPTZ DEFAULT NOW()
+            )
+        """)
+        print("OK packs table ready")
+
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS cards (
+                id      TEXT PRIMARY KEY,
+                pack_id TEXT NOT NULL REFERENCES packs(id),
+                type    TEXT NOT NULL,
+                text    TEXT NOT NULL,
+                flavour TEXT
+            )
+        """)
+        print("OK cards table ready")
+
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS venues (
+                id                      UUID PRIMARY KEY,
+                name                    TEXT NOT NULL,
+                slug                    TEXT UNIQUE NOT NULL,
+                venue_type              TEXT NOT NULL CHECK (venue_type IN ('cafe', 'pub', 'bar', 'brewery', 'other')),
+                billing_unit            NUMERIC NOT NULL DEFAULT 3.00,
+                round_time_minutes      INTEGER NOT NULL DEFAULT 20,
+                retap_interval_minutes  INTEGER NOT NULL DEFAULT 30,
+                nightly_cap_weekday     NUMERIC NOT NULL DEFAULT 30,
+                nightly_cap_weekend     NUMERIC NOT NULL DEFAULT 30,
+                nightly_cap_holiday     NUMERIC NOT NULL DEFAULT 30,
+                stripe_customer_id      TEXT,
+                menu_url                TEXT,
+                restrict_adult_content  BOOLEAN DEFAULT FALSE,
+                is_test                 BOOLEAN DEFAULT FALSE,
+                status                  TEXT NOT NULL DEFAULT 'active',
+                created_at              TIMESTAMP DEFAULT NOW(),
+                updated_at              TIMESTAMP DEFAULT NOW()
+            )
+        """)
+        print("OK venues table ready")
+
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                id             UUID PRIMARY KEY,
+                clerk_user_id  TEXT UNIQUE NOT NULL,
+                venue_id       UUID REFERENCES venues(id),
+                role           TEXT NOT NULL CHECK (role IN ('venue_owner', 'venue_staff', 'admin')),
+                created_at     TIMESTAMP DEFAULT NOW(),
+                -- admin accounts are platform-wide and never tied to a venue
+                CHECK ((role = 'admin') = (venue_id IS NULL))
+            )
+        """)
+        print("OK users table ready")
+
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS tables (
+                id               UUID PRIMARY KEY,
+                venue_id         UUID NOT NULL REFERENCES venues(id),
+                table_number     INTEGER NOT NULL,
+                content_ceiling  TEXT NOT NULL DEFAULT 'standard' CHECK (content_ceiling IN ('standard', 'adults_allowed')),
+                created_at       TIMESTAMP DEFAULT NOW(),
+                UNIQUE (venue_id, table_number)
+            )
+        """)
+        print("OK tables table ready")
+
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS nfc_tags (
+                id                  UUID PRIMARY KEY,
+                venue_id            UUID NOT NULL REFERENCES venues(id),
+                table_id            UUID REFERENCES tables(id),
+                tag_uid             TEXT UNIQUE NOT NULL,
+                aes_key_encrypted   TEXT NOT NULL,
+                status              TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'revoked', 'replacement_pending')),
+                counter_last_seen   BIGINT,
+                paired_at           TIMESTAMP,
+                created_at          TIMESTAMP DEFAULT NOW()
+            )
+        """)
+        print("OK nfc_tags table ready")
+
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS game_sessions (
+                id                   UUID PRIMARY KEY,
+                venue_id             UUID NOT NULL REFERENCES venues(id),
+                table_id             UUID NOT NULL REFERENCES tables(id),
+                group_label          TEXT,
+                player_count         INTEGER NOT NULL,
+                player_names         JSONB,
+                adults_only          BOOLEAN DEFAULT FALSE,
+                theme_key_at_start   TEXT,
+                selection_mode       TEXT,
+
+                started_at           TIMESTAMP,
+                ended_at             TIMESTAMP,
+                end_reason           TEXT,
+
+                total_rounds         INTEGER DEFAULT 0,
+                cards_completed      INTEGER DEFAULT 0,
+                cards_skipped        INTEGER DEFAULT 0,
+                trivia_correct       INTEGER DEFAULT 0,
+                trivia_wrong         INTEGER DEFAULT 0,
+                total_score          INTEGER DEFAULT 0,
+                scores               JSONB,
+
+                created_at           TIMESTAMP DEFAULT NOW()
+            )
+        """)
+        print("OK game_sessions table ready")
+
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS game_players (
+                id              UUID PRIMARY KEY,
+                session_id      UUID NOT NULL REFERENCES game_sessions(id),
+                name            TEXT NOT NULL,
+                score           INTEGER DEFAULT 0,
+                times_selected  INTEGER DEFAULT 0,
+                left_early      BOOLEAN DEFAULT FALSE,
+                left_at         TIMESTAMP
+            )
+        """)
+        print("OK game_players table ready")
+
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS bar_cards (
+                id              UUID PRIMARY KEY,
+                content         TEXT NOT NULL,
+                type            TEXT NOT NULL CHECK (type IN (
+                    'icebreaker', 'truth', 'dare', 'compliment', 'challenge', 'drink', 'flirty'
+                )),
+                is_adults_only  BOOLEAN DEFAULT FALSE,
+                created_at      TIMESTAMP DEFAULT NOW()
+            )
+        """)
+        print("OK bar_cards table ready")
+
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS rounds (
+                id                  UUID PRIMARY KEY,
+                session_id          UUID NOT NULL REFERENCES game_sessions(id),
+                round_number        INTEGER NOT NULL,
+                round_type          TEXT NOT NULL,
+                selected_player_id  UUID REFERENCES game_players(id),
+                card_id             UUID,
+                trivia_question_id  UUID,
+                card_type           TEXT,
+                trivia_category     TEXT,
+                result              TEXT,
+                score_awarded       INTEGER DEFAULT 0,
+                time_to_answer      INTEGER,
+                redraw_count        INTEGER DEFAULT 0,
+                created_at          TIMESTAMP DEFAULT NOW()
+            )
+        """)
+        print("OK rounds table ready")
+
+        # ALTER rather than inside game_sessions' CREATE above, for two
+        # reasons: (1) CREATE TABLE IF NOT EXISTS no-ops against the
+        # already-existing dev/prod table, so a column added there would
+        # never actually land; (2) last_hot_seat_player_id references
+        # game_players, which doesn't exist yet when game_sessions is
+        # created above — the two tables have a circular dependency
+        # (game_players.session_id -> game_sessions, this -> game_players).
+        # gamespec: "Players place fingers on session-origin phone" — the
+        # phone that started the game is the one device the finger picker
+        # runs on; tracked server-side so it can't be spoofed by another
+        # phone at the table. last_hot_seat_player_id backs the "exclude
+        # the previous winner" rule for 3+ players (Finger Picker).
+        await conn.execute("""
+            ALTER TABLE game_sessions
+            ADD COLUMN IF NOT EXISTS origin_phone_id TEXT,
+            ADD COLUMN IF NOT EXISTS last_hot_seat_player_id UUID REFERENCES game_players(id)
+        """)
+        print("OK game_sessions.origin_phone_id / last_hot_seat_player_id ready")
+
+        await conn.execute("""
+            ALTER TABLE game_sessions
+            ADD COLUMN IF NOT EXISTS current_round_number INTEGER DEFAULT 0,
+            ADD COLUMN IF NOT EXISTS drink_disclaimer_shown BOOLEAN DEFAULT FALSE
+        """)
+        print("OK game_sessions.current_round_number / drink_disclaimer_shown ready")
+
+        # Not in gamespec.md's table list — gamespec describes lobby *behavior*
+        # (Player Flow -> Step 2) without naming a table for it. This is the
+        # implementation detail needed to track "who's tapped in, who's host"
+        # before Setup completes and a real game_sessions row exists.
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS table_lobbies (
+                id                    UUID PRIMARY KEY,
+                venue_id              UUID NOT NULL REFERENCES venues(id),
+                table_id              UUID NOT NULL REFERENCES tables(id),
+                status                TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'converted', 'expired')),
+                host_phone_id         TEXT,
+                converted_session_id  UUID REFERENCES game_sessions(id),
+                created_at            TIMESTAMP DEFAULT NOW()
+            )
+        """)
+        print("OK table_lobbies table ready")
+
+        # Only one *open* lobby per table at a time — once converted/expired,
+        # a fresh tap (or "start a new group") can open another.
+        await conn.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS one_open_lobby_per_table
+            ON table_lobbies (table_id) WHERE status = 'open'
+        """)
+        print("OK one_open_lobby_per_table index ready")
+
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS table_lobby_phones (
+                id          UUID PRIMARY KEY,
+                lobby_id    UUID NOT NULL REFERENCES table_lobbies(id),
+                phone_id    TEXT NOT NULL,
+                joined_at   TIMESTAMP DEFAULT NOW(),
+                UNIQUE (lobby_id, phone_id)
+            )
+        """)
+        print("OK table_lobby_phones table ready")
+
+        await conn.execute("""
+            ALTER TABLE table_lobby_phones
+            ADD COLUMN IF NOT EXISTS name TEXT
+        """)
+        print("OK table_lobby_phones.name ready")
+
+        from scripts.seed_bar_cards import seed as seed_bar_cards  # noqa: E402
+        await seed_bar_cards(conn)
+        print("OK bar_cards seeded")
+
         schema = await conn.fetch("""
             SELECT column_name, data_type, is_nullable, column_default
             FROM information_schema.columns
@@ -29,7 +265,8 @@ async def migrate():
         """)
         print("\nSchema:")
         for col in schema:
-            print(f"  {col['column_name']:15} {col['data_type']:30} nullable={col['is_nullable']} default={col['column_default']}")
+            default = col["column_default"]
+            print(f"  {col['column_name']:15} {col['data_type']:30} nullable={col['is_nullable']} default={default}")
     finally:
         await conn.close()
 
