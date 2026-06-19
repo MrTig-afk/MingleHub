@@ -38,8 +38,14 @@ def _channel(table_id) -> str:
     return f"table:{table_id}"
 
 
-def _question_public(index: int, total: int, q, started_at) -> dict:
-    """A question shaped for the browser -- correct_option deliberately omitted."""
+def _question_public(index: int, total: int, q, seconds_remaining: int) -> dict:
+    """A question shaped for the browser -- correct_option deliberately omitted.
+
+    The countdown is sent as seconds_remaining (computed server-side) rather than
+    an absolute start timestamp: the client counts down from it on its own clock,
+    so a naive-timestamp timezone mismatch can't make the timer read "time's up"
+    the instant the question appears.
+    """
     return {
         "index": index,
         "total": total,
@@ -52,7 +58,7 @@ def _question_public(index: int, total: int, q, started_at) -> dict:
         },
         "category": q["category"],
         "duration_seconds": QUESTION_TIMER_SECONDS,
-        "started_at": started_at.isoformat() if started_at else None,
+        "seconds_remaining": max(0, int(seconds_remaining)),
     }
 
 
@@ -312,7 +318,7 @@ async def begin_trivia(conn, trivia_round_id: str, phone_id: str) -> dict:
 
     rnd = await _load_round(conn, trivia_round_id)
     q = await _current_question_row(conn, rnd)
-    public = _question_public(0, len(rnd["question_ids"]), q, rnd["current_question_started_at"])
+    public = _question_public(0, len(rnd["question_ids"]), q, QUESTION_TIMER_SECONDS)
     await rt_publish(_channel(rnd["table_id"]), "trivia:question", public)
     return {"trivia_round_id": trivia_round_id, "status": "in_progress", "question": public}
 
@@ -432,7 +438,7 @@ async def next_question(conn, trivia_round_id: str, phone_id: str) -> dict:
     )
     rnd = await _load_round(conn, trivia_round_id)
     q = await _current_question_row(conn, rnd)
-    public = _question_public(new_index, total, q, rnd["current_question_started_at"])
+    public = _question_public(new_index, total, q, QUESTION_TIMER_SECONDS)
     await rt_publish(_channel(rnd["table_id"]), "trivia:question", public)
     return {"trivia_round_id": trivia_round_id, "question": public}
 
@@ -603,9 +609,15 @@ async def get_current_state(conn, session_id: str, phone_id: str) -> dict | None
     rnd = await _load_round(conn, trivia_round_id)
     q = await _current_question_row(conn, rnd)
     base["phase"] = "question"
+    # Remaining time computed server-side (NOW() and the column share one clock),
+    # so the poll-driven phones get an accurate countdown to resync to.
+    remaining = await conn.fetchval(
+        "SELECT GREATEST(0, $2 - EXTRACT(EPOCH FROM (NOW() - current_question_started_at)))::int "
+        "FROM trivia_rounds WHERE id = $1",
+        active["id"], QUESTION_TIMER_SECONDS,
+    )
     base["question"] = _question_public(
-        active["current_index"], len(active["question_ids"]), q,
-        active["current_question_started_at"],
+        active["current_index"], len(active["question_ids"]), q, remaining or 0,
     )
     base["answered_count"] = await _answered_count(conn, active["id"], active["current_index"])
     my = await conn.fetchrow(

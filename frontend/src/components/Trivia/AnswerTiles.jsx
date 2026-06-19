@@ -8,23 +8,24 @@ import { useEffect, useState } from 'react'
 const LETTERS = ['A', 'B', 'C', 'D']
 
 export default function AnswerTiles({ question, reveal, onAnswer, disabled }) {
-  const [secondsLeft, setSecondsLeft] = useState(question?.duration_seconds ?? 20)
+  const [secondsLeft, setSecondsLeft] = useState(question?.seconds_remaining ?? question?.duration_seconds ?? 20)
   const [submitting, setSubmitting] = useState(null)
 
-  // Drive the visible countdown from the server-stamped started_at so every
-  // phone agrees on the clock regardless of when it rendered the question.
+  // Count down from the server's seconds_remaining using THIS device's own clock
+  // (no absolute server timestamp to parse), so timezone/clock differences can't
+  // make the timer read "time's up" instantly. Each poll resyncs to the latest
+  // server value via the seconds_remaining dependency.
   useEffect(() => {
-    if (!question?.started_at) return
-    const started = new Date(question.started_at).getTime()
-    const total = question.duration_seconds ?? 20
+    const total = question?.seconds_remaining ?? question?.duration_seconds ?? 20
+    const startMs = Date.now()
     const tick = () => {
-      const elapsed = (Date.now() - started) / 1000
+      const elapsed = (Date.now() - startMs) / 1000
       setSecondsLeft(Math.max(0, Math.ceil(total - elapsed)))
     }
     tick()
     const id = setInterval(tick, 250)
     return () => clearInterval(id)
-  }, [question?.started_at, question?.duration_seconds])
+  }, [question?.index, question?.seconds_remaining, question?.duration_seconds])
 
   const handlePick = async (letter) => {
     if (disabled || reveal || submitting) return
