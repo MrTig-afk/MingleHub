@@ -14,6 +14,7 @@ sys.path.insert(0, ROOT)
 load_dotenv(os.path.join(ROOT, "api", ".env"))
 
 from api.dev_fixtures import OWNER_A_CLERK_ID, VENUE_A_ID  # noqa: E402
+from scripts.seed_bar_cards import seed as seed_bar_cards  # noqa: E402
 from scripts.seed_platform import seed as seed_platform  # noqa: E402
 
 
@@ -29,6 +30,7 @@ def _seed_dev_fixtures():
         conn = await asyncpg.connect(os.environ["DATABASE_URL"])
         try:
             await seed_platform(conn)
+            await seed_bar_cards(conn)
         finally:
             await conn.close()
 
@@ -50,6 +52,19 @@ def client():
     # counters would otherwise carry over between test modules (e.g.
     # test_lobby.py's many /api/patron/tap calls exhausting the 30/minute
     # budget before test_patron_tap.py's own tap tests run).
+    from api.security import limiter
+    limiter.reset()
+
+
+@pytest.fixture(autouse=True)
+def _reset_rate_limits():
+    """Reset the rate-limiter before every test so per-test tap volume
+    never exhausts the module-level budget (e.g. simulate-tap 30/minute).
+
+    This runs before the test body, giving each test a clean slate.
+    The module-scoped teardown in `client` also resets, but that only
+    fires between modules, not between individual tests.
+    """
     from api.security import limiter
     limiter.reset()
 
@@ -139,8 +154,17 @@ def _teardown_table(table_id):
             # game_sessions, so lobbies must go before sessions. Likewise
             # game_sessions.last_hot_seat_player_id references game_players,
             # so that must be cleared before game_players rows can be deleted.
+            # rounds.selected_player_id references game_players, so rounds
+            # must be deleted before game_players.
             await conn.execute(
                 "UPDATE game_sessions SET last_hot_seat_player_id = NULL WHERE table_id = $1", table_id
+            )
+            await conn.execute(
+                """
+                DELETE FROM rounds
+                WHERE session_id IN (SELECT id FROM game_sessions WHERE table_id = $1)
+                """,
+                table_id,
             )
             await conn.execute(
                 "DELETE FROM game_players WHERE session_id IN (SELECT id FROM game_sessions WHERE table_id = $1)",

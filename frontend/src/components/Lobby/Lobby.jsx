@@ -1,23 +1,23 @@
 import { useEffect, useRef, useState } from 'react'
-import { claimHost, pollLobby, startGame } from '../../services/patronApi'
+import { claimHost, pollLobby, setLobbyName, startGame } from '../../services/patronApi'
 
 const POLL_MS = 2000
 
 // gamespec.md Player Flow Step 2 + Step 4 — shown when the first phone taps
-// and no session exists yet (Lobby), and once a host is chosen, doubles as
-// the Setup screen (player count/names, optional group label, Adults Only
-// toggle). Polls instead of using realtime infra (none wired up yet) so
-// every phone in the lobby sees phone count / host / start updates within
-// ~2s of each other.
+// and no session exists yet (Lobby). After the host claims, doubles as the
+// Setup screen: shows the roster of names from lobby phones, optional group
+// label, Adults Only toggle, and Start. Every phone first enters their name.
 export default function Lobby({ venueName, lobbyId, phoneId, adultsOnlyAllowed, onGameStarted }) {
   const [state, setState] = useState(null)
   const [error, setError] = useState(null)
-  const [playerCount, setPlayerCount] = useState(2)
-  const [namesText, setNamesText] = useState('')
+  const [myName, setMyName] = useState('')
+  const [hasSetName, setHasSetName] = useState(false)
+  const [submittingName, setSubmittingName] = useState(false)
   const [groupLabel, setGroupLabel] = useState('')
   const [adultsOnly, setAdultsOnly] = useState(false)
   const [starting, setStarting] = useState(false)
   const startedRef = useRef(false)
+  const [hasJoined, setHasJoined] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -26,6 +26,11 @@ export default function Lobby({ venueName, lobbyId, phoneId, adultsOnlyAllowed, 
         const result = await pollLobby(lobbyId)
         if (cancelled) return
         setState(result)
+        // Re-tap / page reload: detect own name already stored in lobby.
+        if (!hasSetName && result.phones) {
+          const mine = result.phones.find((p) => p.phone_id === phoneId)
+          if (mine?.name) setHasSetName(true)
+        }
         if (result.status === 'converted' && !startedRef.current) {
           startedRef.current = true
           onGameStarted(result)
@@ -37,10 +42,29 @@ export default function Lobby({ venueName, lobbyId, phoneId, adultsOnlyAllowed, 
     tick()
     const id = setInterval(tick, POLL_MS)
     return () => { cancelled = true; clearInterval(id) }
-  }, [lobbyId, onGameStarted])
+  }, [lobbyId, onGameStarted, phoneId, hasSetName])
 
   const isHost = state?.host_phone_id === phoneId
   const noHostYet = state && !state.host_phone_id
+  const phones = state?.phones ?? []
+  const hostName = state?.host_phone_id
+    ? phones.find(p => p.phone_id === state.host_phone_id)?.name || 'the host'
+    : null
+
+  const handleSetName = async () => {
+    const trimmed = myName.trim()
+    if (!trimmed) return
+    setSubmittingName(true)
+    setError(null)
+    try {
+      await setLobbyName(lobbyId, phoneId, trimmed)
+      setHasSetName(true)
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setSubmittingName(false)
+    }
+  }
 
   const handleClaimHost = async () => {
     try {
@@ -51,55 +75,91 @@ export default function Lobby({ venueName, lobbyId, phoneId, adultsOnlyAllowed, 
   }
 
   const handleStart = async () => {
-    setStarting(true)
     setError(null)
+    setStarting(true)
     try {
-      const names = namesText.trim()
-        ? namesText.split(',').map((n) => n.trim()).filter(Boolean)
-        : null
-      await startGame(lobbyId, {
+      const startResult = await startGame(lobbyId, {
         phoneId,
-        playerCount,
-        playerNames: names,
         adultsOnly: adultsOnlyAllowed && adultsOnly,
         groupLabel: groupLabel.trim() || null,
       })
-      // onGameStarted fires from the next poll tick once status flips to
-      // 'converted' — keeps host and joiners on the exact same trigger.
+      // Fire onGameStarted immediately from the host's start response so
+      // adultsOnly is available without an extra poll round-trip. The poll
+      // path (status === 'converted') is kept as a fallback for non-host
+      // phones; startedRef prevents double-firing if the poll also catches up.
+      if (!startedRef.current) {
+        startedRef.current = true
+        onGameStarted({
+          host_phone_id: phoneId,
+          converted_session_id: startResult.session_id,
+          adults_only: startResult.adults_only,
+          player_count: startResult.player_count,
+        })
+      }
     } catch (e) {
       setError(e.message)
       setStarting(false)
     }
   }
 
+  // Name entry screen — shown until this phone has submitted a name.
+  if (!state || !hasSetName) {
+    return (
+      <div style={containerStyle}>
+        <h1 style={{ fontFamily: 'var(--font-headline)', fontSize: '24px', textAlign: 'center' }}>
+          Welcome to {venueName}
+        </h1>
+        <p style={{ textAlign: 'center', color: 'var(--on-surface-dim)' }}>
+          {!state ? 'Connecting…' : "What's your name?"}
+        </p>
+        {state && (
+          <>
+            <input
+              type="text"
+              value={myName}
+              onChange={(e) => setMyName(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && handleSetName()}
+              placeholder="Your name"
+              maxLength={60}
+              style={inputStyle}
+              autoFocus
+            />
+            <button
+              onClick={handleSetName}
+              disabled={submittingName || !myName.trim()}
+              style={buttonStyle}
+            >
+              {submittingName ? 'Joining…' : 'Join'}
+            </button>
+          </>
+        )}
+        {error && <p style={errorStyle}>{error}</p>}
+      </div>
+    )
+  }
+
   return (
     <div style={containerStyle}>
       <h1 style={{ fontFamily: 'var(--font-headline)', fontSize: '24px', textAlign: 'center' }}>
-        Welcome to {venueName} 🍺
+        Welcome to {venueName}
       </h1>
 
-      {!state ? (
-        <p style={{ textAlign: 'center', color: 'var(--on-surface-dim)' }}>Connecting…</p>
-      ) : isHost ? (
+      {isHost ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-          <p style={{ textAlign: 'center', color: 'var(--on-surface-dim)' }}>
-            {state.phone_count} phone{state.phone_count === 1 ? '' : 's'} connected
-          </p>
-          <label style={labelStyle}>
-            Players ({playerCount})
-            <input
-              type="range" min="2" max="8" value={playerCount}
-              onChange={(e) => setPlayerCount(Number(e.target.value))}
-              style={{ width: '100%' }}
-            />
-          </label>
-          <label style={labelStyle}>
-            Names (optional, comma-separated)
-            <input
-              type="text" value={namesText} onChange={(e) => setNamesText(e.target.value)}
-              placeholder="Kaushik, Sarah, James" style={inputStyle}
-            />
-          </label>
+          <div>
+            <p style={{ fontSize: '13px', color: 'var(--on-surface-dim)', marginBottom: '8px' }}>Roster:</p>
+            <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: '6px' }}>
+              {phones.map((p, i) => (
+                <li key={p.phone_id} style={{ fontFamily: 'var(--font-mono)', fontSize: '14px' }}>
+                  {p.name || `Unnamed (Player ${i + 1})`}
+                </li>
+              ))}
+            </ul>
+            <p style={{ fontSize: '13px', color: 'var(--on-surface-dim)', marginTop: '8px' }}>
+              [{phones.length} phone{phones.length === 1 ? '' : 's'} connected]
+            </p>
+          </div>
+
           <label style={labelStyle}>
             Group name (optional)
             <input
@@ -107,6 +167,7 @@ export default function Lobby({ venueName, lobbyId, phoneId, adultsOnlyAllowed, 
               placeholder={`Table ${state.table_number ?? ''} Group 1`} style={inputStyle}
             />
           </label>
+
           {/* gamespec: Adults Only Toggle — default OFF, hidden entirely
               (not just disabled) unless the venue/table allow it. */}
           {adultsOnlyAllowed && (
@@ -115,34 +176,61 @@ export default function Lobby({ venueName, lobbyId, phoneId, adultsOnlyAllowed, 
                 type="checkbox" checked={adultsOnly}
                 onChange={(e) => setAdultsOnly(e.target.checked)}
               />
-              Adults Only 🔥
+              Adults Only
             </label>
           )}
-          <button onClick={handleStart} disabled={starting} style={buttonStyle}>
+
+          <button
+            onClick={handleStart}
+            disabled={starting || phones.length < 2}
+            style={buttonStyle}
+          >
             {starting ? 'Starting…' : 'Start Game'}
           </button>
+          {phones.length < 2 && (
+            <p style={{ textAlign: 'center', fontSize: '13px', color: 'var(--on-surface-dim)' }}>
+              Waiting for at least 2 phones to join…
+            </p>
+          )}
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', alignItems: 'center' }}>
-          <p style={{ color: 'var(--on-surface-dim)' }}>
-            Everyone tap the tag, then one of you set up the game
-          </p>
-          <p style={{ fontFamily: 'var(--font-mono)', fontSize: '14px' }}>
-            [{state.phone_count} phone{state.phone_count === 1 ? '' : 's'} connected]
-          </p>
           {noHostYet ? (
-            <button onClick={handleClaimHost} style={buttonStyle}>Set up the game</button>
+            <>
+              <div>
+                <p style={{ fontSize: '13px', color: 'var(--on-surface-dim)', marginBottom: '8px', textAlign: 'center' }}>
+                  Who's here:
+                </p>
+                <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: '4px', alignItems: 'center' }}>
+                  {phones.map((p, i) => (
+                    <li key={p.phone_id} style={{ fontFamily: 'var(--font-mono)', fontSize: '14px' }}>
+                      {p.name || `Unnamed (Player ${i + 1})`}
+                      {p.phone_id === phoneId ? ' (you)' : ''}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+              <p style={{ fontFamily: 'var(--font-mono)', fontSize: '14px' }}>
+                [{phones.length} phone{phones.length === 1 ? '' : 's'} connected]
+              </p>
+              <button onClick={handleClaimHost} style={buttonStyle}>Start the game</button>
+            </>
+          ) : hasJoined ? (
+            <p style={{ color: 'var(--on-surface-dim)', textAlign: 'center' }}>
+              You&apos;re in &mdash; waiting for {hostName} to start
+            </p>
           ) : (
-            <p style={{ color: 'var(--on-surface-dim)' }}>hang tight 🍺</p>
+            <>
+              <p style={{ color: 'var(--on-surface-dim)', textAlign: 'center' }}>
+                {hostName} is setting up the game
+              </p>
+              <button onClick={() => setHasJoined(true)} style={buttonStyle}>Join the game</button>
+            </>
           )}
         </div>
       )}
 
-      {error && (
-        <p style={{ color: 'var(--tertiary)', fontFamily: 'var(--font-mono)', fontSize: '13px', textAlign: 'center' }}>
-          {error}
-        </p>
-      )}
+      {error && <p style={errorStyle}>{error}</p>}
     </div>
   )
 }
@@ -178,4 +266,11 @@ const buttonStyle = {
   color: 'var(--bg-floor)',
   fontWeight: 700,
   border: 'none',
+}
+
+const errorStyle = {
+  color: 'var(--tertiary)',
+  fontFamily: 'var(--font-mono)',
+  fontSize: '13px',
+  textAlign: 'center',
 }

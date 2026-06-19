@@ -18,20 +18,8 @@ export const devLogin = (clerkUserId) =>
     return r.json()
   })
 
-export const fetchMe = (token) =>
-  fetch(`${BASE}/api/dashboard/me`, { headers: h(token) }).then(async (r) => {
-    if (!r.ok) throw new Error((await r.json()).detail || r.status)
-    return r.json()
-  })
-
 export const fetchVenue = (token) =>
   fetch(`${BASE}/api/dashboard/venue`, { headers: h(token) }).then(async (r) => {
-    if (!r.ok) throw new Error((await r.json()).detail || r.status)
-    return r.json()
-  })
-
-export const fetchAdminPing = (token) =>
-  fetch(`${BASE}/api/admin/ping`, { headers: h(token) }).then(async (r) => {
     if (!r.ok) throw new Error((await r.json()).detail || r.status)
     return r.json()
   })
@@ -47,6 +35,18 @@ export const pairTag = (token, tagUid, tableNumber) =>
     method: 'POST',
     headers: h(token),
     body: JSON.stringify({ tag_uid: tagUid, table_number: tableNumber }),
+  }).then(async (r) => {
+    if (!r.ok) throw new Error((await r.json()).detail || r.status)
+    return r.json()
+  })
+
+// Dev-only — ends every active session/lobby at a table so the next tap
+// starts completely fresh. 404s outside DEV_MODE.
+export const devResetTable = (token, tableNumber) =>
+  fetch(`${BASE}/api/dashboard/dev-reset-table`, {
+    method: 'POST',
+    headers: h(token),
+    body: JSON.stringify({ table_number: tableNumber }),
   }).then(async (r) => {
     if (!r.ok) throw new Error((await r.json()).detail || r.status)
     return r.json()

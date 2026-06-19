@@ -47,17 +47,30 @@ function parseTapFromLocation() {
 const initialTap = parseTapFromLocation()
 
 export default function PatronLanding() {
-  const missingSignature = !initialTap.tagUid || !initialTap.sig
-  const [status, setStatus] = useState(missingSignature ? 'error' : 'loading') // loading | error | <table_state.phase> | joined | started
+  const [status, setStatus] = useState('loading') // loading | error | <table_state.phase> | joined | started
   const [venue, setVenue] = useState(null)
   const [tableState, setTableState] = useState(null)
   const [joinedInfo, setJoinedInfo] = useState(null)
-  const [error, setError] = useState(
-    missingSignature ? 'This link is missing its tap signature — tap the table tag again.' : null
-  )
+  const [sessionAdultsOnly, setSessionAdultsOnly] = useState(false)
+  const [sessionPlayerCount, setSessionPlayerCount] = useState(2)
+  const [error, setError] = useState(null)
+
+  // #root's global padding-bottom (main.css) reserves space for the
+  // original card game's bottom thumb-zone nav — it has no business on
+  // any patron route, and on the Finger Picker screen it actively breaks
+  // things: it makes #root taller than the viewport, so the page becomes
+  // scrollable, and the touch zone's "100dvh minus header" math no longer
+  // matches what's actually visible. Reset it for the lifetime of this
+  // mount rather than touching the shared CSS rule (used by the live
+  // legacy game) at all.
+  useEffect(() => {
+    const root = document.getElementById('root')
+    const prevPadding = root.style.paddingBottom
+    root.style.paddingBottom = '0px'
+    return () => { root.style.paddingBottom = prevPadding }
+  }, [])
 
   useEffect(() => {
-    if (missingSignature) return
     fetchTap(initialTap)
       .then((result) => {
         setVenue(result)
@@ -68,7 +81,7 @@ export default function PatronLanding() {
         setError(e.message)
         setStatus('error')
       })
-  }, [missingSignature])
+  }, [])
 
   if (status === 'lobby') {
     return (
@@ -81,7 +94,12 @@ export default function PatronLanding() {
         // this on start (lobby_service.adults_only_allowed); this only
         // controls whether the host even sees the toggle.
         adultsOnlyAllowed={!venue.restrict_adult_content && venue.content_ceiling === 'adults_allowed'}
-        onGameStarted={(result) => { setJoinedInfo(result); setStatus('started') }}
+        onGameStarted={(result) => {
+          setJoinedInfo(result)
+          setSessionAdultsOnly(result.adults_only ?? false)
+          setSessionPlayerCount(result.player_count ?? 2)
+          setStatus('started')
+        }}
       />
     )
   }
@@ -99,6 +117,46 @@ export default function PatronLanding() {
     )
   }
 
+  // Re-tap resume: phone belongs to an active session it already started or
+  // joined. Routes straight back into that session without showing join-or-new.
+  if (status === 'resume') {
+    const ts = tableState
+    if (ts.is_origin) {
+      return (
+        <RoundOrigin
+          venueName={venue.venue_name}
+          sessionId={ts.session_id}
+          phoneId={initialTap.phoneId}
+          adultsOnly={ts.adults_only}
+          playerCount={ts.player_count}
+        />
+      )
+    }
+    // Non-origin participant — same placeholder as the 'started' non-host view.
+    return (
+      <div style={{
+        minHeight: '100dvh',
+        background: 'var(--bg-floor)',
+        color: 'var(--on-surface)',
+        fontFamily: 'var(--font-body)',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: '16px',
+        padding: '24px',
+        textAlign: 'center',
+      }}>
+        <h1 className="headline" style={{ fontFamily: 'var(--font-headline)' }}>
+          Welcome back
+        </h1>
+        <p style={{ fontSize: '13px', color: 'var(--on-surface-dim)', fontFamily: 'var(--font-mono)' }}>
+          Watch the table phone — place your finger when asked
+        </p>
+      </div>
+    )
+  }
+
   // gamespec: "Players place fingers on session-origin phone" — only the
   // phone that started the game (host) runs the finger picker. Every other
   // phone at the table — whether it was in the lobby before start ('started')
@@ -112,6 +170,8 @@ export default function PatronLanding() {
         venueName={venue.venue_name}
         sessionId={joinedInfo.converted_session_id}
         phoneId={initialTap.phoneId}
+        adultsOnly={sessionAdultsOnly}
+        playerCount={sessionPlayerCount}
       />
     )
   }

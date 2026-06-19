@@ -9,13 +9,14 @@ const MAX_GROUPS = 3
 export default function JoinOrNewChooser({ tableNumber, tableId, phoneId, groups, onJoined, onNewGroup }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
+  const [joinName, setJoinName] = useState('')
   const isFull = groups.length >= MAX_GROUPS
 
   const handleJoin = async (sessionId) => {
     setBusy(true)
     setError(null)
     try {
-      const result = await joinSession(sessionId, phoneId)
+      const result = await joinSession(sessionId, phoneId, joinName.trim() || null)
       onJoined({ ...result, sessionId })
     } catch (e) {
       setError(e.message)
@@ -46,6 +47,18 @@ export default function JoinOrNewChooser({ tableNumber, tableId, phoneId, groups
           This table is full — join one of these groups
         </p>
       )}
+
+      <label style={labelStyle}>
+        Your name
+        <input
+          type="text"
+          value={joinName}
+          onChange={(e) => setJoinName(e.target.value)}
+          placeholder="Enter your name"
+          maxLength={60}
+          style={inputStyle}
+        />
+      </label>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
         {groups.map((g) => (
@@ -88,6 +101,22 @@ const containerStyle = {
   padding: '24px',
   maxWidth: '420px',
   margin: '0 auto',
+}
+
+const labelStyle = {
+  fontSize: '13px',
+  color: 'var(--on-surface-dim)',
+  display: 'flex',
+  flexDirection: 'column',
+  gap: '6px',
+}
+
+const inputStyle = {
+  padding: '12px',
+  borderRadius: '8px',
+  background: 'var(--bg-surface)',
+  color: 'var(--on-surface)',
+  border: '1px solid var(--outline)',
 }
 
 const groupCardStyle = {

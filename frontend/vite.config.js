@@ -16,9 +16,9 @@ export default defineConfig({
       registerType: 'autoUpdate',
       includeAssets: ['favicon.svg', 'apple-touch-icon.png'],
       manifest: {
-        name: 'FirstMove',
-        short_name: 'FirstMove',
-        description: 'The social card game for groups.',
+        name: 'MingleHub',
+        short_name: 'MingleHub',
+        description: 'The social game for bars and groups.',
         theme_color: '#0A0A0C',
         background_color: '#0A0A0C',
         display: 'standalone',

@@ -2,18 +2,20 @@ const BASE = import.meta.env.VITE_API_URL
 const KEY = import.meta.env.VITE_API_KEY
 const h = { 'Content-Type': 'application/json', 'X-API-Key': KEY }
 
-// Public — no auth token. Resolves an NFC tap (venue/table/signature/counter)
-// into venue branding info + lobby/join-or-new/table-full state, or throws
-// if the tap can't be verified.
+// Public — no auth token. Resolves an NFC tap (venue/table, optionally
+// signature/counter) into venue branding info + lobby state, or throws
+// if the venue/table can't be resolved. Signature params are omitted when
+// the tag is a plain NTAG 213 (no crypto), letting the backend skip
+// verification and still resolve the table.
 export const fetchTap = ({ venueSlug, tableNumber, tagUid, counter, sig, phoneId }) => {
   const params = new URLSearchParams({
     venue_slug: venueSlug,
     table_number: tableNumber,
-    tag_uid: tagUid,
-    counter,
-    sig,
     phone_id: phoneId,
   })
+  if (tagUid) params.set('tag_uid', tagUid)
+  if (sig) params.set('sig', sig)
+  if (counter != null && !isNaN(counter)) params.set('counter', counter)
   return fetch(`${BASE}/api/patron/tap?${params}`, { headers: h }).then(async (r) => {
     if (!r.ok) throw new Error((await r.json()).detail || r.status)
     return r.json()
@@ -36,14 +38,22 @@ export const claimHost = (lobbyId, phoneId) =>
     return r.json()
   })
 
-export const startGame = (lobbyId, { phoneId, playerCount, playerNames, adultsOnly, groupLabel }) =>
+export const setLobbyName = (lobbyId, phoneId, name) =>
+  fetch(`${BASE}/api/patron/lobby/${lobbyId}/set-name`, {
+    method: 'POST',
+    headers: h,
+    body: JSON.stringify({ phone_id: phoneId, name }),
+  }).then(async (r) => {
+    if (!r.ok) throw new Error((await r.json()).detail || r.status)
+    return r.json()
+  })
+
+export const startGame = (lobbyId, { phoneId, adultsOnly, groupLabel }) =>
   fetch(`${BASE}/api/patron/lobby/${lobbyId}/start`, {
     method: 'POST',
     headers: h,
     body: JSON.stringify({
       phone_id: phoneId,
-      player_count: playerCount,
-      player_names: playerNames,
       adults_only: adultsOnly,
       group_label: groupLabel,
     }),
@@ -77,6 +87,47 @@ export const joinSession = (sessionId, phoneId, name) =>
 // and increments times_selected. Any other phone calling this gets a 403.
 export const pickHotSeat = (sessionId, phoneId) =>
   fetch(`${BASE}/api/patron/sessions/${sessionId}/select-hot-seat`, {
+    method: 'POST',
+    headers: h,
+    body: JSON.stringify({ phone_id: phoneId }),
+  }).then(async (r) => {
+    if (!r.ok) throw new Error((await r.json()).detail || r.status)
+    return r.json()
+  })
+
+// Chooser round API — draw a card, then complete/skip/redraw it.
+export const drawCard = (sessionId, phoneId, playerId) =>
+  fetch(`${BASE}/api/patron/sessions/${sessionId}/draw-card`, {
+    method: 'POST',
+    headers: h,
+    body: JSON.stringify({ phone_id: phoneId, player_id: playerId }),
+  }).then(async (r) => {
+    if (!r.ok) throw new Error((await r.json()).detail || r.status)
+    return r.json()
+  })
+
+export const completeRound = (roundId, phoneId) =>
+  fetch(`${BASE}/api/patron/rounds/${roundId}/complete`, {
+    method: 'POST',
+    headers: h,
+    body: JSON.stringify({ phone_id: phoneId }),
+  }).then(async (r) => {
+    if (!r.ok) throw new Error((await r.json()).detail || r.status)
+    return r.json()
+  })
+
+export const skipRound = (roundId, phoneId) =>
+  fetch(`${BASE}/api/patron/rounds/${roundId}/skip`, {
+    method: 'POST',
+    headers: h,
+    body: JSON.stringify({ phone_id: phoneId }),
+  }).then(async (r) => {
+    if (!r.ok) throw new Error((await r.json()).detail || r.status)
+    return r.json()
+  })
+
+export const redrawRound = (roundId, phoneId) =>
+  fetch(`${BASE}/api/patron/rounds/${roundId}/redraw`, {
     method: 'POST',
     headers: h,
     body: JSON.stringify({ phone_id: phoneId }),

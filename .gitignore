@@ -34,6 +34,11 @@ Thumbs.db
 # Local SSL certs (mkcert)
 *.pem
 uvicorn_dev*.log
+
+# session / feature-pipeline scratch
+.pipeline/
+*this-session-is-being-continued*.txt
+
 # code-review-graph
 .code-review-graph/
 .mcp.json

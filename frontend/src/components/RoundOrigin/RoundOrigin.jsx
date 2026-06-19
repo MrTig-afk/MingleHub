@@ -1,23 +1,26 @@
 import { useState } from 'react'
+import ChooserRound from '../ChooserRound/ChooserRound'
 import FingerChooser from '../FingerChooser/FingerChooser'
 import { pickHotSeat } from '../../services/patronApi'
 
 // gamespec.md Step 5 — Round Flow, Finger Picker section. Renders only on
 // the session-origin phone (the one that started the game) — everyone
-// else's screen shows a "watch the table phone" placeholder instead. The
-// finger-placement UI/animation (FingerChooser/useMultiTouch) already
-// existed from the FirstMove carryover; this component is the "session
-// integration" layer — once a finger is chosen locally, it asks the
-// server which real player that maps to and persists times_selected.
+// else's screen shows a "watch the table phone" placeholder instead.
 //
-// SCOPE NOTE: this only covers selecting the Hot Seat player. What happens
-// next (a Chooser card, Trivia question, or Roulette challenge) is later
-// backlog work — for now "Pick again" just loops the picker so the
-// mechanism is exercisable end-to-end.
-export default function RoundOrigin({ venueName, sessionId, phoneId }) {
+// After the finger picker resolves a hot-seat player, renders ChooserRound
+// which draws a card and handles Complete/Skip/Redraw. When ChooserRound
+// calls onRoundComplete(), hotSeat is cleared back to null and the finger
+// picker resets for the next round.
+export default function RoundOrigin({ venueName, sessionId, phoneId, adultsOnly, playerCount = 2 }) {
   const [hotSeat, setHotSeat] = useState(null)
   const [error, setError] = useState(null)
   const [picking, setPicking] = useState(false)
+  // Cross-round memory of recent winners' screen positions. Lives here (not in
+  // the picker) because FingerChooser unmounts/remounts every round when
+  // ChooserRound takes over — so the picker can't remember across rounds on its
+  // own. The picker weights each pick away from these spots so the selection
+  // spreads around the table instead of clustering on one person/area.
+  const [recentWinners, setRecentWinners] = useState([])
 
   const handleChosen = async () => {
     setPicking(true)
@@ -34,23 +37,28 @@ export default function RoundOrigin({ venueName, sessionId, phoneId }) {
 
   if (hotSeat) {
     return (
-      <div style={overlayStyle}>
-        <h1 className="headline" style={{ fontFamily: 'var(--font-headline)', fontSize: '28px' }}>
-          🎯 {hotSeat.name} is in the Hot Seat!
-        </h1>
-        <p style={{ fontSize: '13px', color: 'var(--on-surface-dim)', fontFamily: 'var(--font-mono)' }}>
-          Picked {hotSeat.times_selected} time{hotSeat.times_selected === 1 ? '' : 's'} tonight
-        </p>
-        <button onClick={() => setHotSeat(null)} style={buttonStyle}>
-          Pick again
-        </button>
-      </div>
+      <ChooserRound
+        sessionId={sessionId}
+        phoneId={phoneId}
+        hotSeat={hotSeat}
+        adultsOnly={adultsOnly}
+        onRoundComplete={() => setHotSeat(null)}
+      />
     )
   }
 
   return (
     <div style={{ position: 'relative', minHeight: '100dvh' }}>
-      <FingerChooser onCardDraw={handleChosen} hideBack />
+      <FingerChooser
+        onCardDraw={handleChosen}
+        requiredFingers={playerCount}
+        recentWinnerPositions={recentWinners}
+        // Keep only the last 3 winning spots — a sliding window the picker
+        // steers away from, so it avoids the recent areas without permanently
+        // ruling anyone out over a long session.
+        onWinnerChosen={(pos) => setRecentWinners((prev) => [...prev, pos].slice(-3))}
+        hideBack
+      />
       {(picking || error) && (
         <div style={bannerStyle}>
           {picking && <p style={{ margin: 0 }}>Picking…</p>}
@@ -60,20 +68,6 @@ export default function RoundOrigin({ venueName, sessionId, phoneId }) {
       <p style={venueLabelStyle}>{venueName}</p>
     </div>
   )
-}
-
-const overlayStyle = {
-  minHeight: '100dvh',
-  background: 'var(--bg-floor)',
-  color: 'var(--on-surface)',
-  fontFamily: 'var(--font-body)',
-  display: 'flex',
-  flexDirection: 'column',
-  alignItems: 'center',
-  justifyContent: 'center',
-  gap: '16px',
-  padding: '24px',
-  textAlign: 'center',
 }
 
 const bannerStyle = {
@@ -101,11 +95,4 @@ const venueLabelStyle = {
   zIndex: 30,
 }
 
-const buttonStyle = {
-  padding: '14px 24px',
-  borderRadius: '8px',
-  background: 'var(--primary)',
-  color: 'var(--bg-floor)',
-  fontWeight: 700,
-  border: 'none',
-}
+

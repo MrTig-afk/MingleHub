@@ -12,7 +12,9 @@ const HOLD_MS = 300
 const COUNTDOWN_MS = 3000
 
 /**
- * Cryptographically unbiased array pick using rejection sampling.
+ * Cryptographically unbiased array pick using rejection sampling. Used for the
+ * very first pick of a session (before there's any winner history to spread
+ * away from) and as the building block for weighted selection.
  *
  * Why rejection sampling:
  *   crypto.getRandomValues gives a uniform Uint32 (0–4294967295).
@@ -23,13 +25,9 @@ const COUNTDOWN_MS = 3000
  *   For n=2 there is no bias (2^32 % 2 === 0), but we use the same path
  *   everywhere for consistency.
  *
- * Selection rules:
- *   - 2 players: pure random from the full pool — same person can win
- *     back-to-back. No exclusion applied.
- *   - 3+ players: previous winner's touch ID is removed from the pool
- *     before picking, preventing immediate back-to-back repeats. The
- *     exclusion persists across rounds (lastWinnerIdRef is not reset on
- *     reset()) so the guard also covers the first pick of a new round.
+ * Winner selection itself is done by spreadPick (below): a position-weighted
+ * draw that steers the pick away from recent winners' screen areas so it moves
+ * around the table instead of clustering on one person.
  */
 function cryptoPick(pool) {
   const n = pool.length
@@ -42,7 +40,56 @@ function cryptoPick(pool) {
   return pool[buf[0] % n]
 }
 
-export function useMultiTouch(onChosen) {
+/** Weighted random choice using a single crypto-random draw in [0, total). */
+function weightedPick(ids, weights) {
+  const total = weights.reduce((a, b) => a + b, 0)
+  const buf = new Uint32Array(1)
+  crypto.getRandomValues(buf)
+  let r = (buf[0] / 0x100000000) * total
+  for (let i = 0; i < ids.length; i++) {
+    r -= weights[i]
+    if (r < 0) return ids[i]
+  }
+  return ids[ids.length - 1]
+}
+
+/**
+ * "Spread across the table" winner pick. Weights each candidate finger by how
+ * far it sits from the most recent winners' positions, so consecutive picks
+ * move around the screen instead of clustering on one person/area.
+ *
+ *   - First round (no history): unbiased uniform pick via cryptoPick.
+ *   - After that: weight = (normalised distance to nearest recent winner)^2,
+ *     plus a small floor so a finger near a recent winner is unlikely but never
+ *     impossible. It stays random — just steered away from recent spots.
+ */
+function spreadPick(ids, fingersMap, recentPositions) {
+  if (ids.length <= 1) return ids[0]
+  if (!recentPositions || recentPositions.length === 0) return cryptoPick(ids)
+
+  const diag = Math.hypot(window.innerWidth, window.innerHeight) || 1
+  const FLOOR = 0.15
+  const weights = ids.map((id) => {
+    const f = fingersMap.get(id)
+    if (!f) return FLOOR
+    let minDist = Infinity
+    for (const p of recentPositions) {
+      const d = Math.hypot(f.x - p.x, f.y - p.y)
+      if (d < minDist) minDist = d
+    }
+    const norm = Math.min(1, minDist / diag)
+    return norm * norm + FLOOR
+  })
+  return weightedPick(ids, weights)
+}
+
+// requiredFingers: null (default) preserves the original FirstMove
+// behavior — any 2+ fingers, no upper bound, since that game has no
+// concept of a fixed roster. Passing a number (MingleHub's session
+// integration) makes it exact: the picker waits for precisely that many
+// fingers and ignores any extra, since the result has to map onto one of
+// a known, fixed list of named players.
+export function useMultiTouch(onChosen, requiredFingers = null, recentWinnerPositions = []) {
   const [fingers, setFingers] = useState(new Map())
   const [phase, setPhase] = useState(STATES.IDLE)
   const [chosenId, setChosenId] = useState(null)
@@ -54,9 +101,11 @@ export function useMultiTouch(onChosen) {
   const fingersRef = useRef(fingers)
   const phaseRef = useRef(phase)
   const chosenIdRef = useRef(null)
-  // ID of the last picked finger. Not reset between rounds so the 3+ exclusion
-  // also prevents back-to-back at the start of the next round.
-  const lastWinnerIdRef = useRef(null)
+  const requiredFingersRef = useRef(requiredFingers)
+  // Recent winners' screen positions (sliding window, owned by RoundOrigin so
+  // it survives the picker remounting each round). spreadPick weights away from
+  // these so the selection doesn't keep landing in the same area.
+  const recentWinnerPositionsRef = useRef(recentWinnerPositions)
   // Mirrors latest state into refs so the touch-event callbacks below
   // (useCallback with stable deps, attached once via `attach`) always read
   // current values without forcing the listeners to be torn down and
@@ -66,6 +115,10 @@ export function useMultiTouch(onChosen) {
   fingersRef.current = fingers
   // eslint-disable-next-line react-hooks/refs
   phaseRef.current = phase
+  // eslint-disable-next-line react-hooks/refs
+  requiredFingersRef.current = requiredFingers
+  // eslint-disable-next-line react-hooks/refs
+  recentWinnerPositionsRef.current = recentWinnerPositions
 
   const clearTimers = useCallback(() => {
     clearTimeout(holdTimer.current)
@@ -88,25 +141,16 @@ export function useMultiTouch(onChosen) {
       clearInterval(tickTimer.current)
       tickTimer.current = null
       const ids = [...fingersRef.current.keys()]
-      if (ids.length < 2) {
+      if (ids.length < (requiredFingersRef.current ?? 2)) {
         setPhase(STATES.WAITING)
         return
       }
 
-      let winner
-      if (ids.length === 2) {
-        // 2 players: pure random, no exclusion — back-to-back is allowed
-        winner = cryptoPick(ids)
-      } else {
-        // 3+ players: exclude previous winner to prevent immediate repeat
-        const pool = lastWinnerIdRef.current !== null
-          ? ids.filter(id => id !== lastWinnerIdRef.current)
-          : ids
-        // Safety fallback: if pool somehow emptied, use full list
-        winner = cryptoPick(pool.length > 0 ? pool : ids)
-      }
-
-      lastWinnerIdRef.current = winner
+      // Position-weighted "spread across the table" pick — steers away from
+      // recent winners' areas (see spreadPick). recentWinnerPositions is owned
+      // by RoundOrigin so the memory persists even though this hook remounts
+      // every round.
+      const winner = spreadPick(ids, fingersRef.current, recentWinnerPositionsRef.current)
       chosenIdRef.current = winner
       setChosenId(winner)
       setFingers(prev => {
@@ -129,7 +173,7 @@ export function useMultiTouch(onChosen) {
         for (const t of e.changedTouches) {
           const dx = t.clientX - chosen.x
           const dy = t.clientY - chosen.y
-          if (Math.sqrt(dx * dx + dy * dy) < 70) {
+          if (Math.sqrt(dx * dx + dy * dy) < 100) {
             setPhase(STATES.CARD_DRAW)
             return
           }
@@ -140,7 +184,13 @@ export function useMultiTouch(onChosen) {
     if (phaseRef.current === STATES.CARD_DRAW) return
     setFingers(prev => {
       const next = new Map(prev)
+      const required = requiredFingersRef.current
       for (const t of e.changedTouches) {
+        // Caps registration at exactly the session's player count — an
+        // extra finger beyond that (a curious friend, a forgotten thumb)
+        // is ignored rather than joining the pool, since the picker's
+        // result has to map onto one of the actual named players.
+        if (next.size >= required && !next.has(t.identifier)) continue
         next.set(t.identifier, { x: t.clientX, y: t.clientY, state: 'waiting' })
       }
       return next
@@ -199,8 +249,11 @@ export function useMultiTouch(onChosen) {
       return
     }
 
-    // Countdown running but finger count dropped below 2 → abort, back to WAITING
-    if (phase === STATES.COUNTDOWN && count < 2) {
+    // Countdown running but finger count dropped below the required
+    // amount → abort, back to WAITING. (onStart already caps registration
+    // at requiredFingers, so "dropped below" is the only direction this
+    // can move once countdown starts — it can never exceed it.)
+    if (phase === STATES.COUNTDOWN && count < requiredFingers) {
       clearTimers()
       setPhase(STATES.WAITING)
       setCountdown(3)
@@ -208,19 +261,19 @@ export function useMultiTouch(onChosen) {
     }
 
     if (phase === STATES.WAITING) {
-      if (count >= 2 && holdTimer.current === null) {
-        // 2+ fingers held: start the brief hold timer, then fire countdown
+      if (count >= requiredFingers && holdTimer.current === null) {
+        // Exactly requiredFingers held: start the brief hold timer, then fire countdown
         holdTimer.current = setTimeout(() => {
           holdTimer.current = null
-          if (fingersRef.current.size >= 2) startCountdown()
+          if (fingersRef.current.size >= requiredFingers) startCountdown()
         }, HOLD_MS)
-      } else if (count < 2 && holdTimer.current !== null) {
-        // Dropped back to 1 finger: cancel hold so countdown doesn't fire
+      } else if (count < requiredFingers && holdTimer.current !== null) {
+        // Dropped a finger: cancel hold so countdown doesn't fire
         clearTimeout(holdTimer.current)
         holdTimer.current = null
       }
     }
-  }, [fingers, phase, clearTimers, startCountdown])
+  }, [fingers, phase, clearTimers, startCountdown, requiredFingers])
 
   const reset = useCallback(() => {
     clearTimers()
@@ -228,17 +281,23 @@ export function useMultiTouch(onChosen) {
     setPhase(STATES.IDLE)
     setChosenId(null)
     setCountdown(3)
-    // lastWinnerIdRef intentionally preserved across resets for 3+ exclusion
   }, [clearTimers])
 
   const attach = useCallback((el) => {
     if (!el) return
     el.addEventListener('touchstart', onStart, { passive: false })
     el.addEventListener('touchend', onEnd)
+    // iOS Safari fires touchcancel instead of touchend when a system
+    // gesture (edge-swipe back/forward, Control Center, an accidental
+    // pinch interpretation) interrupts a touch — without this, that
+    // finger never leaves the map, leaving a stale dot and a phantom
+    // participant in the count. Same cleanup as a normal lift.
+    el.addEventListener('touchcancel', onEnd)
     el.addEventListener('touchmove', onMove, { passive: true })
     return () => {
       el.removeEventListener('touchstart', onStart)
       el.removeEventListener('touchend', onEnd)
+      el.removeEventListener('touchcancel', onEnd)
       el.removeEventListener('touchmove', onMove)
     }
   }, [onStart, onEnd, onMove])

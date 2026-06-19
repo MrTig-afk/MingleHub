@@ -1,9 +1,11 @@
 import asyncio
 import asyncpg
 import os
+import sys
 from dotenv import load_dotenv
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, ROOT)
 load_dotenv(os.path.join(ROOT, 'api', '.env'))
 
 
@@ -150,6 +152,39 @@ async def migrate():
         """)
         print("OK game_players table ready")
 
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS bar_cards (
+                id              UUID PRIMARY KEY,
+                content         TEXT NOT NULL,
+                type            TEXT NOT NULL CHECK (type IN (
+                    'icebreaker', 'truth', 'dare', 'compliment', 'challenge', 'drink', 'flirty'
+                )),
+                is_adults_only  BOOLEAN DEFAULT FALSE,
+                created_at      TIMESTAMP DEFAULT NOW()
+            )
+        """)
+        print("OK bar_cards table ready")
+
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS rounds (
+                id                  UUID PRIMARY KEY,
+                session_id          UUID NOT NULL REFERENCES game_sessions(id),
+                round_number        INTEGER NOT NULL,
+                round_type          TEXT NOT NULL,
+                selected_player_id  UUID REFERENCES game_players(id),
+                card_id             UUID,
+                trivia_question_id  UUID,
+                card_type           TEXT,
+                trivia_category     TEXT,
+                result              TEXT,
+                score_awarded       INTEGER DEFAULT 0,
+                time_to_answer      INTEGER,
+                redraw_count        INTEGER DEFAULT 0,
+                created_at          TIMESTAMP DEFAULT NOW()
+            )
+        """)
+        print("OK rounds table ready")
+
         # ALTER rather than inside game_sessions' CREATE above, for two
         # reasons: (1) CREATE TABLE IF NOT EXISTS no-ops against the
         # already-existing dev/prod table, so a column added there would
@@ -168,6 +203,13 @@ async def migrate():
             ADD COLUMN IF NOT EXISTS last_hot_seat_player_id UUID REFERENCES game_players(id)
         """)
         print("OK game_sessions.origin_phone_id / last_hot_seat_player_id ready")
+
+        await conn.execute("""
+            ALTER TABLE game_sessions
+            ADD COLUMN IF NOT EXISTS current_round_number INTEGER DEFAULT 0,
+            ADD COLUMN IF NOT EXISTS drink_disclaimer_shown BOOLEAN DEFAULT FALSE
+        """)
+        print("OK game_sessions.current_round_number / drink_disclaimer_shown ready")
 
         # Not in gamespec.md's table list — gamespec describes lobby *behavior*
         # (Player Flow -> Step 2) without naming a table for it. This is the
@@ -204,6 +246,16 @@ async def migrate():
             )
         """)
         print("OK table_lobby_phones table ready")
+
+        await conn.execute("""
+            ALTER TABLE table_lobby_phones
+            ADD COLUMN IF NOT EXISTS name TEXT
+        """)
+        print("OK table_lobby_phones.name ready")
+
+        from scripts.seed_bar_cards import seed as seed_bar_cards  # noqa: E402
+        await seed_bar_cards(conn)
+        print("OK bar_cards seeded")
 
         schema = await conn.fetch("""
             SELECT column_name, data_type, is_nullable, column_default

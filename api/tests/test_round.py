@@ -40,23 +40,41 @@ def _tap_with_phone(client, api_key_header, venue_slug, table_number, tag_uid, c
     return resp.json()
 
 
+def _set_name(client, api_key_header, lobby_id, phone_id, name):
+    resp = client.post(
+        f"/api/patron/lobby/{lobby_id}/set-name",
+        headers=api_key_header,
+        json={"phone_id": phone_id, "name": name},
+    )
+    assert resp.status_code == 200, resp.text
+
+
 def _start_session(client, api_key_header, fresh_table, owner_a_token, player_count=3, names=None):
-    """Pairs a tag, taps once, claims host, and starts a game — returns
-    (session_id, origin_phone_id)."""
+    """Pairs a tag, taps player_count phones, sets names, claims host, and starts a game.
+
+    Returns (session_id, origin_phone_id).
+    """
     tag_uid = pair_tag(client, api_key_header, owner_a_token, fresh_table["table_number"])
-    host_phone = _fresh_phone()
+    phones = [_fresh_phone() for _ in range(player_count)]
     body = _tap_with_phone(
-        client, api_key_header, fresh_table["venue_slug"], fresh_table["table_number"], tag_uid, 1, host_phone
+        client, api_key_header, fresh_table["venue_slug"], fresh_table["table_number"], tag_uid, 1, phones[0]
     )
     lobby_id = body["table_state"]["lobby_id"]
-    client.post(f"/api/patron/lobby/{lobby_id}/claim-host", headers=api_key_header, json={"phone_id": host_phone})
+    for i, phone in enumerate(phones[1:], start=2):
+        _tap_with_phone(
+            client, api_key_header, fresh_table["venue_slug"], fresh_table["table_number"], tag_uid, i, phone
+        )
+    for i, phone in enumerate(phones):
+        name = names[i] if names and i < len(names) else f"Player {i + 1}"
+        _set_name(client, api_key_header, lobby_id, phone, name)
+    client.post(f"/api/patron/lobby/{lobby_id}/claim-host", headers=api_key_header, json={"phone_id": phones[0]})
     start = client.post(
         f"/api/patron/lobby/{lobby_id}/start",
         headers=api_key_header,
-        json={"phone_id": host_phone, "player_count": player_count, "player_names": names},
+        json={"phone_id": phones[0]},
     )
     assert start.status_code == 200, start.text
-    return start.json()["session_id"], host_phone
+    return start.json()["session_id"], phones[0]
 
 
 def _pick(client, api_key_header, session_id, phone_id):

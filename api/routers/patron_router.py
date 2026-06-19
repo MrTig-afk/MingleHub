@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 
 from api.db import get_pool
 from api.security import limiter, verify_api_key
-from api.services import lobby_service, round_service
+from api.services import chooser_service, lobby_service, round_service
 from api.services.notify import notify_error
 from api.services.nfc_crypto import decrypt_tag_key
 from api.services.nfc_verify import verify_signature
@@ -23,18 +23,23 @@ async def tap(
     request: Request,
     venue_slug: str = Query(...),
     table_number: int = Query(..., gt=0),
-    tag_uid: str = Query(...),
-    counter: int = Query(..., ge=0),
-    sig: str = Query(...),
+    tag_uid: Optional[str] = Query(None),
+    counter: Optional[int] = Query(None, ge=0),
+    sig: Optional[str] = Query(None),
     phone_id: Optional[str] = Query(None, max_length=64),
 ):
-    """Resolves an NFC tap into a venue/table, proving physical presence.
+    """Resolves an NFC tap into a venue/table.
+
+    Supports two paths:
+    - Signed path (tag_uid + counter + sig all present): verifies the NTAG 424
+      DNA SUN signature and counter monotonicity before resolving the table.
+    - Plain-tag path (any of the three is absent): skips crypto verification.
+      Used by plain NTAG 213 tags with a static URL. The venue and table must
+      still exist — only the NFC crypto check is bypassed.
 
     Public route — derives venue_id from the slug via a public lookup
-    only, the same as every other patron-facing endpoint. Never touches
-    the users table (security.md). A generic 404/401 is returned for
-    every failure mode so a bad request can't be used to probe which
-    venue/table/tag exists.
+    only. Never touches the users table (security.md). A generic 404/401
+    is returned so a bad request can't probe which venue/table/tag exists.
     """
     if not _SLUG_RE.match(venue_slug):
         raise HTTPException(status_code=404, detail="Not found")
@@ -56,34 +61,37 @@ async def tap(
             if not table:
                 raise HTTPException(status_code=404, detail="Not found")
 
-            tag = await conn.fetchrow(
-                """
-                SELECT aes_key_encrypted, counter_last_seen
-                FROM nfc_tags
-                WHERE tag_uid = $1 AND venue_id = $2 AND table_id = $3 AND status = 'active'
-                """,
-                tag_uid, venue["id"], table["id"],
-            )
-            if not tag:
-                raise HTTPException(status_code=401, detail="Invalid or expired tag")
+            # Only verify NFC crypto when all three signature params are present.
+            # A partial or absent set means a plain (unsigned) tag — skip verification.
+            is_signed = tag_uid is not None and counter is not None and sig is not None
 
-            raw_key = decrypt_tag_key(tag["aes_key_encrypted"])
-            if not verify_signature(raw_key, tag_uid, counter, sig):
-                raise HTTPException(status_code=401, detail="Invalid or expired tag")
+            if is_signed:
+                tag = await conn.fetchrow(
+                    """
+                    SELECT aes_key_encrypted, counter_last_seen
+                    FROM nfc_tags
+                    WHERE tag_uid = $1 AND venue_id = $2 AND table_id = $3 AND status = 'active'
+                    """,
+                    tag_uid, venue["id"], table["id"],
+                )
+                if not tag:
+                    raise HTTPException(status_code=401, detail="Invalid or expired tag")
 
-            # Counter must strictly increase — anything else is a replay.
-            last_seen = tag["counter_last_seen"]
-            if last_seen is not None and counter <= last_seen:
-                raise HTTPException(status_code=401, detail="Invalid or expired tag")
+                raw_key = decrypt_tag_key(tag["aes_key_encrypted"])
+                if not verify_signature(raw_key, tag_uid, counter, sig):
+                    raise HTTPException(status_code=401, detail="Invalid or expired tag")
 
-            await conn.execute(
-                "UPDATE nfc_tags SET counter_last_seen = $1 WHERE tag_uid = $2",
-                counter, tag_uid,
-            )
+                # NFC counter must strictly increase — anything else is a replay.
+                last_seen = tag["counter_last_seen"]
+                if last_seen is not None and counter <= last_seen:
+                    raise HTTPException(status_code=401, detail="Invalid or expired tag")
 
-            # Lobby/session resolution only runs when the caller supplies a
-            # phone_id — keeps this endpoint's original pure-verification
-            # contract (and its existing tests) unchanged when it's omitted.
+                await conn.execute(
+                    "UPDATE nfc_tags SET counter_last_seen = $1 WHERE tag_uid = $2",
+                    counter, tag_uid,
+                )
+
+            # Lobby/session resolution runs for both paths when phone_id is provided.
             table_state = None
             if phone_id:
                 table_state = await lobby_service.resolve_table_state(
@@ -111,11 +119,17 @@ class PhoneIdBody(BaseModel):
     phone_id: str = Field(min_length=1, max_length=64)
 
 
+class DrawCardRequest(PhoneIdBody):
+    player_id: str = Field(min_length=1)
+
+
 class StartGameRequest(PhoneIdBody):
-    player_count: int = Field(ge=lobby_service.MIN_PLAYERS, le=lobby_service.MAX_PLAYERS)
-    player_names: Optional[list[str]] = None
     adults_only: bool = False
     group_label: Optional[str] = Field(None, max_length=100)
+
+
+class SetNameRequest(PhoneIdBody):
+    name: str = Field(min_length=1, max_length=60)
 
 
 class JoinSessionRequest(BaseModel):
@@ -158,6 +172,29 @@ async def claim_lobby_host(request: Request, lobby_id: str, body: PhoneIdBody):
     return result
 
 
+@router.post("/lobby/{lobby_id}/set-name")
+@limiter.limit("30/minute")
+async def set_lobby_name(request: Request, lobby_id: str, body: SetNameRequest):
+    """Patron sets their own name in the lobby before the game starts."""
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            if not await lobby_service.is_lobby_member(conn, lobby_id, body.phone_id):
+                raise HTTPException(status_code=403, detail="Not in this lobby")
+            try:
+                result = await lobby_service.set_lobby_phone_name(
+                    conn, lobby_id, body.phone_id, body.name,
+                )
+            except LookupError:
+                raise HTTPException(status_code=404, detail="Not found")
+    except HTTPException:
+        raise
+    except Exception:
+        await notify_error("POST /patron/lobby/set-name failed", traceback.format_exc()[:500])
+        raise HTTPException(status_code=500, detail="Internal error")
+    return result
+
+
 @router.post("/lobby/{lobby_id}/start")
 @limiter.limit("30/minute")
 async def start_lobby(request: Request, lobby_id: str, body: StartGameRequest):
@@ -169,8 +206,7 @@ async def start_lobby(request: Request, lobby_id: str, body: StartGameRequest):
                 raise HTTPException(status_code=404, detail="Not found")
             try:
                 result = await lobby_service.start_game(
-                    conn, lobby, body.phone_id, body.player_count,
-                    body.player_names, body.adults_only, body.group_label,
+                    conn, lobby, body.phone_id, body.adults_only, body.group_label,
                 )
             except PermissionError:
                 raise HTTPException(status_code=403, detail="Only the host can start the game")
@@ -255,5 +291,108 @@ async def pick_hot_seat(request: Request, session_id: str, body: PhoneIdBody):
         raise
     except Exception:
         await notify_error("POST /patron/sessions/select-hot-seat failed 🚨", traceback.format_exc()[:500])
+        raise HTTPException(status_code=500, detail="Internal error")
+    return result
+
+
+@router.post("/sessions/{session_id}/draw-card")
+@limiter.limit("60/minute")
+async def draw_card(request: Request, session_id: str, body: DrawCardRequest):
+    """gamespec.md: Chooser round -- draw a card for the hot-seat player.
+
+    Only the session-origin phone may call this (BOLA guard in service layer).
+    """
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            try:
+                result = await chooser_service.draw_card(
+                    conn, session_id, body.player_id, body.phone_id
+                )
+            except PermissionError:
+                raise HTTPException(status_code=403, detail="Only the table device can draw cards")
+            except ValueError as e:
+                if str(e) == "session_ended":
+                    raise HTTPException(status_code=409, detail="Session has ended")
+                if str(e) == "no_active_players":
+                    raise HTTPException(status_code=409, detail="No active players")
+                raise HTTPException(status_code=409, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception:
+        await notify_error("POST /patron/sessions/draw-card failed 🚨", traceback.format_exc()[:500])
+        raise HTTPException(status_code=500, detail="Internal error")
+    return result
+
+
+@router.post("/rounds/{round_id}/complete")
+@limiter.limit("60/minute")
+async def complete_round(request: Request, round_id: str, body: PhoneIdBody):
+    """gamespec.md: Complete a Chooser round -- awards +5 pts to the hot-seat player."""
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            try:
+                result = await chooser_service.complete_round(conn, round_id, body.phone_id)
+            except PermissionError:
+                raise HTTPException(status_code=403, detail="Only the table device can complete rounds")
+            except ValueError as e:
+                if str(e) == "round_already_resolved":
+                    raise HTTPException(status_code=409, detail="Round already resolved")
+                if str(e) == "wrong_round_type":
+                    raise HTTPException(status_code=422, detail="Wrong round type")
+                raise HTTPException(status_code=409, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception:
+        await notify_error("POST /patron/rounds/complete failed 🚨", traceback.format_exc()[:500])
+        raise HTTPException(status_code=500, detail="Internal error")
+    return result
+
+
+@router.post("/rounds/{round_id}/skip")
+@limiter.limit("60/minute")
+async def skip_round(request: Request, round_id: str, body: PhoneIdBody):
+    """gamespec.md: Skip a Chooser round -- 0 pts, no penalty."""
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            try:
+                result = await chooser_service.skip_round(conn, round_id, body.phone_id)
+            except PermissionError:
+                raise HTTPException(status_code=403, detail="Only the table device can skip rounds")
+            except ValueError as e:
+                if str(e) == "round_already_resolved":
+                    raise HTTPException(status_code=409, detail="Round already resolved")
+                if str(e) == "wrong_round_type":
+                    raise HTTPException(status_code=422, detail="Wrong round type")
+                raise HTTPException(status_code=409, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception:
+        await notify_error("POST /patron/rounds/skip failed 🚨", traceback.format_exc()[:500])
+        raise HTTPException(status_code=500, detail="Internal error")
+    return result
+
+
+@router.post("/rounds/{round_id}/redraw")
+@limiter.limit("60/minute")
+async def redraw_round(request: Request, round_id: str, body: PhoneIdBody):
+    """gamespec.md: Redraw a Chooser card -- same category, free twice then -1 pt."""
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            try:
+                result = await chooser_service.redraw(conn, round_id, body.phone_id)
+            except PermissionError:
+                raise HTTPException(status_code=403, detail="Only the table device can redraw")
+            except ValueError as e:
+                if str(e) == "round_already_resolved":
+                    raise HTTPException(status_code=409, detail="Round already resolved")
+                raise HTTPException(status_code=409, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception:
+        await notify_error("POST /patron/rounds/redraw failed 🚨", traceback.format_exc()[:500])
         raise HTTPException(status_code=500, detail="Internal error")
     return result

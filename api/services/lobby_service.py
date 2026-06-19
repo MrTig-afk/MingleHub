@@ -24,9 +24,75 @@ MIN_PLAYERS = 2
 MAX_PLAYERS = 8
 
 
+async def _check_phone_session_resume(conn, table_id: str, phone_id: str) -> dict | None:
+    """If this phone already belongs to an active session at this table,
+    return a resume payload so the tap routes straight back into that session.
+
+    Query 1 (origin check): phone was the one that started the session.
+    Query 2 (participant check): phone was in the converted lobby.
+    Origin check runs first — a phone that started a session always resumes
+    as origin, even if it also appears as a participant in another session."""
+    # Origin check — fastest path; no join needed.
+    row = await conn.fetchrow(
+        """
+        SELECT id, adults_only, player_count
+        FROM game_sessions
+        WHERE table_id = $1 AND origin_phone_id = $2 AND ended_at IS NULL
+        ORDER BY created_at DESC
+        LIMIT 1
+        """,
+        table_id, phone_id,
+    )
+    if row:
+        return {
+            "phase": "resume",
+            "session_id": str(row["id"]),
+            "is_origin": True,
+            "adults_only": row["adults_only"],
+            "player_count": row["player_count"],
+        }
+
+    # Participant check — phone was in the converted lobby but didn't start.
+    # gs.origin_phone_id != $2 prevents the origin from matching here too.
+    row = await conn.fetchrow(
+        """
+        SELECT gs.id, gs.adults_only, gs.player_count
+        FROM game_sessions gs
+        JOIN table_lobbies tl ON tl.converted_session_id = gs.id
+        JOIN table_lobby_phones tlp ON tlp.lobby_id = tl.id
+        WHERE gs.table_id = $1
+          AND gs.ended_at IS NULL
+          AND gs.origin_phone_id != $2
+          AND tlp.phone_id = $2
+        ORDER BY gs.created_at DESC
+        LIMIT 1
+        """,
+        table_id, phone_id,
+    )
+    if row:
+        return {
+            "phase": "resume",
+            "session_id": str(row["id"]),
+            "is_origin": False,
+            "adults_only": row["adults_only"],
+            "player_count": row["player_count"],
+        }
+
+    return None
+
+
 async def resolve_table_state(conn, venue_id: str, table_id: str, table_number: int, phone_id: str) -> dict:
     """Called right after a tap verifies. Decides what this phone should see:
-    a lobby to wait in, a Join-or-New chooser, or "table full"."""
+    a lobby to wait in, a Join-or-New chooser, "table full", or a session
+    resume (re-tap of a phone that already belongs to an active session)."""
+    # Re-tap resume: if this phone already belongs to an active session at
+    # this table, send it straight back into that session rather than
+    # showing join-or-new. Checked before _active_sessions so a returning
+    # phone never sees the chooser for its own session.
+    resume = await _check_phone_session_resume(conn, table_id, phone_id)
+    if resume:
+        return resume
+
     groups = await _active_sessions(conn, table_id)
 
     if groups:
@@ -112,14 +178,15 @@ async def _get_or_create_open_lobby(conn, venue_id: str, table_id: str):
         )
 
 
-async def _join_lobby_phone(conn, lobby_id, phone_id: str) -> int:
+async def _join_lobby_phone(conn, lobby_id, phone_id: str, name: str | None = None) -> int:
     await conn.execute(
         """
-        INSERT INTO table_lobby_phones (id, lobby_id, phone_id)
-        VALUES ($1, $2, $3)
-        ON CONFLICT (lobby_id, phone_id) DO NOTHING
+        INSERT INTO table_lobby_phones (id, lobby_id, phone_id, name)
+        VALUES ($1, $2, $3, $4)
+        ON CONFLICT (lobby_id, phone_id)
+        DO UPDATE SET name = COALESCE(EXCLUDED.name, table_lobby_phones.name)
         """,
-        str(uuid.uuid4()), lobby_id, phone_id,
+        str(uuid.uuid4()), lobby_id, phone_id, name,
     )
     return await conn.fetchval(
         "SELECT COUNT(*) FROM table_lobby_phones WHERE lobby_id = $1", lobby_id
@@ -137,15 +204,17 @@ async def get_lobby_state(conn, lobby_id: str) -> dict | None:
     )
     if not lobby:
         return None
-    phone_count = await conn.fetchval(
-        "SELECT COUNT(*) FROM table_lobby_phones WHERE lobby_id = $1", lobby_id
+    phone_rows = await conn.fetch(
+        "SELECT phone_id, name FROM table_lobby_phones WHERE lobby_id = $1 ORDER BY joined_at",
+        lobby_id,
     )
     return {
         "lobby_id": str(lobby["id"]),
         "status": lobby["status"],
         "host_phone_id": lobby["host_phone_id"],
         "converted_session_id": str(lobby["converted_session_id"]) if lobby["converted_session_id"] else None,
-        "phone_count": phone_count,
+        "phone_count": len(phone_rows),
+        "phones": [{"phone_id": r["phone_id"], "name": r["name"]} for r in phone_rows],
         "table_number": lobby["table_number"],
         "created_at": lobby["created_at"].isoformat(),
     }
@@ -158,6 +227,21 @@ async def get_lobby(conn, lobby_id: str):
         "SELECT id, venue_id, table_id, status, host_phone_id FROM table_lobbies WHERE id = $1",
         lobby_id,
     )
+
+
+async def set_lobby_phone_name(conn, lobby_id: str, phone_id: str, name: str) -> dict:
+    """Set or update the name for a phone already in the lobby."""
+    row = await conn.fetchrow(
+        """
+        UPDATE table_lobby_phones SET name = $1
+        WHERE lobby_id = $2 AND phone_id = $3
+        RETURNING phone_id, name
+        """,
+        name, lobby_id, phone_id,
+    )
+    if not row:
+        raise LookupError("phone_not_in_lobby")
+    return {"phone_id": row["phone_id"], "name": row["name"]}
 
 
 async def is_lobby_member(conn, lobby_id: str, phone_id: str) -> bool:
@@ -220,19 +304,28 @@ async def adults_only_allowed(conn, venue_id: str, table_id: str) -> bool:
 
 
 async def start_game(
-    conn, lobby: dict, phone_id: str, player_count: int,
-    player_names: list[str] | None, adults_only: bool, group_label: str | None,
+    conn, lobby: dict, phone_id: str, adults_only: bool, group_label: str | None,
 ) -> dict:
     if lobby["status"] != "open":
         raise ValueError("lobby_not_open")
     if lobby["host_phone_id"] != phone_id:
         raise PermissionError("not_host")
-    if not (MIN_PLAYERS <= player_count <= MAX_PLAYERS):
-        raise ValueError("invalid_player_count")
     if adults_only and not await adults_only_allowed(conn, lobby["venue_id"], lobby["table_id"]):
         raise ValueError("adults_only_not_allowed")
 
-    names = player_names or [f"Player {i + 1}" for i in range(player_count)]
+    phone_rows = await conn.fetch(
+        "SELECT phone_id, name FROM table_lobby_phones WHERE lobby_id = $1 ORDER BY joined_at",
+        lobby["id"],
+    )
+    player_count = len(phone_rows)
+    if not (MIN_PLAYERS <= player_count <= MAX_PLAYERS):
+        raise ValueError("invalid_player_count")
+
+    # Fall back to "Player N" for any phone that never submitted a name.
+    names = []
+    for i, row in enumerate(phone_rows):
+        names.append(row["name"] if row["name"] else f"Player {i + 1}")
+
     label = group_label or await next_group_label(conn, lobby["table_id"])
 
     session_id = str(uuid.uuid4())
@@ -253,7 +346,8 @@ async def start_game(
         "UPDATE table_lobbies SET status = 'converted', converted_session_id = $1 WHERE id = $2",
         session_id, lobby["id"],
     )
-    return {"session_id": session_id, "group_label": label, "player_count": player_count}
+    return {"session_id": session_id, "group_label": label, "player_count": player_count,
+            "adults_only": adults_only}
 
 
 async def join_existing_session(conn, session_id: str, name: str | None) -> dict:

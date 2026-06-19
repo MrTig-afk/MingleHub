@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react'
-import { devLogin, fetchTables, fetchVenue, pairTag } from '../../services/dashboardApi'
+import { devLogin, devResetTable, fetchTables, fetchVenue, pairTag } from '../../services/dashboardApi'
 import { simulateTap as simulateTagSignature } from '../../services/patronApi'
 
 // Must match the clerk_user_id values seeded by scripts/seed_platform.py.
@@ -109,6 +109,24 @@ export default function PairTags() {
   // any browser, on desktop, with nothing tapped.
   const simulateTap = () => finishPairing(crypto.randomUUID())
 
+  // Ends every active session/lobby at the selected table so the next
+  // "Open Game" starts from a clean lobby instead of resuming whatever
+  // groups an earlier test round left active. Doesn't touch the tag's
+  // counter — that's independent of which table/sessions exist, and
+  // resetting it here would make the next tap a replay of an
+  // already-used counter.
+  const resetTable = async () => {
+    setStatus('loading')
+    setError(null)
+    try {
+      await devResetTable(token, tableNumber)
+      setStatus('idle')
+    } catch (e) {
+      setError(e.message)
+      setStatus('error')
+    }
+  }
+
   return (
     <div style={{
       minHeight: '100dvh',
@@ -173,6 +191,13 @@ export default function PairTags() {
             style={{ ...buttonStyle, background: 'var(--secondary)' }}
           >
             {status === 'loading' ? 'Pairing…' : 'Simulate Tap (dev)'}
+          </button>
+          <button
+            onClick={resetTable}
+            disabled={status === 'loading'}
+            style={{ ...buttonStyle, background: 'var(--bg-surface)', color: 'var(--on-surface)', border: '1px solid var(--outline)' }}
+          >
+            Reset Table {tableNumber} (dev) — end all active games
           </button>
         </>
       )}

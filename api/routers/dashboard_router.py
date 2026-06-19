@@ -1,3 +1,4 @@
+import os
 import secrets
 import traceback
 import uuid
@@ -166,3 +167,53 @@ async def pair_tag(
         raise HTTPException(status_code=500, detail="Internal error")
 
     return {**dict(row), "table_number": body.table_number}
+
+
+class DevResetTableRequest(BaseModel):
+    table_number: int = Field(gt=0)
+
+
+@router.post("/dev-reset-table")
+@limiter.limit("30/minute")
+async def dev_reset_table(
+    request: Request,
+    body: DevResetTableRequest,
+    current_user: CurrentUser = Depends(require_role("venue_owner")),
+):
+    """Dev-only convenience for local testing: ends every active session
+    and expires any open lobby at one of the caller's own tables, so the
+    very next tap starts completely fresh instead of resuming whatever
+    groups a previous test round left active. 404s outside DEV_MODE —
+    never reachable in production."""
+    if os.getenv("DEV_MODE") != "true":
+        raise HTTPException(status_code=404, detail="Not found")
+
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            table = await conn.fetchrow(
+                "SELECT id FROM tables WHERE venue_id = $1 AND table_number = $2",
+                current_user.venue_id, body.table_number,
+            )
+            if not table:
+                raise HTTPException(status_code=404, detail="Table not found")
+
+            ended = await conn.fetch(
+                """
+                UPDATE game_sessions SET ended_at = NOW(), end_reason = 'dev_reset'
+                WHERE table_id = $1 AND ended_at IS NULL
+                RETURNING id
+                """,
+                table["id"],
+            )
+            await conn.execute(
+                "UPDATE table_lobbies SET status = 'expired' WHERE table_id = $1 AND status = 'open'",
+                table["id"],
+            )
+    except HTTPException:
+        raise
+    except Exception:
+        await notify_error("POST /dashboard/dev-reset-table failed 🚨", traceback.format_exc()[:500])
+        raise HTTPException(status_code=500, detail="Internal error")
+
+    return {"table_number": body.table_number, "sessions_ended": len(ended)}

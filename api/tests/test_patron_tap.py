@@ -128,3 +128,68 @@ def test_malformed_venue_slug_returns_404(client, api_key_header):
         params={"venue_slug": "../etc/passwd", "table_number": 1, "tag_uid": "x", "counter": 1, "sig": "0" * 64},
     )
     assert resp.status_code == 404
+
+
+# --- Plain-tag path tests (no sig/counter/tag_uid) ---
+
+def test_plain_tag_tap_without_signature_returns_venue_info(client, api_key_header):
+    """A plain NTAG 213 URL (no crypto params) must still resolve venue info."""
+    resp = client.get(
+        "/api/patron/tap",
+        headers=api_key_header,
+        params={"venue_slug": "lions-den", "table_number": 1},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["venue_name"] == "The Lion's Den"
+    assert body["table_number"] == 1
+    assert "content_ceiling" in body
+
+
+def test_plain_tag_tap_with_phone_id_returns_table_state(client, api_key_header):
+    """Plain tap with phone_id must return a table_state with a phase."""
+    resp = client.get(
+        "/api/patron/tap",
+        headers=api_key_header,
+        params={"venue_slug": "lions-den", "table_number": 1, "phone_id": "plain-test-phone-1"},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert "table_state" in body
+    assert "phase" in body["table_state"]
+
+
+def test_plain_tag_unknown_venue_returns_404(client, api_key_header):
+    """Plain tap to a non-existent venue must return 404."""
+    resp = client.get(
+        "/api/patron/tap",
+        headers=api_key_header,
+        params={"venue_slug": "not-a-real-venue", "table_number": 1},
+    )
+    assert resp.status_code == 404
+
+
+def test_plain_tag_unknown_table_returns_404(client, api_key_header):
+    """Plain tap with valid venue but non-existent table must return 404."""
+    resp = client.get(
+        "/api/patron/tap",
+        headers=api_key_header,
+        params={"venue_slug": "lions-den", "table_number": 99999},
+    )
+    assert resp.status_code == 404
+
+
+def test_signed_tap_still_works_after_plain_tag_support(client, api_key_header, owner_a_token):
+    """Regression: the existing signed-tap path must be unbroken after adding plain-tag support."""
+    tag_uid = pair_tag(client, api_key_header, owner_a_token, 1)
+    sig = simulate_tap(client, api_key_header, tag_uid, 10)
+
+    resp = client.get(
+        "/api/patron/tap",
+        headers=api_key_header,
+        params={"venue_slug": "lions-den", "table_number": 1, "tag_uid": tag_uid, "counter": 10, "sig": sig},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["venue_name"] == "The Lion's Den"
+    assert body["table_number"] == 1
