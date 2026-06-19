@@ -7,4 +7,5 @@ pydantic
 python-dotenv
 slowapi
 stripe
+cryptography
 pytest

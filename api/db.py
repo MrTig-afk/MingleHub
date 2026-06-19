@@ -38,5 +38,10 @@ async def get_pool():
             max_size=5,
             ssl=None if ssl_mode == "disable" else ssl_mode,
             init=_init_connection,
+            # Required when DATABASE_URL points at a transaction-mode pooler
+            # (Neon's pgBouncer endpoint, used by the Vercel serverless
+            # deploy): asyncpg's prepared-statement cache breaks under
+            # transaction pooling. Harmless on direct connections.
+            statement_cache_size=0,
         )
     return _pool

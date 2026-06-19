@@ -1,4 +1,6 @@
-const BASE = import.meta.env.VITE_API_URL
+// Empty/unset => same-origin relative calls (the Vercel deploy serves the API
+// at /api on the same host). Local dev sets the absolute LAN URL.
+const BASE = import.meta.env.VITE_API_URL || ''
 const KEY = import.meta.env.VITE_API_KEY
 const h = (token) => ({
   'Content-Type': 'application/json',
