@@ -24,6 +24,10 @@ from api.services.session_service import compute_retap_state, idle_end_session
 NUM_QUESTIONS = 5
 QUESTION_TIMER_SECONDS = 20
 MIN_PARTICIPANTS = 2
+# 5 questions × 20s each = 100s pure question time, plus ~80s for transitions,
+# splash, and slow-network variance. Generous enough that no real player is cut
+# off; tight enough that an AFK phone unblocks the table within ~3 minutes.
+TRIVIA_MAX_DURATION_SECONDS = 180
 
 # gamespec Scoring System -> Trivia. Note the table is exactly as specified:
 # a wrong-but-fast answer (3) outscores a correct-but-late one (2) by design.
@@ -467,13 +471,31 @@ async def _maybe_complete(conn, rnd) -> None:
     )
     if active == 0 or fully_done < active:
         return
+    await _finalize_trivia_round(conn, rnd)
+
+
+async def _finalize_trivia_round(conn, rnd) -> bool:
+    """Atomically complete a trivia round: set status='complete', record the
+    analytics round row, and broadcast trivia:complete.
+
+    Returns True if this call performed the finalization, False if the round
+    was already finalized by a concurrent caller (idempotent/safe).
+
+    The WHERE id=$1 AND status='in_progress' guard makes this atomic: only one
+    concurrent caller wins the UPDATE; all others get RETURNING=None and exit
+    cleanly. This prevents double-scoring and double-broadcasting.
+
+    `rnd` is the record returned by `_load_round` (has table_id, session_id,
+    question_ids, category -- everything needed for analytics and broadcast).
+    """
     done = await conn.fetchrow(
         "UPDATE trivia_rounds SET status = 'complete', ended_at = NOW() "
         "WHERE id = $1 AND status = 'in_progress' RETURNING id",
         rnd["id"],
     )
     if not done:
-        return
+        # Another concurrent caller already finalized the round.
+        return False
     total_score = await conn.fetchval(
         "SELECT COALESCE(SUM(score_awarded), 0) FROM trivia_answers WHERE trivia_round_id = $1",
         rnd["id"],
@@ -484,6 +506,7 @@ async def _maybe_complete(conn, rnd) -> None:
         "trivia:complete",
         {"trivia_round_id": str(rnd["id"]), "leaderboard": await _leaderboard(conn, rnd["session_id"])},
     )
+    return True
 
 
 async def _leaderboard(conn, session_id) -> list[dict]:
@@ -521,30 +544,16 @@ async def finish_trivia(conn, trivia_round_id: str, phone_id: str) -> dict:
     if rnd["status"] != "in_progress":
         raise ValueError("round_not_in_progress")
 
-    updated = await conn.fetchrow(
-        """
-        UPDATE trivia_rounds SET status = 'complete', ended_at = NOW()
-        WHERE id = $1 AND status = 'in_progress'
-        RETURNING id
-        """,
-        trivia_round_id,
-    )
-    if not updated:
+    finalized = await _finalize_trivia_round(conn, rnd)
+    if not finalized:
+        # Already completed by _maybe_complete or the AFK timeout before this call landed.
         raise ValueError("round_not_in_progress")
 
-    total_score = await conn.fetchval(
-        "SELECT COALESCE(SUM(score_awarded), 0) FROM trivia_answers WHERE trivia_round_id = $1",
-        trivia_round_id,
-    )
-    await _record_analytics_round(conn, rnd, "completed", int(total_score or 0))
-
-    leaderboard = await _leaderboard(conn, rnd["session_id"])
-    await rt_publish(
-        _channel(rnd["table_id"]),
-        "trivia:complete",
-        {"trivia_round_id": trivia_round_id, "leaderboard": leaderboard},
-    )
-    return {"trivia_round_id": trivia_round_id, "status": "complete", "leaderboard": leaderboard}
+    return {
+        "trivia_round_id": trivia_round_id,
+        "status": "complete",
+        "leaderboard": await _leaderboard(conn, rnd["session_id"]),
+    }
 
 
 async def abandon_trivia(conn, trivia_round_id: str, phone_id: str) -> dict:
@@ -743,6 +752,29 @@ async def get_current_state(conn, session_id: str, phone_id: str) -> dict | None
 
     if active["status"] == "gathering":
         base["phase"] = "gather"
+        return base
+
+    # --- AFK auto-complete: lazy, poll-driven ---
+    # If this in_progress round has exceeded the maximum duration, force-complete
+    # it now. SQL-side interval math avoids Python/timezone bugs. Parameterized.
+    expired = await conn.fetchval(
+        """
+        SELECT 1 FROM trivia_rounds
+        WHERE id = $1 AND status = 'in_progress'
+          AND started_at IS NOT NULL
+          AND NOW() - started_at > make_interval(secs => $2)
+        """,
+        active["id"], float(TRIVIA_MAX_DURATION_SECONDS),
+    )
+    if expired:
+        # Load the full round record (_load_round has table_id, session_id, etc.
+        # that _finalize_trivia_round needs; the `active` record from the inline
+        # query above does not have table_id).
+        rnd_full = await _load_round(conn, str(active["id"]))
+        if rnd_full and rnd_full["status"] == "in_progress":
+            await _finalize_trivia_round(conn, rnd_full)
+        # Return between_rounds so the polling phone sees the completed state.
+        base["phase"] = "between_rounds"
         return base
 
     # in_progress -> the whole question list (never any correct_option), plus a
