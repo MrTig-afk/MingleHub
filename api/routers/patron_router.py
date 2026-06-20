@@ -11,6 +11,7 @@ from api.services import (
     chooser_service, lobby_service, realtime_auth, round_service,
     roulette_service, session_service, trivia_service,
 )
+from api.services.session_service import compute_retap_state
 from api.services.notify import notify_error
 from api.services.nfc_crypto import decrypt_tag_key
 from api.services.nfc_verify import verify_signature
@@ -833,14 +834,22 @@ async def get_recap(request: Request, session_id: str):
 @router.get("/sessions/{session_id}/current-round")
 @limiter.limit("120/minute")
 async def current_round(request: Request, session_id: str):
-    """Server-authoritative round number + active player count.
-    Used by RoundOrigin on mount to seed the cadence position."""
+    """Server-authoritative round number + active player count + retap state.
+    Used by RoundOrigin on mount (and periodic poll) to seed cadence + overlay."""
     try:
         pool = await get_pool()
         async with pool.acquire() as conn:
             row = await conn.fetchrow(
-                "SELECT current_round_number, ended_at "
-                "FROM game_sessions WHERE id = $1",
+                """
+                SELECT gs.current_round_number, gs.ended_at, gs.id,
+                       EXTRACT(EPOCH FROM NOW() - COALESCE(gs.last_activity_at, gs.created_at))
+                           AS idle_seconds,
+                       COALESCE(v.retap_interval_minutes, 15) * 60
+                           AS threshold_seconds
+                FROM game_sessions gs
+                JOIN venues v ON v.id = gs.venue_id
+                WHERE gs.id = $1
+                """,
                 session_id,
             )
             if not row:
@@ -850,6 +859,22 @@ async def current_round(request: Request, session_id: str):
                 "WHERE session_id = $1 AND left_early = FALSE",
                 session_id,
             )
+            retap = compute_retap_state(
+                float(row["idle_seconds"]),
+                int(row["threshold_seconds"]),
+            )
+            # Lazy expire: end the session if expired and not already ended.
+            if retap["state"] == "expired" and row["ended_at"] is None:
+                await session_service.idle_end_session(
+                    conn, session_id, reason='retap_expired',
+                )
+                return {
+                    "session_id": session_id,
+                    "current_round_number": row["current_round_number"],
+                    "active_count": int(active_count),
+                    "ended": True,
+                    "retap": retap,
+                }
     except HTTPException:
         raise
     except Exception:
@@ -863,4 +888,5 @@ async def current_round(request: Request, session_id: str):
         "current_round_number": row["current_round_number"],
         "active_count": int(active_count),
         "ended": row["ended_at"] is not None,
+        "retap": retap,
     }

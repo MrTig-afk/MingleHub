@@ -413,11 +413,12 @@ def test_recap_roulette_count(client, api_key_header, owner_a_token, fresh_table
 
 
 def test_idle_session_not_resumed(client, api_key_header, owner_a_token, fresh_table):
-    """Session idle for 2 hours is lazily ended on re-tap; phone gets recap phase,
-    not resume. DB shows ended_at set with end_reason='idle_timeout'."""
+    """Session idle far past the re-tap window is lazily ended on re-tap; phone gets
+    recap phase, not resume. The idle-end path is now the unified Re-Tap flow, so the
+    reason is 'retap_expired' (the 15-min idle threshold IS the re-tap clock)."""
     s = _setup_session(client, api_key_header, owner_a_token, fresh_table, num_phones=2)
 
-    # Wind last_activity_at back 2 hours (well beyond the 30-min default threshold)
+    # Wind last_activity_at back 2 hours (well beyond the 15-min threshold + 7-min window)
     _set_last_activity(s["session_id"], 120)
 
     # Re-tap: origin phone taps again, incrementing the counter
@@ -432,10 +433,10 @@ def test_idle_session_not_resumed(client, api_key_header, owner_a_token, fresh_t
     )
     assert table_state.get("session_id") == s["session_id"]
 
-    # DB must show ended with idle_timeout reason
+    # DB must show ended with the unified re-tap-expiry reason
     ended_at, end_reason = _get_session_end_info(s["session_id"])
     assert ended_at is not None, "ended_at must be set after idle expiry"
-    assert end_reason == "idle_timeout"
+    assert end_reason == "retap_expired"
 
 
 def test_recently_ended_session_returns_recap_phase(

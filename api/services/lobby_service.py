@@ -21,6 +21,7 @@ import asyncpg
 
 from api.services import session_service
 from api.services.realtime_service import publish as rt_publish
+from api.services.session_service import compute_retap_state
 
 MAX_GROUPS_PER_TABLE = 3
 MIN_PLAYERS = 2
@@ -36,18 +37,19 @@ async def _check_phone_session_resume(conn, table_id: str, phone_id: str) -> dic
     Origin check runs first — a phone that started a session always resumes
     as origin, even if it also appears as a participant in another session."""
     # Origin check — fastest path; no join needed.
-    # idle_expired: compare in SQL (not Python) to avoid naive-timestamp/tz bugs.
-    # COALESCE(last_activity_at, created_at) handles sessions created before
-    # the migration where last_activity_at is NULL.
+    # idle_seconds + threshold_seconds fetched raw so compute_retap_state can
+    # determine the exact state (active/prompt/paused/expired).
+    # COALESCE(last_activity_at, created_at) handles pre-migration NULL rows.
     row = await conn.fetchrow(
         """
         SELECT id, adults_only, player_count, current_round_number,
-               (NOW() - COALESCE(last_activity_at, created_at)) > (
-                   SELECT COALESCE(retap_interval_minutes, 30) * INTERVAL '1 minute'
-                   FROM venues v
-                   JOIN game_sessions gs2 ON gs2.venue_id = v.id
-                   WHERE gs2.id = game_sessions.id
-               ) AS idle_expired
+               EXTRACT(EPOCH FROM NOW() - COALESCE(last_activity_at, created_at))
+                   AS idle_seconds,
+               (SELECT COALESCE(retap_interval_minutes, 15) * 60
+                FROM venues v
+                JOIN game_sessions gs2 ON gs2.venue_id = v.id
+                WHERE gs2.id = game_sessions.id)
+                   AS threshold_seconds
         FROM game_sessions
         WHERE table_id = $1 AND origin_phone_id = $2 AND ended_at IS NULL
         ORDER BY created_at DESC
@@ -56,9 +58,25 @@ async def _check_phone_session_resume(conn, table_id: str, phone_id: str) -> dic
         table_id, phone_id,
     )
     if row:
-        if row["idle_expired"]:
-            await session_service.idle_end_session(conn, str(row["id"]))
+        retap = compute_retap_state(
+            float(row["idle_seconds"]),
+            int(row["threshold_seconds"]),
+        )
+        if retap["state"] == "expired":
+            # Past the grace+pause window: end the session and show recap.
+            await session_service.idle_end_session(
+                conn, str(row["id"]), reason='retap_expired',
+            )
             return {"phase": "recap", "session_id": str(row["id"])}
+
+        # Any non-expired tap resets the clock. Covers:
+        #   - Normal mid-game re-taps (active state -- harmless refresh)
+        #   - Grace/pause "continue" tap (the user physically re-tapped)
+        await conn.execute(
+            "UPDATE game_sessions SET last_activity_at = NOW() WHERE id = $1",
+            row["id"],
+        )
+
         return {
             "phase": "resume",
             "session_id": str(row["id"]),
@@ -73,12 +91,13 @@ async def _check_phone_session_resume(conn, table_id: str, phone_id: str) -> dic
     row = await conn.fetchrow(
         """
         SELECT gs.id, gs.adults_only, gs.player_count, gs.current_round_number,
-               (NOW() - COALESCE(gs.last_activity_at, gs.created_at)) > (
-                   SELECT COALESCE(retap_interval_minutes, 30) * INTERVAL '1 minute'
-                   FROM venues v
-                   JOIN game_sessions gs2 ON gs2.venue_id = v.id
-                   WHERE gs2.id = gs.id
-               ) AS idle_expired
+               EXTRACT(EPOCH FROM NOW() - COALESCE(gs.last_activity_at, gs.created_at))
+                   AS idle_seconds,
+               (SELECT COALESCE(retap_interval_minutes, 15) * 60
+                FROM venues v
+                JOIN game_sessions gs2 ON gs2.venue_id = v.id
+                WHERE gs2.id = gs.id)
+                   AS threshold_seconds
         FROM game_sessions gs
         JOIN table_lobbies tl ON tl.converted_session_id = gs.id
         JOIN table_lobby_phones tlp ON tlp.lobby_id = tl.id
@@ -92,9 +111,21 @@ async def _check_phone_session_resume(conn, table_id: str, phone_id: str) -> dic
         table_id, phone_id,
     )
     if row:
-        if row["idle_expired"]:
-            await session_service.idle_end_session(conn, str(row["id"]))
+        retap = compute_retap_state(
+            float(row["idle_seconds"]),
+            int(row["threshold_seconds"]),
+        )
+        if retap["state"] == "expired":
+            await session_service.idle_end_session(
+                conn, str(row["id"]), reason='retap_expired',
+            )
             return {"phase": "recap", "session_id": str(row["id"])}
+
+        await conn.execute(
+            "UPDATE game_sessions SET last_activity_at = NOW() WHERE id = $1",
+            row["id"],
+        )
+
         return {
             "phase": "resume",
             "session_id": str(row["id"]),
@@ -130,7 +161,7 @@ async def resolve_table_state(conn, venue_id: str, table_id: str, table_number: 
           AND gs.ended_at IS NOT NULL
           AND gs.origin_phone_id = $2
           AND (NOW() - gs.ended_at) < (
-              SELECT COALESCE(retap_interval_minutes, 30) * INTERVAL '1 minute'
+              SELECT COALESCE(retap_interval_minutes, 15) * INTERVAL '1 minute'
               FROM venues WHERE id = gs.venue_id
           )
         ORDER BY gs.ended_at DESC LIMIT 1
@@ -149,7 +180,7 @@ async def resolve_table_state(conn, venue_id: str, table_id: str, table_number: 
               AND gs.origin_phone_id != $2
               AND tlp.phone_id = $2
               AND (NOW() - gs.ended_at) < (
-                  SELECT COALESCE(retap_interval_minutes, 30) * INTERVAL '1 minute'
+                  SELECT COALESCE(retap_interval_minutes, 15) * INTERVAL '1 minute'
                   FROM venues WHERE id = gs.venue_id
               )
             ORDER BY gs.ended_at DESC LIMIT 1

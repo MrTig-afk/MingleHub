@@ -3,19 +3,50 @@
 Pure async functions taking `conn` as first arg -- same pattern as
 roulette_service.py / chooser_service.py.
 
-end_game:         Origin-only. Atomically marks the session ended and broadcasts
-                  game_ended to all phones so they transition to the Recap screen.
-migrate_host:     Host-leave path. Marks old host left_early, picks the next host
-                  (earliest-joined active player), atomically reassigns
-                  origin_phone_id, and broadcasts host_changed + player_left.
-                  If no active candidate remains, ends the game inline.
-get_recap:        Session-scoped read. Aggregates stats for the Recap screen.
-                  No secrets -- same access level as /leaderboard.
-idle_end_session: Called lazily by lobby_service when a session's last_activity_at
-                  is further in the past than retap_interval_minutes. No broadcast
-                  (nobody is listening at that point).
+end_game:           Origin-only. Atomically marks the session ended and broadcasts
+                    game_ended to all phones so they transition to the Recap screen.
+migrate_host:       Host-leave path. Marks old host left_early, picks the next host
+                    (earliest-joined active player), atomically reassigns
+                    origin_phone_id, and broadcasts host_changed + player_left.
+                    If no active candidate remains, ends the game inline.
+get_recap:          Session-scoped read. Aggregates stats for the Recap screen.
+                    No secrets -- same access level as /leaderboard.
+idle_end_session:   Called lazily when a session has expired. Accepts a reason param
+                    so retap-expired and idle-timeout are distinguished. No broadcast
+                    (nobody is listening at that point).
+compute_retap_state: Pure helper: given how long a session has been idle and the
+                    venue's threshold, returns {state, seconds_left} for overlay
+                    rendering. No DB, no I/O.
 """
 from api.services.realtime_service import publish as rt_publish
+
+# Re-Tap to Continue: fixed constants (not venue-configurable).
+RETAP_GRACE_SECONDS = 120   # 2 min prompt window
+RETAP_PAUSE_SECONDS = 300   # 5 min pause window
+
+
+def compute_retap_state(idle_seconds: float, threshold_seconds: float) -> dict:
+    """Pure function: map idle time to a retap state + seconds_left.
+
+    Boundaries (inclusive-lower, exclusive-upper):
+      active  -- idle < threshold
+      prompt  -- threshold <= idle < threshold + grace
+      paused  -- threshold + grace <= idle < threshold + grace + pause
+      expired -- idle >= threshold + grace + pause
+
+    seconds_left is time until the NEXT transition (0 for active/expired).
+    """
+    prompt_start = threshold_seconds
+    pause_start = threshold_seconds + RETAP_GRACE_SECONDS
+    expire_start = threshold_seconds + RETAP_GRACE_SECONDS + RETAP_PAUSE_SECONDS
+
+    if idle_seconds < prompt_start:
+        return {"state": "active", "seconds_left": 0}
+    if idle_seconds < pause_start:
+        return {"state": "prompt", "seconds_left": max(0, int(pause_start - idle_seconds))}
+    if idle_seconds < expire_start:
+        return {"state": "paused", "seconds_left": max(0, int(expire_start - idle_seconds))}
+    return {"state": "expired", "seconds_left": 0}
 
 
 def _channel(table_id) -> str:
@@ -290,17 +321,19 @@ async def migrate_host(conn, session_id: str, phone_id: str) -> dict:
     }
 
 
-async def idle_end_session(conn, session_id: str) -> None:
-    """Lazily mark a session ended due to inactivity.
+async def idle_end_session(conn, session_id: str, reason: str = 'idle_timeout') -> None:
+    """Lazily mark a session ended.
 
-    Called from _check_phone_session_resume when the SQL idle check fires.
-    No broadcast -- nobody is actively listening at this point.
+    Called from _check_phone_session_resume and the poll endpoints when the
+    idle check fires. The reason param distinguishes idle_timeout (old path)
+    from retap_expired (new retap path). No broadcast -- nobody is actively
+    listening at this point. WHERE ended_at IS NULL makes it idempotent.
     """
     await conn.execute(
         """
         UPDATE game_sessions
-        SET ended_at = NOW(), end_reason = 'idle_timeout'
+        SET ended_at = NOW(), end_reason = $2
         WHERE id = $1 AND ended_at IS NULL
         """,
-        session_id,
+        session_id, reason,
     )

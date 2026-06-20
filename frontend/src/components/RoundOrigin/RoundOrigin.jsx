@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import ChooserRound from '../ChooserRound/ChooserRound'
 import FingerChooser from '../FingerChooser/FingerChooser'
 import Recap from '../Recap/Recap'
+import RetapOverlay from '../Retap/RetapOverlay'
 import RouletteRound from '../Roulette/RouletteRound'
 import TriviaOriginRound from '../Trivia/TriviaOriginRound'
 import Toast from '../Toast'
@@ -54,6 +55,7 @@ export default function RoundOrigin({
   const [toast, setToast] = useState(null)
   const [gameEnded, setGameEnded] = useState(false)
   const [hostLeft, setHostLeft] = useState(false)
+  const [retap, setRetap] = useState(null)
   const toastTimer = useRef(null)
 
   // roundNumber is null only when we need to fetch it from the server (no prop provided).
@@ -122,6 +124,31 @@ export default function RoundOrigin({
     const id = setInterval(refreshActiveCount, 2000)
     return () => clearInterval(id)
   }, [activeCount, refreshActiveCount])
+
+  // Periodic poll (~10s) for retap state + lazy-end detection.
+  // The mount-only fetch above seeds roundNumber; this poll is separate and
+  // complementary -- it updates the retap overlay and catches lazy session ends.
+  // StrictMode-safe: cancelled flag + clearInterval cleanup prevent leaks.
+  useEffect(() => {
+    if (gameEnded || hostLeft) return
+    let cancelled = false
+    const tick = async () => {
+      try {
+        const data = await fetchCurrentRound(sessionId)
+        if (cancelled) return
+        setRetap(data.retap || null)
+        if (data.ended) {
+          setGameEnded(true)
+        }
+        if (data.active_count) setActiveCount(data.active_count)
+      } catch {
+        // Transient failure -- keep current state
+      }
+    }
+    tick() // immediate first tick
+    const id = setInterval(tick, 10000)
+    return () => { cancelled = true; clearInterval(id) }
+  }, [sessionId, gameEnded, hostLeft])
 
   useSessionChannel(tableId, phoneId, (event, payload) => {
     // Multi-group safety: only react to game_ended for our own session.
@@ -286,9 +313,13 @@ export default function RoundOrigin({
     }
 
     // Host controls (Leave + End Game) persist as a fixed overlay over all round types.
+    // zIndex 60 keeps End Game tappable even when the retap overlay (zIndex 50) is showing.
     return (
       <>
         {roundContent}
+        {retap && (retap.state === 'prompt' || retap.state === 'paused') && (
+          <RetapOverlay state={retap.state} secondsLeft={retap.seconds_left} />
+        )}
         <div style={hostControlsStyle}>
           <button onClick={handleHostLeave} style={hostLeaveButtonStyle}>Leave</button>
           <button onClick={handleEndGame} style={endGameButtonStyle}>End Game</button>
@@ -344,13 +375,14 @@ const venueLabelStyle = {
 }
 
 // Parent container positions both buttons; individual buttons don't need position:fixed.
+// zIndex 60 keeps End Game tappable even when the retap overlay (zIndex 50) is showing.
 const hostControlsStyle = {
   position: 'fixed',
   bottom: 'calc(env(safe-area-inset-bottom, 0px) + 16px)',
   right: 'var(--safe-margin)',
   display: 'flex',
   gap: '8px',
-  zIndex: 30,
+  zIndex: 60,
 }
 
 const hostLeaveButtonStyle = {

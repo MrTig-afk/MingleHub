@@ -396,6 +396,19 @@ async def migrate():
         await seed_roulette_cards(conn)
         print("OK roulette_cards seeded")
 
+        # Re-Tap to Continue: lower the default idle threshold from 30 to 15 minutes.
+        # Idempotent: SET DEFAULT always succeeds; the UPDATE only touches rows
+        # still at the old default (venues whose admin explicitly set a different
+        # value are left alone).
+        await conn.execute("""
+            ALTER TABLE venues ALTER COLUMN retap_interval_minutes SET DEFAULT 15
+        """)
+        await conn.execute("""
+            UPDATE venues SET retap_interval_minutes = 15
+            WHERE retap_interval_minutes = 30
+        """)
+        print("OK venues.retap_interval_minutes default changed 30 -> 15")
+
         schema = await conn.fetch("""
             SELECT column_name, data_type, is_nullable, column_default
             FROM information_schema.columns
