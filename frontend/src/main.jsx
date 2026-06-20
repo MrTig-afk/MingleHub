@@ -5,15 +5,16 @@ import Splash from './components/Splash/Splash.jsx'
 import PatronLanding from './components/PatronLanding/PatronLanding.jsx'
 import './styles/main.css'
 
-// Dev safety net: keep the table phone on fresh code. If any service worker is
-// still registered on this origin (from an earlier PWA/build), unregister it and
-// drop its caches so the dev server's latest bundle always wins -- no private
-// tab or manual cache-clear needed. Production keeps its real service worker.
-if (import.meta.env.DEV && typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
+// Always keep the phone on fresh code (dev AND prod). The PWA is self-destroying
+// now (see vite.config.js), but a phone that cached an earlier build still has the
+// old worker; unregistering any service worker on load and dropping its caches
+// flushes it so the latest bundle always wins -- no private tab or manual
+// cache-clear needed. Harmless no-op once no worker remains.
+if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
   navigator.serviceWorker.getRegistrations()
     .then((regs) => regs.forEach((r) => r.unregister()))
     .catch(() => {})
-  if ('caches' in window) {
+  if (typeof caches !== 'undefined') {
     caches.keys().then((keys) => keys.forEach((k) => caches.delete(k))).catch(() => {})
   }
 }
