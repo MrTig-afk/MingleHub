@@ -57,10 +57,32 @@ export default function DashboardHome({ token, navigate }) {
       })
   }
 
-  // Initial fetch
+  // Initial fetch. All setState happens inside the async resolution (after the
+  // await), never synchronously in the effect body — the same mount pattern as
+  // PatronLanding (avoids react-hooks/set-state-in-effect cascading renders).
   useEffect(() => {
-    load()
-  }, [token]) // eslint-disable-line react-hooks/exhaustive-deps
+    let cancelled = false
+    const run = async () => {
+      try {
+        const d = await fetchOverview(token)
+        if (cancelled) return
+        setData(d)
+        setStatus('ready')
+      } catch (e) {
+        if (cancelled) return
+        const msg = e.message || ''
+        if (msg.includes('401') || msg.includes('token') || msg.includes('expired')) {
+          localStorage.removeItem('mh_dashboard_token')
+          window.location.reload()
+          return
+        }
+        setStatus('error')
+        setError(msg)
+      }
+    }
+    run()
+    return () => { cancelled = true }
+  }, [token])
 
   // Poll every 7 seconds once the initial fetch has settled
   useEffect(() => {
@@ -83,7 +105,7 @@ export default function DashboardHome({ token, navigate }) {
         })
     }, 7000)
     return () => clearInterval(id)
-  }, [status, token]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [status, token])
 
   if (status === 'loading') {
     return (

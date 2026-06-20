@@ -79,9 +79,14 @@ export default function DashboardRoot() {
 
   useEffect(() => {
     window.addEventListener('popstate', updatePath)
-    checkAuth()
-    return () => window.removeEventListener('popstate', updatePath)
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+    // Deferred a tick so checkAuth()'s setState lands in a macrotask rather than
+    // synchronously in the effect body (react-hooks/set-state-in-effect).
+    const id = setTimeout(checkAuth, 0)
+    return () => {
+      clearTimeout(id)
+      window.removeEventListener('popstate', updatePath)
+    }
+  }, [])
 
   const handleLogout = () => {
     localStorage.removeItem('mh_dashboard_token')
