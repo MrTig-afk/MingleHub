@@ -656,3 +656,21 @@ async def leave_session(request: Request, session_id: str, body: PhoneIdBody):
         await notify_error("POST /patron/sessions/leave failed 🚨", traceback.format_exc()[:500])
         raise HTTPException(status_code=500, detail="Internal error")
     return result
+
+
+@router.post("/sessions/{session_id}/rejoin")
+@limiter.limit("30/minute")
+async def rejoin_session(request: Request, session_id: str, body: PhoneIdBody):
+    """Rejoin after leaving: clear this phone's left_early flag (score kept)."""
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            result = await _run_trivia(
+                "rejoin", trivia_service.rejoin_session(conn, session_id, body.phone_id)
+            )
+    except HTTPException:
+        raise
+    except Exception:
+        await notify_error("POST /patron/sessions/rejoin failed 🚨", traceback.format_exc()[:500])
+        raise HTTPException(status_code=500, detail="Internal error")
+    return result

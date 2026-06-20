@@ -8,12 +8,12 @@ import { fetchLeaderboard, pickHotSeat } from '../../services/patronApi'
 
 // Round-type cadence stand-in until the weighted theme engine exists. Trivia is
 // NOT something anyone taps to start -- the game surfaces it automatically.
-// TRIVIA_EVERY fires Trivia on every Nth round: 1 = EVERY round is Trivia (so the
-// very first round, immediately after Start, is Trivia -- a deliberate diagnostic
-// setting). Use 3 for the real rhythm (rounds 1 & 2 Chooser, round 3 Trivia), or
-// 0/null for a random ~50/50 mix -- NOTE random mode must store the per-round
-// decision in state rather than computing it inline below.
-const TRIVIA_EVERY = 1
+// TRIVIA_EVERY fires Trivia on every Nth round: 3 = the real rhythm (rounds 1 & 2
+// Chooser, round 3 Trivia, round 4 & 5 Chooser, round 6 Trivia, …). 1 = EVERY round
+// is Trivia (a diagnostic that skips Chooser entirely). 0/null = random ~50/50 mix
+// -- NOTE random mode must store the per-round decision in state rather than
+// computing it inline below.
+const TRIVIA_EVERY = 3
 
 function decideRoundType(roundNumber) {
   if (!TRIVIA_EVERY) return Math.random() < 0.5 ? 'trivia' : 'chooser'
@@ -74,10 +74,11 @@ export default function RoundOrigin({ venueName, sessionId, phoneId, tableId, ad
   }, [sessionId])
 
   useSessionChannel(tableId, phoneId, (event, payload) => {
-    if (event !== 'player_left') return
+    if (event !== 'player_left' && event !== 'player_rejoined') return
     const name = payload?.name || 'A player'
+    const msg = event === 'player_left' ? `${name} left the game` : `${name} rejoined`
     // Defer the state updates out of the broadcast handler's synchronous path.
-    queueMicrotask(() => { showToast(`${name} left the game`); refreshActiveCount() })
+    queueMicrotask(() => { showToast(msg); refreshActiveCount() })
   })
 
   // Stable within a round (roundNumber only changes when we advance), so passing

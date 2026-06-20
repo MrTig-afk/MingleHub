@@ -138,6 +138,10 @@ def _leave(client, h, session_id, phone):
     return client.post(f"/api/patron/sessions/{session_id}/leave", headers=h, json={"phone_id": phone})
 
 
+def _rejoin(client, h, session_id, phone):
+    return client.post(f"/api/patron/sessions/{session_id}/rejoin", headers=h, json={"phone_id": phone})
+
+
 # --- DB helpers (tests may read the answer key directly; the API never leaks it) ---
 
 def _question_key(round_id, index):
@@ -396,6 +400,31 @@ def test_leaderboard_endpoint_and_leave(client, api_key_header, owner_a_token, f
     left_rows = [r for r in board2 if r["left_early"]]
     assert len(left_rows) == 1
     assert left_rows[0]["name"] == "Player 2"
+
+
+def test_leave_then_rejoin_restores_active_and_keeps_score(client, api_key_header, owner_a_token, fresh_table):
+    s = _setup_session(client, api_key_header, owner_a_token, fresh_table, num_phones=2)
+    rid = _start(client, api_key_header, s["session_id"], s["origin"]).json()["trivia_round_id"]
+    _join(client, api_key_header, rid, s["phones"][1])
+    _begin(client, api_key_header, rid, s["origin"])
+    _qid, correct = _question_key(rid, 0)
+    _answer(client, api_key_header, rid, s["phones"][1], 0, correct)  # Player 2 scores 10
+
+    # Leave -> left_early, score preserved.
+    assert _leave(client, api_key_header, s["session_id"], s["phones"][1]).json()["left"] is True
+    p2 = next(r for r in _leaderboard(client, api_key_header, s["session_id"]).json()["leaderboard"]
+              if r["name"] == "Player 2")
+    assert p2["left_early"] is True and p2["score"] == 10
+
+    # Rejoin -> active again, same score, no longer "Left early".
+    rj = _rejoin(client, api_key_header, s["session_id"], s["phones"][1])
+    assert rj.status_code == 200, rj.text
+    assert rj.json()["rejoined"] is True and rj.json()["score"] == 10
+    p2b = next(r for r in _leaderboard(client, api_key_header, s["session_id"]).json()["leaderboard"]
+               if r["name"] == "Player 2")
+    assert p2b["left_early"] is False and p2b["score"] == 10
+    # (Idempotency + non-member BOLA are inherited from leave_session's identical
+    # guard: UPDATE ... WHERE left_early=... then _resolve_player -> 403 if absent.)
 
 
 def test_concurrent_start_is_race_safe(client, api_key_header, owner_a_token, fresh_table):
