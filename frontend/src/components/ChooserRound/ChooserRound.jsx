@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
-import { completeRound, drawCard, skipRound } from '../../services/patronApi'
+import { completeRound, drawCard, redrawRound, skipRound } from '../../services/patronApi'
 
-// gamespec.md: Chooser round -- card display, Complete/Skip actions, responsible
-// drinking disclaimer (once per session, server-controlled). No redraw: the prompt
-// stands, so a drawn card (incl. a dare/drink) can't be dodged for a softer one --
-// Complete and Skip both just move on to the next round.
+// gamespec.md: Chooser round -- card display, Complete/Skip/Redraw actions,
+// responsible drinking disclaimer (once per session, server-controlled). Redraw
+// gives a new card of the same category (free -- Chooser awards no points), EXCEPT
+// on a Drink Card: a drink can't be re-rolled into a softer one, so Redraw is
+// hidden there (Complete or Skip only).
 //
 // State machine:
 //   card_loading -> card_shown -> resolving -> result -> (onRoundComplete)
@@ -86,6 +87,18 @@ export default function ChooserRound({ sessionId, phoneId, hotSeat, onRoundCompl
     } catch (e) {
       setError(e.message)
       setPhase('card_shown')
+    }
+  }
+
+  // Redraw: new card, same category. Hidden on drink cards (see header comment).
+  const handleRedraw = async () => {
+    setError(null)
+    try {
+      const data = await redrawRound(roundId, phoneId)
+      setCard(data.card)
+      if (data.show_drink_disclaimer) setPhase('disclaimer')
+    } catch (e) {
+      setError(e.message)
     }
   }
 
@@ -185,6 +198,11 @@ export default function ChooserRound({ sessionId, phoneId, hotSeat, onRoundCompl
         <button onClick={handleComplete} style={primaryButtonStyle} disabled={!card}>
           Complete
         </button>
+        {card?.type !== 'drink' && (
+          <button onClick={handleRedraw} style={secondaryButtonStyle} disabled={!card}>
+            Redraw
+          </button>
+        )}
         <button onClick={handleSkip} style={secondaryButtonStyle} disabled={!card}>
           Skip
         </button>

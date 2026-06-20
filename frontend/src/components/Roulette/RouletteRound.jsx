@@ -3,6 +3,7 @@ import { revealRoulette, skipRoulette, startRoulette, voteLoser } from '../../se
 import useSessionChannel from '../../hooks/useSessionChannel'
 
 const SPIN_MS = 2000
+const READ_MS = 10000 // time to read the challenge before voting opens
 const RESULT_AUTO_ADVANCE_MS = 3000
 const VOTE_TIMEOUT_MS = 30000 // force a tally if the table forgets to Reveal
 
@@ -25,6 +26,7 @@ export default function RouletteRound({ sessionId, phoneId, tableId, onDone }) {
   const [activeTotal, setActiveTotal] = useState(0)
   const [myVote, setMyVote] = useState(null) // playerId this phone voted for
   const [result, setResult] = useState(null) // { skipped, losers, tallies, pointsAwarded }
+  const [readSecondsLeft, setReadSecondsLeft] = useState(Math.ceil(READ_MS / 1000))
   const [error, setError] = useState(null)
 
   const startedRef = useRef(false)
@@ -61,6 +63,15 @@ export default function RouletteRound({ sessionId, phoneId, tableId, onDone }) {
     if (phase !== 'spin') return
     const id = setTimeout(() => setPhase('card'), SPIN_MS)
     return () => clearTimeout(id)
+  }, [phase])
+
+  // Card phase: ~10s to read the challenge out loud, then voting opens itself
+  // (no manual tap). Ticks the visible countdown; the timeout flips to voting.
+  useEffect(() => {
+    if (phase !== 'card') return
+    const tick = setInterval(() => setReadSecondsLeft((s) => Math.max(0, s - 1)), 1000)
+    const done = setTimeout(() => setPhase('voting'), READ_MS)
+    return () => { clearInterval(tick); clearTimeout(done) }
   }, [phase])
 
   // Auto-advance from result after 3s
@@ -186,15 +197,8 @@ export default function RouletteRound({ sessionId, phoneId, tableId, onDone }) {
             Loser: {drinkConsequence}
           </p>
         </div>
+        <p style={dimMonoStyle}>Read it out — voting opens in {readSecondsLeft}s</p>
         {error && <p style={errStyle}>{error}</p>}
-        <div style={buttonGroupStyle}>
-          <button onClick={() => setPhase('voting')} style={primaryButtonStyle}>
-            Who lost?
-          </button>
-          <button onClick={handleSkip} style={secondaryButtonStyle}>
-            Skip
-          </button>
-        </div>
       </div>
     )
   }
@@ -225,7 +229,7 @@ export default function RouletteRound({ sessionId, phoneId, tableId, onDone }) {
             Reveal now
           </button>
           <button onClick={handleSkip} style={secondaryButtonStyle}>
-            Skip
+            No clear loser? Skip
           </button>
         </div>
       </div>
