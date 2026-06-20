@@ -6,21 +6,26 @@ import { answerTrivia, fetchTriviaCurrent, leaveSession } from '../../services/p
 
 const POLL_MS = 2000
 
-// The non-origin (joined) phone's view of a session. Default state is the
-// between-rounds leaderboard (gamespec: Between-Rounds Screen). Trivia is
-// auto-entered by the origin's round engine — every active phone is enrolled
-// server-side, so this phone shows a brief "get ready" splash, then the live
-// question with A/B/C/D tiles, and reveals the result per phone. Realtime
-// accelerates delivery; the 2s poll of trivia/current is the source of truth
-// (and the only path when Supabase realtime is not configured).
+function firstUnanswered(answers, total) {
+  for (let i = 0; i < total; i++) if (!answers[String(i)] && !answers[i]) return i
+  return Math.max(0, total - 1)
+}
+
+// The non-origin (joined) phone's view of a session. Default is the between-rounds
+// leaderboard. Trivia is auto-entered by the origin's round engine — every active
+// phone is enrolled server-side and gets all 5 questions, then SELF-PACES: answer,
+// tap Next, at its own speed (nobody is advanced by anyone else). Realtime nudges
+// a re-poll; the 2s poll of trivia/current is the source of truth.
 export default function SessionParticipant({ venueName, sessionId, phoneId, tableId }) {
   const [state, setState] = useState(null)
-  const [localReveal, setLocalReveal] = useState(null) // { index, data } — instant feedback pre-poll
+  const [myIndex, setMyIndex] = useState(0)
+  const [localAnswers, setLocalAnswers] = useState({}) // index -> reveal
+  const [done, setDone] = useState(false)
   const [left, setLeft] = useState(false)
   const [error, setError] = useState(null)
   const pollRef = useRef(null)
+  const roundRef = useRef(null) // trivia_round_id we've initialised our index for
 
-  // Poll trivia/current as the source of truth for this phone's view.
   useEffect(() => {
     if (left) return
     let cancelled = false
@@ -29,6 +34,16 @@ export default function SessionParticipant({ venueName, sessionId, phoneId, tabl
         const data = await fetchTriviaCurrent(sessionId, phoneId)
         if (cancelled) return
         setState(data)
+        // New trivia round -> reset our self-paced position (resume from the
+        // first question we haven't answered yet). setState here is post-await,
+        // not a synchronous effect body, so it's safe.
+        if (data.phase === 'question' && data.trivia_round_id !== roundRef.current) {
+          roundRef.current = data.trivia_round_id
+          setMyIndex(firstUnanswered(data.my_answers || {}, (data.questions || []).length))
+          setLocalAnswers({})
+          setDone(false)
+        }
+        if (data.phase !== 'question') roundRef.current = data.trivia_round_id || null
       } catch (e) {
         if (!cancelled) setError(e.message)
       }
@@ -43,10 +58,15 @@ export default function SessionParticipant({ venueName, sessionId, phoneId, tabl
     if (pollRef.current) pollRef.current()
   })
 
-  const handleAnswer = async (letter) => {
-    const data = await answerTrivia(state.trivia_round_id, phoneId, state.question.index, letter)
-    setLocalReveal({ index: state.question.index, data })
-    if (pollRef.current) pollRef.current()
+  const handleAnswer = async (letter, timeMs) => {
+    const data = await answerTrivia(state.trivia_round_id, phoneId, myIndex, letter, timeMs)
+    setLocalAnswers((prev) => ({ ...prev, [myIndex]: data }))
+  }
+
+  const handleNext = () => {
+    const total = (state?.questions || []).length
+    if (myIndex < total - 1) setMyIndex(myIndex + 1)
+    else setDone(true)
   }
 
   const handleLeave = async () => {
@@ -76,17 +96,15 @@ export default function SessionParticipant({ venueName, sessionId, phoneId, tabl
       <Screen>
         <p style={{ fontSize: '44px', margin: 0 }}>🧠</p>
         <h1 style={headlineStyle}>Trivia round!</h1>
-        <p style={dimMono}>Get ready — answer on your own phone</p>
+        <p style={dimMono}>Get ready — answer on your own phone, at your own pace</p>
         <p style={dimMono}>[{state.joined_count} playing]</p>
         {error && <p style={errStyle}>{error}</p>}
       </Screen>
     )
   }
 
-  if (state.phase === 'question' && state.question) {
-    const reveal = localReveal?.index === state.question.index ? localReveal.data : state.my_answer
+  if (state.phase === 'question' && (state.questions || []).length > 0) {
     if (!state.is_participant) {
-      // A session member who didn't join this round just spectates the scores.
       return (
         <Screen>
           <p style={dimMono}>Trivia in progress — you didn't join this round</p>
@@ -94,10 +112,29 @@ export default function SessionParticipant({ venueName, sessionId, phoneId, tabl
         </Screen>
       )
     }
+    if (done) {
+      return (
+        <Screen>
+          <p style={{ fontSize: '28px', margin: 0 }}>✅</p>
+          <h1 style={headlineStyle}>All done!</h1>
+          <Leaderboard rows={state.leaderboard} title="Scoreboard" />
+          <p style={dimMono}>Others are still playing…</p>
+        </Screen>
+      )
+    }
+    const question = state.questions[myIndex]
+    const reveal = localAnswers[myIndex] || state.my_answers?.[String(myIndex)] || null
+    const answered = Boolean(reveal)
+    const isLast = myIndex >= state.questions.length - 1
     return (
       <Screen>
-        <AnswerTiles question={state.question} reveal={reveal} onAnswer={handleAnswer} />
-        <p style={dimMono}>{state.answered_count} answered</p>
+        <AnswerTiles question={question} reveal={reveal} onAnswer={handleAnswer} />
+        {answered && (
+          <button onClick={handleNext} style={primaryButton}>
+            {isLast ? 'See scores →' : 'Next question →'}
+          </button>
+        )}
+        {!answered && <p style={dimMono}>Pick your answer to continue</p>}
         {error && <p style={errStyle}>{error}</p>}
       </Screen>
     )
@@ -136,6 +173,19 @@ const screenStyle = {
 const headlineStyle = { fontFamily: 'var(--font-headline)', fontSize: '26px', margin: 0 }
 const dimMono = { fontFamily: 'var(--font-mono)', fontSize: '13px', color: 'var(--on-surface-dim)', margin: 0 }
 const errStyle = { color: 'var(--tertiary)', fontFamily: 'var(--font-mono)', fontSize: '12px', margin: 0 }
+
+const primaryButton = {
+  padding: '16px',
+  borderRadius: '10px',
+  background: 'var(--primary)',
+  color: 'var(--bg-floor)',
+  fontWeight: 700,
+  fontSize: '16px',
+  border: 'none',
+  width: '100%',
+  maxWidth: '320px',
+  cursor: 'pointer',
+}
 
 const leaveButton = {
   background: 'transparent',

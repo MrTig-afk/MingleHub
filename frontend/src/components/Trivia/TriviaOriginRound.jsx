@@ -1,80 +1,69 @@
 import { useEffect, useRef, useState } from 'react'
 import AnswerTiles from './AnswerTiles'
 import Leaderboard from './Leaderboard'
-import useSessionChannel from '../../hooks/useSessionChannel'
 import {
-  answerTrivia, beginTrivia, fetchTriviaCurrent, finishTrivia, nextTrivia, startTrivia,
+  answerTrivia, beginTrivia, fetchLeaderboard, fetchTriviaCurrent, finishTrivia, startTrivia,
 } from '../../services/patronApi'
 
 const GET_READY_MS = 3500
-const POLL_MS = 1500
+
+function firstUnanswered(answers, total) {
+  for (let i = 0; i < total; i++) if (!answers[i]) return i
+  return Math.max(0, total - 1)
+}
 
 // gamespec Round Type 2 — Trivia, from the session-origin phone's side. Trivia is
-// auto-entered by the round engine between Chooser rounds (no manual start): on
-// mount it opens the round (auto-enrolling everyone), shows a brief "get ready"
-// splash on all phones, then reveals the first question. The origin holder is
-// also a player, so this screen lets them answer too (AnswerTiles), and they
-// drive the advance between questions. onDone() returns to the round engine.
+// auto-entered between Chooser rounds (no manual start). SELF-PACED: every phone
+// gets all 5 questions up front and walks them at its own speed — answering, then
+// tapping "Next" to move to ITS next question (nobody is advanced by anyone else).
+// The origin holder plays like everyone, and when they finish they tap "Finish" /
+// "Back to the game", which ends the round and returns to the round loop.
 //
-// Phases: starting -> getready -> question -> leaderboard. If fewer than 2
-// players are active, the round can't run and onDone() fires immediately so the
-// engine picks a different round type.
-export default function TriviaOriginRound({ sessionId, phoneId, tableId, onDone }) {
+// Phases: starting -> getready -> question -> leaderboard. <2 players -> onDone().
+export default function TriviaOriginRound({ sessionId, phoneId, onDone }) {
   const [phase, setPhase] = useState('starting')
-  const [joinedCount, setJoinedCount] = useState(0)
-  const [answeredCount, setAnsweredCount] = useState(0)
-  const [question, setQuestion] = useState(null)
-  const [reveal, setReveal] = useState(null)
+  const [questions, setQuestions] = useState([])
+  const [myIndex, setMyIndex] = useState(0)
+  const [answers, setAnswers] = useState({}) // index -> reveal { selected_option, correct_option, is_correct, score_awarded }
   const [leaderboard, setLeaderboard] = useState([])
-  const [error, setError] = useState(null)
   const [busy, setBusy] = useState(false)
-
+  const [error, setError] = useState(null)
   const roundIdRef = useRef(null)
-  const pollRef = useRef(null)
 
-  // Open the round on mount (auto-enrolls all active members). start is
-  // idempotent, so a StrictMode double-mount / re-tap returns the same round.
+  // Open the round on mount (idempotent). Resume straight into the questions if
+  // it's already in progress (re-tap mid-Trivia).
   useEffect(() => {
     let cancelled = false
     startTrivia(sessionId, phoneId)
       .then(async (data) => {
         if (cancelled) return
         roundIdRef.current = data.trivia_round_id
-        setJoinedCount(data.joined_count ?? 0)
         if (data.status === 'in_progress') {
-          // Resuming an already-started round (re-tap mid-Trivia) -- jump to the
-          // live question rather than replaying the get-ready splash.
-          try {
-            const cur = await fetchTriviaCurrent(sessionId, phoneId)
-            if (cancelled) return
-            if (cur.question) {
-              setQuestion(cur.question)
-              setPhase('question')
-              return
-            }
-          } catch { /* fall through to get-ready */ }
+          const cur = await fetchTriviaCurrent(sessionId, phoneId)
+          if (cancelled) return
+          const qs = cur.questions || []
+          const ans = cur.my_answers || {}
+          setQuestions(qs)
+          setAnswers(ans)
+          setMyIndex(firstUnanswered(ans, qs.length))
+          setPhase('question')
+        } else {
+          setPhase('getready')
         }
-        setPhase('getready')
       })
-      .catch(() => {
-        // not_enough_players (or any start failure) -> let the engine pick
-        // another round type instead of blocking on a Trivia round.
-        if (!cancelled) onDone()
-      })
+      .catch(() => { if (!cancelled) onDone() }) // not_enough_players etc -> skip Trivia
     return () => { cancelled = true }
   }, [sessionId, phoneId, onDone])
 
-  // After the get-ready splash, reveal the first question (this starts the 20s
-  // timer server-side). Non-origin phones see the splash on trivia:gather and
-  // the question on trivia:question, so everyone stays in step.
+  // After the get-ready splash, fetch all questions and start.
   useEffect(() => {
     if (phase !== 'getready') return
     const id = setTimeout(async () => {
       try {
         const data = await beginTrivia(roundIdRef.current, phoneId)
-        setQuestion(data.question)
-        setReveal(null)
-        setAnsweredCount(0)
+        setQuestions(data.questions || [])
+        setMyIndex(0)
+        setAnswers({})
         setPhase('question')
       } catch (e) {
         setError(e.message)
@@ -83,58 +72,24 @@ export default function TriviaOriginRound({ sessionId, phoneId, tableId, onDone 
     return () => clearTimeout(id)
   }, [phase, phoneId])
 
-  // Poll answered-count while a question is live (realtime just nudges a re-poll).
-  useEffect(() => {
-    if (phase !== 'question') return
-    let cancelled = false
-    const tick = async () => {
-      if (!roundIdRef.current) return
-      try {
-        const state = await fetchTriviaCurrent(sessionId, phoneId)
-        if (cancelled) return
-        if (typeof state.joined_count === 'number') setJoinedCount(state.joined_count)
-        if (typeof state.answered_count === 'number') setAnsweredCount(state.answered_count)
-      } catch {
-        // Non-fatal — the origin's own action responses drive the flow.
-      }
-    }
-    pollRef.current = tick
-    tick()
-    const id = setInterval(tick, POLL_MS)
-    return () => { cancelled = true; clearInterval(id); pollRef.current = null }
-  }, [phase, sessionId, phoneId])
-
-  useSessionChannel(tableId, phoneId, () => {
-    if (pollRef.current) pollRef.current()
-  })
-
-  const handleAnswer = async (letter) => {
-    const data = await answerTrivia(roundIdRef.current, phoneId, question.index, letter)
-    setReveal(data)
+  const handleAnswer = async (letter, timeMs) => {
+    const data = await answerTrivia(roundIdRef.current, phoneId, myIndex, letter, timeMs)
+    setAnswers((prev) => ({ ...prev, [myIndex]: data }))
   }
 
-  const handleNext = async () => {
+  const handleNext = () => {
+    if (myIndex < questions.length - 1) setMyIndex(myIndex + 1)
+  }
+
+  // Origin finished its own 5 -> show the (live) leaderboard WITHOUT ending the
+  // round, so slower players keep going. The round auto-completes server-side
+  // once everyone's done.
+  const handleSeeScores = async () => {
     if (busy) return
     setBusy(true)
     setError(null)
     try {
-      const data = await nextTrivia(roundIdRef.current, phoneId)
-      setQuestion(data.question)
-      setReveal(null)
-      setAnsweredCount(0)
-    } catch (e) {
-      setError(e.message)
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const handleFinish = async () => {
-    if (busy) return
-    setBusy(true)
-    setError(null)
-    try {
-      const data = await finishTrivia(roundIdRef.current, phoneId)
+      const data = await fetchLeaderboard(sessionId)
       setLeaderboard(data.leaderboard || [])
       setPhase('leaderboard')
     } catch (e) {
@@ -142,6 +97,14 @@ export default function TriviaOriginRound({ sessionId, phoneId, tableId, onDone 
     } finally {
       setBusy(false)
     }
+  }
+
+  // Leaving the Trivia screen advances the game loop. finishTrivia is a fallback
+  // that force-ends the round if some player never finished; if it already
+  // auto-completed, the 409 is harmless.
+  const handleBackToGame = async () => {
+    try { await finishTrivia(roundIdRef.current, phoneId) } catch { /* already complete */ }
+    onDone()
   }
 
   if (phase === 'starting') {
@@ -153,27 +116,28 @@ export default function TriviaOriginRound({ sessionId, phoneId, tableId, onDone 
       <Screen>
         <p style={{ fontSize: '44px', margin: 0 }}>🧠</p>
         <h1 style={headlineStyle}>Trivia round!</h1>
-        <p style={dimMono}>Get ready — everyone answers on their own phone</p>
-        <p style={dimMono}>[{joinedCount} playing]</p>
+        <p style={dimMono}>Get ready — answer on your own phone, at your own pace</p>
       </Screen>
     )
   }
 
-  if (phase === 'question' && question) {
-    const isLast = question.index >= question.total - 1
+  if (phase === 'question' && questions[myIndex]) {
+    const reveal = answers[myIndex] || null
+    const answered = Boolean(reveal)
+    const isLast = myIndex >= questions.length - 1
     return (
       <Screen>
-        <AnswerTiles question={question} reveal={reveal} onAnswer={handleAnswer} />
-        <p style={dimMono}>{answeredCount} of {joinedCount} answered</p>
-        {isLast ? (
-          <button onClick={handleFinish} disabled={busy} style={primaryButton}>
-            {busy ? 'Saving…' : 'Finish & show scores'}
-          </button>
-        ) : (
-          <button onClick={handleNext} disabled={busy} style={primaryButton}>
-            {busy ? 'Loading…' : 'Next question →'}
-          </button>
+        <AnswerTiles question={questions[myIndex]} reveal={reveal} onAnswer={handleAnswer} />
+        {answered && (
+          isLast ? (
+            <button onClick={handleSeeScores} disabled={busy} style={primaryButton}>
+              {busy ? 'Loading…' : 'See scores →'}
+            </button>
+          ) : (
+            <button onClick={handleNext} style={primaryButton}>Next question →</button>
+          )
         )}
+        {!answered && <p style={dimMono}>Pick your answer to continue</p>}
         {error && <p style={errStyle}>{error}</p>}
       </Screen>
     )
@@ -184,7 +148,7 @@ export default function TriviaOriginRound({ sessionId, phoneId, tableId, onDone 
       <Screen>
         <p style={{ fontSize: '32px', margin: 0 }}>🏆</p>
         <Leaderboard rows={leaderboard} title="Trivia results" />
-        <button onClick={onDone} style={primaryButton}>Back to the game</button>
+        <button onClick={handleBackToGame} style={primaryButton}>Back to the game</button>
       </Screen>
     )
   }
