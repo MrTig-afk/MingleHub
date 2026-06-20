@@ -107,15 +107,24 @@ def test_mint_token_structure(monkeypatch):
     assert "iat" in payload
     assert payload["exp"] > payload["iat"]
 
-    # Restore the module to the disabled state for subsequent tests.
+    # Restore the module to the disabled state for subsequent tests. Clear the env
+    # FIRST — monkeypatch teardown runs only after this body returns, so reloading
+    # here without delenv would re-enable the module (and leak into sibling tests).
+    monkeypatch.delenv("SUPABASE_JWT_SECRET", raising=False)
+    monkeypatch.delenv("SUPABASE_URL", raising=False)
+    monkeypatch.delenv("SUPABASE_ANON_KEY", raising=False)
     importlib.reload(mod)
 
 
-def test_mint_token_raises_when_disabled():
+def test_mint_token_raises_when_disabled(monkeypatch):
     """mint_channel_token raises RuntimeError when env vars are unset."""
+    # Deterministic regardless of the ambient dev environment (which may have real
+    # SUPABASE_* set): clear them, then reload so _ENABLED is definitively False.
+    monkeypatch.delenv("SUPABASE_JWT_SECRET", raising=False)
+    monkeypatch.delenv("SUPABASE_URL", raising=False)
+    monkeypatch.delenv("SUPABASE_ANON_KEY", raising=False)
     import importlib
     import api.services.realtime_auth as mod
-    # Module was (re-)imported without Supabase env vars; _ENABLED should be False.
     importlib.reload(mod)
     assert not mod.is_enabled()
 

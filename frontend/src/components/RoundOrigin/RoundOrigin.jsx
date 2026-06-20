@@ -67,7 +67,10 @@ export default function RoundOrigin({
         if (cancelled) return
         // current_round_number is the last CREATED round; the next round to play is +1.
         setRoundNumber(data.current_round_number + 1)
-        if (data.active_count >= 2) setActiveCount(data.active_count)
+        // Set the real count even when it's 1 — a lone (e.g. just-migrated) host
+        // must drop below 2 so the "Waiting for players" screen shows instead of a
+        // finger picker that waits forever for a 2nd finger.
+        if (data.active_count) setActiveCount(data.active_count)
       })
       .catch(() => {
         if (!cancelled) setRoundNumber(1) // safe fallback
@@ -85,11 +88,13 @@ export default function RoundOrigin({
   }, [])
 
   // Keep requiredFingers in sync with how many players are actually still in.
+  // Set the count even when it's 1 (see fetch-current-round note) so a lone host
+  // falls through to the Waiting screen rather than a stuck finger picker.
   const refreshActiveCount = useCallback(async () => {
     try {
       const data = await fetchLeaderboard(sessionId)
       const active = (data.leaderboard || []).filter((r) => !r.left_early).length
-      if (active >= 2) setActiveCount(active)
+      if (active) setActiveCount(active)
     } catch {
       // keep the current count on a transient failure
     }
@@ -103,11 +108,20 @@ export default function RoundOrigin({
       .then((data) => {
         if (cancelled) return
         const active = (data.leaderboard || []).filter((r) => !r.left_early).length
-        if (active >= 2) setActiveCount(active)
+        if (active) setActiveCount(active)
       })
       .catch(() => {})
     return () => { cancelled = true }
   }, [sessionId])
+
+  // While short-handed (a lone migrated host, or everyone but one left), poll the
+  // active count so a re-join resumes the game even if the player_rejoined broadcast
+  // was missed — realtime accelerates, the poll is the source of truth.
+  useEffect(() => {
+    if (activeCount >= 2) return
+    const id = setInterval(refreshActiveCount, 2000)
+    return () => clearInterval(id)
+  }, [activeCount, refreshActiveCount])
 
   useSessionChannel(tableId, phoneId, (event, payload) => {
     // Multi-group safety: only react to game_ended for our own session.
@@ -235,6 +249,17 @@ export default function RoundOrigin({
           adultsOnly={adultsOnly}
           onRoundComplete={advanceRound}
         />
+      )
+    } else if (activeCount < 2) {
+      // Short-handed between rounds (e.g. a lone migrated host): the finger picker
+      // needs 2 fingers, so wait for a (re)join instead of stranding the host. The
+      // poll above resumes automatically once someone's back; End Game is in the overlay.
+      roundContent = (
+        <div style={screenStyle}>
+          <h1 style={headlineStyle}>Waiting for players…</h1>
+          <p style={dimMono}>The game needs at least 2 players. It’ll continue as soon as someone joins or re-taps back in.</p>
+          <p style={venueLabelStyle}>{venueName}</p>
+        </div>
       )
     } else {
       roundContent = (
