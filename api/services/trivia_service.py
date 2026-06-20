@@ -19,6 +19,7 @@ import uuid
 import asyncpg
 
 from api.services.realtime_service import publish as rt_publish
+from api.services.session_service import compute_retap_state, idle_end_session
 
 NUM_QUESTIONS = 5
 QUESTION_TIMER_SECONDS = 20
@@ -605,11 +606,26 @@ async def get_current_state(conn, session_id: str, phone_id: str) -> dict | None
     (no correct_option), or between-rounds leaderboard.
     """
     session = await conn.fetchrow(
-        "SELECT id, ended_at, origin_phone_id FROM game_sessions WHERE id = $1",
+        """
+        SELECT gs.id, gs.ended_at, gs.origin_phone_id,
+               EXTRACT(EPOCH FROM NOW() - COALESCE(gs.last_activity_at, gs.created_at))
+                   AS idle_seconds,
+               COALESCE(v.retap_interval_minutes, 15) * 60
+                   AS threshold_seconds
+        FROM game_sessions gs
+        JOIN venues v ON v.id = gs.venue_id
+        WHERE gs.id = $1
+        """,
         session_id,
     )
     if not session:
         return None
+
+    # Compute retap state before any early-return so every response shape includes it.
+    retap = compute_retap_state(
+        float(session["idle_seconds"]),
+        int(session["threshold_seconds"]),
+    )
 
     player = await _resolve_player(conn, session_id, phone_id)
     if player is None:
@@ -624,6 +640,7 @@ async def get_current_state(conn, session_id: str, phone_id: str) -> dict | None
             "left_early": False,
             "is_origin": session["origin_phone_id"] == phone_id,
             "phase": "not_member",
+            "retap": retap,
         }
     base = {
         "session_id": session_id,
@@ -633,7 +650,15 @@ async def get_current_state(conn, session_id: str, phone_id: str) -> dict | None
         # SessionParticipant can detect promotion even if host_changed broadcast was missed.
         "is_origin": session["origin_phone_id"] == phone_id,
         "leaderboard": await _leaderboard(conn, session_id),
+        "retap": retap,
     }
+
+    # Lazy expire: if retap expired and the session isn't already ended, end it now.
+    # Guard ended_at IS NULL to avoid a redundant UPDATE on an already-ended session.
+    if retap["state"] == "expired" and session["ended_at"] is None:
+        await idle_end_session(conn, str(session["id"]), reason='retap_expired')
+        base["phase"] = "ended"
+        return base
 
     # Game over -> tell the polling phone to show the Recap. This is the reliable
     # path: the game_ended realtime broadcast accelerates it, but a dropped/late

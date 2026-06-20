@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import AnswerTiles from './AnswerTiles'
 import Leaderboard from './Leaderboard'
 import Recap from '../Recap/Recap'
+import RetapOverlay from '../Retap/RetapOverlay'
 import RoundOrigin from '../RoundOrigin/RoundOrigin'
 import Toast from '../Toast'
 import useSessionChannel from '../../hooks/useSessionChannel'
@@ -326,6 +327,9 @@ export default function SessionParticipant({ venueName, sessionId, phoneId, tabl
   return (
     <>
       {renderContent()}
+      {state?.retap && (state.retap.state === 'prompt' || state.retap.state === 'paused') && (
+        <RetapOverlay state={state.retap.state} secondsLeft={state.retap.seconds_left} />
+      )}
       <Toast message={toast} />
     </>
   )
