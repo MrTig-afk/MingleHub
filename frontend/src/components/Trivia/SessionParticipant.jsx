@@ -6,6 +6,7 @@ import useSessionChannel from '../../hooks/useSessionChannel'
 import { answerTrivia, fetchTriviaCurrent, leaveSession, rejoinSession, voteLoser } from '../../services/patronApi'
 
 const POLL_MS = 2000
+const ROULETTE_READ_MS = 10000 // read the Roulette challenge before voting opens
 
 function firstUnanswered(answers, total) {
   for (let i = 0; i < total; i++) if (!answers[String(i)] && !answers[i]) return i
@@ -26,10 +27,12 @@ export default function SessionParticipant({ venueName, sessionId, phoneId, tabl
   const [error, setError] = useState(null)
   const [toast, setToast] = useState(null)
   const [rouletteResult, setRouletteResult] = useState(null) // brief result flash
+  const [rouletteVoteOpen, setRouletteVoteOpen] = useState(false) // false during the read window
   const pollRef = useRef(null)
   const roundRef = useRef(null)
   const toastTimer = useRef(null)
   const rouletteTimer = useRef(null)
+  const rouletteRoundRef = useRef(null) // which roulette round the read timer is armed for
 
   const showToast = useCallback((msg) => {
     setToast(msg)
@@ -61,6 +64,17 @@ export default function SessionParticipant({ venueName, sessionId, phoneId, tabl
     const id = setInterval(tick, POLL_MS)
     return () => { cancelled = true; clearInterval(id); pollRef.current = null }
   }, [sessionId, phoneId, left])
+
+  // Roulette read window: when a new roulette round appears, hold the vote UI for
+  // ~10s so everyone can read the challenge, then open voting automatically.
+  useEffect(() => {
+    if (state?.phase !== 'roulette' || !state.round_id) return
+    if (rouletteRoundRef.current === state.round_id) return
+    rouletteRoundRef.current = state.round_id
+    queueMicrotask(() => setRouletteVoteOpen(false)) // deferred so it's not a sync set-in-effect
+    const open = setTimeout(() => setRouletteVoteOpen(true), ROULETTE_READ_MS)
+    return () => clearTimeout(open)
+  }, [state?.phase, state?.round_id])
 
   useSessionChannel(tableId, phoneId, (event, payload) => {
     if (event === 'player_left') showToast(`${payload?.name || 'A player'} left the game`)
@@ -164,8 +178,11 @@ export default function SessionParticipant({ venueName, sessionId, phoneId, tabl
           <p style={{ ...dimMono, fontSize: '16px', margin: '0 0 8px' }}>{state.prompt}</p>
           <p style={dimMono}>{state.drink_consequence}</p>
 
-          {/* Vote UI: player buttons (hidden once voted) */}
-          {!state.my_vote && (
+          {/* Read window first, then the vote UI (player buttons, hidden once voted). */}
+          {!rouletteVoteOpen && !state.my_vote && (
+            <p style={dimMono}>Read the challenge — get ready to vote…</p>
+          )}
+          {rouletteVoteOpen && !state.my_vote && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', width: '100%', maxWidth: '320px' }}>
               <p style={dimMono}>Who lost?</p>
               {(state.players || []).map((p) => (
