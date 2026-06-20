@@ -59,6 +59,14 @@ export default defineConfig({
     react(),
     tailwindcss(),
     VitePWA({
+      // Self-destroying worker: the precaching PWA kept serving stale bundles on
+      // phones (an NFC tap loaded the OLD app until the SW updated on a LATER
+      // load). This app is online-only (needs the backend) and is reached by tap,
+      // so the SW gave no benefit. selfDestroying makes the shipped sw.js
+      // unregister the old worker and delete its caches -> phones always get the
+      // latest build straight from the network. (Re-add a network-first PWA later
+      // if home-screen install is ever wanted.)
+      selfDestroying: true,
       registerType: 'autoUpdate',
       includeAssets: ['favicon.svg', 'apple-touch-icon.png'],
       manifest: {
