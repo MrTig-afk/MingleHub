@@ -32,6 +32,7 @@ if os.getenv("DEV_MODE") == "true":
     origins = [
         "http://localhost:5173",
         "https://localhost:5173",
+        "https://localhost:5174",
         "https://192.168.1.108:5173",
         "https://192.168.1.108:5174",
     ]

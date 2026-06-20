@@ -20,8 +20,20 @@ export const devLogin = (clerkUserId) =>
     return r.json()
   })
 
+export const fetchMe = (token) =>
+  fetch(`${BASE}/api/dashboard/me`, { headers: h(token) }).then(async (r) => {
+    if (!r.ok) throw new Error((await r.json()).detail || r.status)
+    return r.json()
+  })
+
 export const fetchVenue = (token) =>
   fetch(`${BASE}/api/dashboard/venue`, { headers: h(token) }).then(async (r) => {
+    if (!r.ok) throw new Error((await r.json()).detail || r.status)
+    return r.json()
+  })
+
+export const fetchOverview = (token) =>
+  fetch(`${BASE}/api/dashboard/overview`, { headers: h(token) }).then(async (r) => {
     if (!r.ok) throw new Error((await r.json()).detail || r.status)
     return r.json()
   })

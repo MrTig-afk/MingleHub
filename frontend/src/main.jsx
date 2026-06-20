@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom/client'
 import { Analytics } from '@vercel/analytics/react'
 import Splash from './components/Splash/Splash.jsx'
 import PatronLanding from './components/PatronLanding/PatronLanding.jsx'
+import DashboardRoot from './components/Dashboard/DashboardRoot.jsx'
 import './styles/main.css'
 
 // Always keep the phone on fresh code (dev AND prod). The PWA is self-destroying
@@ -23,9 +24,29 @@ if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
 const path = window.location.pathname
 const isPatronRoute = /^\/[a-z0-9-]+\/[0-9]+$/.test(path)
 
-const page = isPatronRoute
-  ? <PatronLanding />
-  : <Splash />
+// Dashboard and admin prefix checks come BEFORE the patron regex to be explicit
+// about intent. (Neither /dashboard/* nor /admin/* would match the patron regex
+// anyway -- it requires exactly /{slug}/{number} -- but ordering is defensive.)
+let page
+if (path.startsWith('/dashboard')) {
+  page = <DashboardRoot />
+} else if (path.startsWith('/admin')) {
+  page = <div style={{
+    minHeight: '100dvh',
+    background: 'var(--bg-floor)',
+    color: 'var(--on-surface)',
+    fontFamily: 'var(--font-body)',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: '24px',
+    textAlign: 'center',
+  }}>Admin dashboard -- coming soon</div>
+} else if (isPatronRoute) {
+  page = <PatronLanding />
+} else {
+  page = <Splash />
+}
 
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
