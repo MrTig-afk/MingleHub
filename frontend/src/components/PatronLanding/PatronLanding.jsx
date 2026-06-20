@@ -146,6 +146,11 @@ export default function PatronLanding() {
           tableId={venue.table_id}
           adultsOnly={ts.adults_only}
           playerCount={ts.player_count}
+          initialRoundNumber={
+            ts.current_round_number != null
+              ? ts.current_round_number + 1
+              : undefined
+          }
         />
       )
     }

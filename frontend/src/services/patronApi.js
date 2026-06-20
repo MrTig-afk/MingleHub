@@ -220,6 +220,14 @@ export const fetchLeaderboard = (sessionId) =>
     return r.json()
   })
 
+export const fetchCurrentRound = (sessionId) =>
+  fetch(`${BASE}/api/patron/sessions/${sessionId}/current-round`, {
+    headers: h,
+  }).then(async (r) => {
+    if (!r.ok) throw new Error((await r.json()).detail || r.status)
+    return r.json()
+  })
+
 export const leaveSession = (sessionId, phoneId) =>
   fetch(`${BASE}/api/patron/sessions/${sessionId}/leave`, {
     method: 'POST',

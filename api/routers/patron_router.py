@@ -650,17 +650,38 @@ async def session_leaderboard(request: Request, session_id: str):
 @router.post("/sessions/{session_id}/leave")
 @limiter.limit("30/minute")
 async def leave_session(request: Request, session_id: str, body: PhoneIdBody):
-    """Basic leave-mid-session: mark this phone's player left_early."""
+    """Leave the game. If the caller is the origin phone, triggers host
+    migration (or end-game if no active players remain)."""
     try:
         pool = await get_pool()
         async with pool.acquire() as conn:
-            result = await _run_trivia(
-                "leave", trivia_service.leave_session(conn, session_id, body.phone_id)
+            # Re-verify origin from DB -- never trust the client for BOLA
+            origin = await conn.fetchval(
+                "SELECT origin_phone_id FROM game_sessions "
+                "WHERE id = $1 AND ended_at IS NULL",
+                session_id,
             )
+            if origin is None:
+                raise HTTPException(status_code=404, detail="Not found")
+
+            if origin == body.phone_id:
+                # Host leave -> migration path
+                result = await session_service.migrate_host(
+                    conn, session_id, body.phone_id
+                )
+            else:
+                # Non-host leave -> existing path
+                result = await _run_trivia(
+                    "leave",
+                    trivia_service.leave_session(conn, session_id, body.phone_id),
+                )
     except HTTPException:
         raise
     except Exception:
-        await notify_error("POST /patron/sessions/leave failed 🚨", traceback.format_exc()[:500])
+        await notify_error(
+            "POST /patron/sessions/leave failed",
+            traceback.format_exc()[:500],
+        )
         raise HTTPException(status_code=500, detail="Internal error")
     return result
 
@@ -801,3 +822,39 @@ async def get_recap(request: Request, session_id: str):
         await notify_error("GET /patron/sessions/recap failed", traceback.format_exc()[:500])
         raise HTTPException(status_code=500, detail="Internal error")
     return result
+
+
+@router.get("/sessions/{session_id}/current-round")
+@limiter.limit("120/minute")
+async def current_round(request: Request, session_id: str):
+    """Server-authoritative round number + active player count.
+    Used by RoundOrigin on mount to seed the cadence position."""
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT current_round_number, ended_at "
+                "FROM game_sessions WHERE id = $1",
+                session_id,
+            )
+            if not row:
+                raise HTTPException(status_code=404, detail="Not found")
+            active_count = await conn.fetchval(
+                "SELECT COUNT(*) FROM game_players "
+                "WHERE session_id = $1 AND left_early = FALSE",
+                session_id,
+            )
+    except HTTPException:
+        raise
+    except Exception:
+        await notify_error(
+            "GET /patron/sessions/current-round failed",
+            traceback.format_exc()[:500],
+        )
+        raise HTTPException(status_code=500, detail="Internal error")
+    return {
+        "session_id": session_id,
+        "current_round_number": row["current_round_number"],
+        "active_count": int(active_count),
+        "ended": row["ended_at"] is not None,
+    }
