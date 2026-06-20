@@ -195,8 +195,10 @@ async def migrate_host(conn, session_id: str, phone_id: str) -> dict:
             session_id, phone_id,
         ) or "The host"
 
-    # Resolve any in-flight Chooser round (orphaned card on leaving host's phone)
-    orphan = await conn.fetchrow(
+    # Resolve any in-flight Chooser round(s) (orphaned card on leaving host's phone).
+    # Bump the counters by the number actually resolved — normally one, but a
+    # StrictMode double-draw could leave two, and a flat +1 would under-count.
+    orphans = await conn.fetch(
         """
         UPDATE rounds SET result = 'skipped', score_awarded = 0
         WHERE session_id = $1 AND round_type = 'chooser' AND result IS NULL
@@ -204,16 +206,16 @@ async def migrate_host(conn, session_id: str, phone_id: str) -> dict:
         """,
         session_id,
     )
-    if orphan:
+    if orphans:
         await conn.execute(
             """
             UPDATE game_sessions
-            SET cards_skipped = cards_skipped + 1,
-                total_rounds = total_rounds + 1,
+            SET cards_skipped = cards_skipped + $2,
+                total_rounds = total_rounds + $2,
                 last_activity_at = NOW()
             WHERE id = $1
             """,
-            session_id,
+            session_id, len(orphans),
         )
 
     # Pick new host: earliest-joined active player from the converted lobby
