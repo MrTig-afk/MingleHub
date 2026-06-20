@@ -80,12 +80,16 @@ export default function RoundOrigin({ venueName, sessionId, phoneId, tableId, ad
     queueMicrotask(() => { showToast(`${name} left the game`); refreshActiveCount() })
   })
 
-  const advanceRound = () => {
-    const next = roundNumber + 1
-    localStorage.setItem(roundKey, String(next))
+  // Stable within a round (roundNumber only changes when we advance), so passing
+  // it as onDone doesn't change identity on unrelated re-renders (e.g. a toast).
+  const advanceRound = useCallback(() => {
     setHotSeat(null)
-    setRoundNumber(next)
-  }
+    setRoundNumber((n) => {
+      const next = n + 1
+      localStorage.setItem(roundKey, String(next))
+      return next
+    })
+  }, [roundKey])
 
   const handleChosen = async () => {
     setPicking(true)
@@ -102,8 +106,16 @@ export default function RoundOrigin({ venueName, sessionId, phoneId, tableId, ad
 
   const renderRound = () => {
     if (roundType === 'trivia') {
+      // key by roundNumber so advancing Trivia -> Trivia remounts it and actually
+      // starts a fresh round (otherwise the same element just re-renders).
       return (
-        <TriviaOriginRound sessionId={sessionId} phoneId={phoneId} tableId={tableId} onDone={advanceRound} />
+        <TriviaOriginRound
+          key={roundNumber}
+          sessionId={sessionId}
+          phoneId={phoneId}
+          tableId={tableId}
+          onDone={advanceRound}
+        />
       )
     }
     if (hotSeat) {
