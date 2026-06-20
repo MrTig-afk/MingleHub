@@ -193,10 +193,11 @@ async def start_roulette(conn, session_id: str, phone_id: str) -> dict:
     if not card:
         raise ValueError("no_cards_available")
 
-    # Increment round counter atomically
+    # Increment round counter atomically and record activity
     round_number = await conn.fetchval(
         """
-        UPDATE game_sessions SET current_round_number = current_round_number + 1
+        UPDATE game_sessions SET current_round_number = current_round_number + 1,
+            last_activity_at = NOW()
         WHERE id = $1 RETURNING current_round_number
         """,
         session_id,
@@ -415,7 +416,8 @@ async def tally_roulette(conn, round_id: str, phone_id: str | None = None) -> di
         await conn.execute(
             """
             UPDATE game_sessions
-            SET total_score = total_score + $1, total_rounds = total_rounds + 1
+            SET total_score = total_score + $1, total_rounds = total_rounds + 1,
+                last_activity_at = NOW()
             WHERE id = $2
             """,
             score_increment, session_id,
@@ -478,7 +480,8 @@ async def skip_roulette(conn, round_id: str, phone_id: str) -> dict:
         """
         UPDATE game_sessions
         SET cards_skipped = cards_skipped + 1,
-            total_rounds = total_rounds + 1
+            total_rounds = total_rounds + 1,
+            last_activity_at = NOW()
         WHERE id = $1
         """,
         str(row["session_id"]),

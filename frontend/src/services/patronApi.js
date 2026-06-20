@@ -288,6 +288,21 @@ export const skipRoulette = (roundId, phoneId) =>
     return r.json()
   })
 
+export const endGame = (sessionId, phoneId) =>
+  fetch(`${BASE}/api/patron/sessions/${sessionId}/end-game`, {
+    method: 'POST', headers: h,
+    body: JSON.stringify({ phone_id: phoneId }),
+  }).then(async (r) => {
+    if (!r.ok) throw new Error((await r.json()).detail || r.status)
+    return r.json()
+  })
+
+export const fetchRecap = (sessionId) =>
+  fetch(`${BASE}/api/patron/sessions/${sessionId}/recap`, { headers: h }).then(async (r) => {
+    if (!r.ok) throw new Error((await r.json()).detail || r.status)
+    return r.json()
+  })
+
 // Dev-only — stands in for a physical tag by computing the signature it
 // would produce for a given tag_uid + counter. 404s outside DEV_MODE.
 export const simulateTap = (tagUid, counter) =>

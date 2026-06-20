@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import JoinOrNewChooser from '../JoinOrNewChooser/JoinOrNewChooser'
 import Lobby from '../Lobby/Lobby'
+import Recap from '../Recap/Recap'
 import RoundOrigin from '../RoundOrigin/RoundOrigin'
 import SessionParticipant from '../Trivia/SessionParticipant'
 import { fetchTap } from '../../services/patronApi'
@@ -157,6 +158,12 @@ export default function PatronLanding() {
         tableId={venue.table_id}
       />
     )
+  }
+
+  // Re-tap on a recently-ended session (within retap_interval_minutes) or an
+  // idle-expired session: show the Recap screen instead of lobby.
+  if (status === 'recap') {
+    return <Recap sessionId={tableState.session_id} venueName={venue.venue_name} />
   }
 
   // gamespec: "Players place fingers on session-origin phone" — only the
