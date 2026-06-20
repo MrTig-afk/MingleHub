@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import AnswerTiles from './AnswerTiles'
 import Leaderboard from './Leaderboard'
+import Toast from '../Toast'
 import useSessionChannel from '../../hooks/useSessionChannel'
 import { answerTrivia, fetchTriviaCurrent, leaveSession } from '../../services/patronApi'
 
@@ -13,18 +14,26 @@ function firstUnanswered(answers, total) {
 
 // The non-origin (joined) phone's view of a session. Default is the between-rounds
 // leaderboard. Trivia is auto-entered by the origin's round engine — every active
-// phone is enrolled server-side and gets all 5 questions, then SELF-PACES: answer,
-// tap Next, at its own speed (nobody is advanced by anyone else). Realtime nudges
-// a re-poll; the 2s poll of trivia/current is the source of truth.
+// phone gets all 5 questions, then SELF-PACES (answer, tap Next, at its own speed).
+// A "Leave game" button is always available; leaving notifies the table (and, in a
+// Trivia round, everyone). Realtime nudges a re-poll; the 2s poll is source of truth.
 export default function SessionParticipant({ venueName, sessionId, phoneId, tableId }) {
   const [state, setState] = useState(null)
   const [myIndex, setMyIndex] = useState(0)
-  const [localAnswers, setLocalAnswers] = useState({}) // index -> reveal
+  const [localAnswers, setLocalAnswers] = useState({})
   const [done, setDone] = useState(false)
   const [left, setLeft] = useState(false)
   const [error, setError] = useState(null)
+  const [toast, setToast] = useState(null)
   const pollRef = useRef(null)
-  const roundRef = useRef(null) // trivia_round_id we've initialised our index for
+  const roundRef = useRef(null)
+  const toastTimer = useRef(null)
+
+  const showToast = useCallback((msg) => {
+    setToast(msg)
+    clearTimeout(toastTimer.current)
+    toastTimer.current = setTimeout(() => setToast(null), 3500)
+  }, [])
 
   useEffect(() => {
     if (left) return
@@ -34,9 +43,6 @@ export default function SessionParticipant({ venueName, sessionId, phoneId, tabl
         const data = await fetchTriviaCurrent(sessionId, phoneId)
         if (cancelled) return
         setState(data)
-        // New trivia round -> reset our self-paced position (resume from the
-        // first question we haven't answered yet). setState here is post-await,
-        // not a synchronous effect body, so it's safe.
         if (data.phase === 'question' && data.trivia_round_id !== roundRef.current) {
           roundRef.current = data.trivia_round_id
           setMyIndex(firstUnanswered(data.my_answers || {}, (data.questions || []).length))
@@ -54,7 +60,8 @@ export default function SessionParticipant({ venueName, sessionId, phoneId, tabl
     return () => { cancelled = true; clearInterval(id); pollRef.current = null }
   }, [sessionId, phoneId, left])
 
-  useSessionChannel(tableId, phoneId, () => {
+  useSessionChannel(tableId, phoneId, (event, payload) => {
+    if (event === 'player_left') showToast(`${payload?.name || 'A player'} left the game`)
     if (pollRef.current) pollRef.current()
   })
 
@@ -78,77 +85,89 @@ export default function SessionParticipant({ venueName, sessionId, phoneId, tabl
     }
   }
 
-  if (left) {
+  const renderContent = () => {
+    if (left) {
+      return (
+        <Screen>
+          <h1 style={headlineStyle}>Thanks for playing 🍺</h1>
+          <p style={dimMono}>You've left the game. Your score is saved on the recap.</p>
+        </Screen>
+      )
+    }
+    if (!state) {
+      return <Screen><p style={dimMono}>Connecting…</p>{error && <p style={errStyle}>{error}</p>}</Screen>
+    }
+
+    if (state.phase === 'gather') {
+      return (
+        <Screen>
+          <p style={{ fontSize: '44px', margin: 0 }}>🧠</p>
+          <h1 style={headlineStyle}>Trivia round!</h1>
+          <p style={dimMono}>Get ready — answer on your own phone, at your own pace</p>
+          <p style={dimMono}>[{state.joined_count} playing]</p>
+          <button onClick={handleLeave} style={leaveButton}>Leave game</button>
+          {error && <p style={errStyle}>{error}</p>}
+        </Screen>
+      )
+    }
+
+    if (state.phase === 'question' && (state.questions || []).length > 0) {
+      if (!state.is_participant) {
+        return (
+          <Screen>
+            <p style={dimMono}>Trivia in progress — you didn't join this round</p>
+            <Leaderboard rows={state.leaderboard} title="Scoreboard" />
+            <button onClick={handleLeave} style={leaveButton}>Leave game</button>
+          </Screen>
+        )
+      }
+      if (done) {
+        return (
+          <Screen>
+            <p style={{ fontSize: '28px', margin: 0 }}>✅</p>
+            <h1 style={headlineStyle}>All done!</h1>
+            <Leaderboard rows={state.leaderboard} title="Scoreboard" />
+            <p style={dimMono}>Others are still playing…</p>
+            <button onClick={handleLeave} style={leaveButton}>Leave game</button>
+          </Screen>
+        )
+      }
+      const question = state.questions[myIndex]
+      const reveal = localAnswers[myIndex] || state.my_answers?.[String(myIndex)] || null
+      const answered = Boolean(reveal)
+      const isLast = myIndex >= state.questions.length - 1
+      return (
+        <Screen>
+          <AnswerTiles question={question} reveal={reveal} onAnswer={handleAnswer} />
+          {answered && (
+            <button onClick={handleNext} style={primaryButton}>
+              {isLast ? 'See scores →' : 'Next question →'}
+            </button>
+          )}
+          {!answered && <p style={dimMono}>Pick your answer to continue</p>}
+          <button onClick={handleLeave} style={leaveButton}>Leave game</button>
+          {error && <p style={errStyle}>{error}</p>}
+        </Screen>
+      )
+    }
+
+    // between_rounds (default) — live leaderboard + leave.
     return (
       <Screen>
-        <h1 style={headlineStyle}>Thanks for playing 🍺</h1>
-        <p style={dimMono}>You've left the game. Your score is saved on the recap.</p>
-      </Screen>
-    )
-  }
-
-  if (!state) {
-    return <Screen><p style={dimMono}>Connecting…</p>{error && <p style={errStyle}>{error}</p>}</Screen>
-  }
-
-  if (state.phase === 'gather') {
-    return (
-      <Screen>
-        <p style={{ fontSize: '44px', margin: 0 }}>🧠</p>
-        <h1 style={headlineStyle}>Trivia round!</h1>
-        <p style={dimMono}>Get ready — answer on your own phone, at your own pace</p>
-        <p style={dimMono}>[{state.joined_count} playing]</p>
+        <p style={dimMono}>Playing at {venueName} 🍺</p>
+        <Leaderboard rows={state.leaderboard} title="Scoreboard" />
+        <p style={dimMono}>Round in progress on the table phone…</p>
+        <button onClick={handleLeave} style={leaveButton}>Leave game</button>
         {error && <p style={errStyle}>{error}</p>}
       </Screen>
     )
   }
 
-  if (state.phase === 'question' && (state.questions || []).length > 0) {
-    if (!state.is_participant) {
-      return (
-        <Screen>
-          <p style={dimMono}>Trivia in progress — you didn't join this round</p>
-          <Leaderboard rows={state.leaderboard} title="Scoreboard" />
-        </Screen>
-      )
-    }
-    if (done) {
-      return (
-        <Screen>
-          <p style={{ fontSize: '28px', margin: 0 }}>✅</p>
-          <h1 style={headlineStyle}>All done!</h1>
-          <Leaderboard rows={state.leaderboard} title="Scoreboard" />
-          <p style={dimMono}>Others are still playing…</p>
-        </Screen>
-      )
-    }
-    const question = state.questions[myIndex]
-    const reveal = localAnswers[myIndex] || state.my_answers?.[String(myIndex)] || null
-    const answered = Boolean(reveal)
-    const isLast = myIndex >= state.questions.length - 1
-    return (
-      <Screen>
-        <AnswerTiles question={question} reveal={reveal} onAnswer={handleAnswer} />
-        {answered && (
-          <button onClick={handleNext} style={primaryButton}>
-            {isLast ? 'See scores →' : 'Next question →'}
-          </button>
-        )}
-        {!answered && <p style={dimMono}>Pick your answer to continue</p>}
-        {error && <p style={errStyle}>{error}</p>}
-      </Screen>
-    )
-  }
-
-  // between_rounds (default) — live leaderboard + leave.
   return (
-    <Screen>
-      <p style={dimMono}>Playing at {venueName} 🍺</p>
-      <Leaderboard rows={state.leaderboard} title="Scoreboard" />
-      <p style={dimMono}>Round in progress on the table phone…</p>
-      <button onClick={handleLeave} style={leaveButton}>Leave game</button>
-      {error && <p style={errStyle}>{error}</p>}
-    </Screen>
+    <>
+      {renderContent()}
+      <Toast message={toast} />
+    </>
   )
 }
 

@@ -690,9 +690,12 @@ async def leave_session(conn, session_id: str, phone_id: str) -> dict:
             raise PermissionError("not_a_member")
         return {"left": True, "name": existing["name"], "score": existing["score"]}
 
+    # Tell the table: the host phone always shows a "X left" toast, and during a
+    # Trivia round every phone sees it too (they're all subscribed). Peers also
+    # re-poll the leaderboard / active-player count off this.
     await rt_publish(
         _channel(session["table_id"]),
-        "trivia:participant_joined",  # reuse: nudges peers to re-poll the leaderboard
-        {"session_id": session_id, "left_phone": True},
+        "player_left",
+        {"session_id": session_id, "name": row["name"]},
     )
     return {"left": True, "name": row["name"], "score": row["score"]}
