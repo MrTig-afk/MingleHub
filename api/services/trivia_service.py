@@ -38,13 +38,12 @@ def _channel(table_id) -> str:
     return f"table:{table_id}"
 
 
-def _question_public(index: int, total: int, q, seconds_remaining: int) -> dict:
+def _question_public(index: int, total: int, q) -> dict:
     """A question shaped for the browser -- correct_option deliberately omitted.
 
-    The countdown is sent as seconds_remaining (computed server-side) rather than
-    an absolute start timestamp: the client counts down from it on its own clock,
-    so a naive-timestamp timezone mismatch can't make the timer read "time's up"
-    the instant the question appears.
+    Self-paced: each phone gets the whole question list up front and walks it at
+    its own speed, so the 20s timer is counted client-side per question (from when
+    that phone displays it). duration_seconds tells the client how long that is.
     """
     return {
         "index": index,
@@ -58,8 +57,23 @@ def _question_public(index: int, total: int, q, seconds_remaining: int) -> dict:
         },
         "category": q["category"],
         "duration_seconds": QUESTION_TIMER_SECONDS,
-        "seconds_remaining": max(0, int(seconds_remaining)),
     }
+
+
+async def _questions_public(conn, question_ids) -> list[dict]:
+    """All of a round's questions in order, each shaped for the browser (no
+    correct_option). Sent at the start so every phone can self-pace through them."""
+    rows = await conn.fetch(
+        """
+        SELECT id, question, option_a, option_b, option_c, option_d, category
+        FROM trivia_questions WHERE id = ANY($1::uuid[])
+        """,
+        question_ids,
+    )
+    by_id = {r["id"]: r for r in rows}
+    ordered = [by_id[qid] for qid in question_ids if qid in by_id]
+    total = len(ordered)
+    return [_question_public(i, total, q) for i, q in enumerate(ordered)]
 
 
 async def _get_session(conn, session_id: str):
@@ -86,13 +100,6 @@ async def _participant_count(conn, trivia_round_id) -> int:
     return await conn.fetchval(
         "SELECT COUNT(*) FROM trivia_participants WHERE trivia_round_id = $1",
         trivia_round_id,
-    )
-
-
-async def _answered_count(conn, trivia_round_id, question_index: int) -> int:
-    return await conn.fetchval(
-        "SELECT COUNT(*) FROM trivia_answers WHERE trivia_round_id = $1 AND question_index = $2",
-        trivia_round_id, question_index,
     )
 
 
@@ -274,19 +281,9 @@ async def join_trivia(conn, trivia_round_id: str, phone_id: str) -> dict:
     return {"trivia_round_id": trivia_round_id, "joined_count": joined_count, "player_id": str(player["id"])}
 
 
-async def _current_question_row(conn, rnd) -> dict:
-    qid = rnd["question_ids"][rnd["current_index"]]
-    return await conn.fetchrow(
-        """
-        SELECT id, question, option_a, option_b, option_c, option_d, category
-        FROM trivia_questions WHERE id = $1
-        """,
-        qid,
-    )
-
-
 async def begin_trivia(conn, trivia_round_id: str, phone_id: str) -> dict:
-    """Origin taps "Start Trivia": gather -> in_progress, open question 0.
+    """Origin starts the questions: gather -> in_progress. Returns ALL questions
+    so every phone can self-pace through them. Origin-phone only.
 
     Requires at least MIN_PARTICIPANTS joined phones, else the round must be
     abandoned instead (gamespec: fewer than 2 -> abandoned_at_gather).
@@ -296,6 +293,13 @@ async def begin_trivia(conn, trivia_round_id: str, phone_id: str) -> dict:
         raise LookupError("trivia_round_not_found")
     if rnd["origin_phone_id"] != phone_id:
         raise PermissionError("not_origin_phone")
+    # Idempotent: a re-issued begin (StrictMode / retry) after the round is
+    # already in progress just returns the questions again.
+    if rnd["status"] == "in_progress":
+        return {
+            "trivia_round_id": trivia_round_id, "status": "in_progress",
+            "questions": await _questions_public(conn, rnd["question_ids"]),
+        }
     if rnd["status"] != "gathering":
         raise ValueError("not_gathering")
 
@@ -309,34 +313,46 @@ async def begin_trivia(conn, trivia_round_id: str, phone_id: str) -> dict:
         SET status = 'in_progress', current_index = 0,
             current_question_started_at = NOW(), started_at = NOW()
         WHERE id = $1 AND status = 'gathering'
-        RETURNING current_question_started_at
+        RETURNING id
         """,
         trivia_round_id,
     )
     if not updated:
-        raise ValueError("not_gathering")
+        # Lost the race to a concurrent begin -- it's in_progress now, return questions.
+        return {
+            "trivia_round_id": trivia_round_id, "status": "in_progress",
+            "questions": await _questions_public(conn, rnd["question_ids"]),
+        }
 
-    rnd = await _load_round(conn, trivia_round_id)
-    q = await _current_question_row(conn, rnd)
-    public = _question_public(0, len(rnd["question_ids"]), q, QUESTION_TIMER_SECONDS)
-    await rt_publish(_channel(rnd["table_id"]), "trivia:question", public)
-    return {"trivia_round_id": trivia_round_id, "status": "in_progress", "question": public}
+    questions = await _questions_public(conn, rnd["question_ids"])
+    await rt_publish(_channel(rnd["table_id"]), "trivia:start",
+                     {"trivia_round_id": trivia_round_id, "total": len(questions)})
+    return {"trivia_round_id": trivia_round_id, "status": "in_progress", "questions": questions}
 
 
 async def submit_answer(conn, trivia_round_id: str, phone_id: str,
-                        question_index: int, selected_option: str) -> dict:
-    """Record a phone's answer and award points. SERVER-SIDE check only.
+                        question_index: int, selected_option: str,
+                        time_to_answer_ms: int = 0) -> dict:
+    """Record a phone's answer to ANY question in the round and award points.
 
-    Returns the correct_option in the response (it is now safe -- the phone has
-    answered). One answer per phone per question (UNIQUE guard -> 409 on retry).
+    Self-paced: each phone answers questions at its own speed, so question_index
+    is whatever question THAT phone is on (not a shared current_index). The 20s
+    timer is measured client-side from when the phone displayed the question and
+    sent here as time_to_answer_ms -- the answer CORRECTNESS is still checked
+    server-side (the security-relevant part); only the before/after-timer points
+    bucket trusts the client's stopwatch, which is fine for a casual game.
+
+    One answer per phone per question (UNIQUE guard -> 409 on retry). Returns the
+    correct_option AND the phone's selected_option (safe now -- it has answered),
+    so the UI can mark both the wrong pick and the right answer.
     """
     rnd = await _load_round(conn, trivia_round_id)
     if not rnd:
         raise LookupError("trivia_round_not_found")
     if rnd["status"] != "in_progress":
         raise ValueError("round_not_in_progress")
-    if question_index != rnd["current_index"]:
-        raise ValueError("stale_question")
+    if not (0 <= question_index < len(rnd["question_ids"])):
+        raise ValueError("bad_question_index")
 
     player = await _resolve_player(conn, rnd["session_id"], phone_id)
     if not player:
@@ -348,18 +364,12 @@ async def submit_answer(conn, trivia_round_id: str, phone_id: str,
     if not participant:
         raise PermissionError("not_a_participant")
 
-    q = await _current_question_row(conn, rnd)
+    question_id = rnd["question_ids"][question_index]
     correct_option = await conn.fetchval(
-        "SELECT correct_option FROM trivia_questions WHERE id = $1", q["id"]
+        "SELECT correct_option FROM trivia_questions WHERE id = $1", question_id
     )
 
-    # Elapsed since this question went live -- decides before/after the 20s timer.
-    elapsed_ms = await conn.fetchval(
-        "SELECT (EXTRACT(EPOCH FROM (NOW() - current_question_started_at)) * 1000)::bigint "
-        "FROM trivia_rounds WHERE id = $1",
-        trivia_round_id,
-    )
-    elapsed_ms = max(0, int(elapsed_ms or 0))
+    elapsed_ms = max(0, int(time_to_answer_ms or 0))
     before_timer = elapsed_ms <= QUESTION_TIMER_SECONDS * 1000
     is_correct = selected_option == correct_option
     score = _SCORE[(is_correct, before_timer)]
@@ -375,7 +385,7 @@ async def submit_answer(conn, trivia_round_id: str, phone_id: str,
         ON CONFLICT (trivia_round_id, question_index, phone_id) DO NOTHING
         RETURNING id
         """,
-        str(uuid.uuid4()), trivia_round_id, q["id"], question_index, phone_id, player["id"],
+        str(uuid.uuid4()), trivia_round_id, question_id, question_index, phone_id, player["id"],
         selected_option, is_correct, before_timer, elapsed_ms, score,
     )
     if not inserted:
@@ -398,49 +408,70 @@ async def submit_answer(conn, trivia_round_id: str, phone_id: str,
         score, 1 if is_correct else 0, 0 if is_correct else 1, rnd["session_id"],
     )
 
-    answered_count = await _answered_count(conn, trivia_round_id, question_index)
+    # Auto-complete when EVERY active participant has answered EVERY question, so
+    # a faster player (incl. the origin) never cuts a slower one off -- each person
+    # finishes at their own pace. The origin's explicit finish_trivia stays as a
+    # fallback for an AFK player who never finishes.
+    await _maybe_complete(conn, rnd)
+
+    # Nudge peers to refresh the live leaderboard.
     await rt_publish(
         _channel(rnd["table_id"]),
         "trivia:answered",
-        {"trivia_round_id": trivia_round_id, "question_index": question_index,
-         "answered_count": answered_count},
+        {"trivia_round_id": trivia_round_id, "question_index": question_index},
     )
     return {
+        "index": question_index,
         "is_correct": is_correct,
         "correct_option": correct_option,
+        "selected_option": selected_option,
         "score_awarded": score,
         "before_timer": before_timer,
     }
 
 
-async def next_question(conn, trivia_round_id: str, phone_id: str) -> dict:
-    """Origin advances to the next question. Origin-phone only."""
-    rnd = await _load_round(conn, trivia_round_id)
-    if not rnd:
-        raise LookupError("trivia_round_not_found")
-    if rnd["origin_phone_id"] != phone_id:
-        raise PermissionError("not_origin_phone")
-    if rnd["status"] != "in_progress":
-        raise ValueError("round_not_in_progress")
-
-    total = len(rnd["question_ids"])
-    if rnd["current_index"] >= total - 1:
-        raise ValueError("no_more_questions")
-
-    new_index = rnd["current_index"] + 1
-    await conn.execute(
+async def _maybe_complete(conn, rnd) -> None:
+    """Complete the round once every active participant has answered every
+    question. Idempotent via the status guard in the UPDATE."""
+    total_q = len(rnd["question_ids"])
+    # Active participants = enrolled phones whose player hasn't left.
+    active = await conn.fetchval(
         """
-        UPDATE trivia_rounds
-        SET current_index = $1, current_question_started_at = NOW()
-        WHERE id = $2
+        SELECT COUNT(*) FROM trivia_participants tp
+        JOIN game_players gp ON gp.id = tp.player_id
+        WHERE tp.trivia_round_id = $1 AND gp.left_early = FALSE
         """,
-        new_index, trivia_round_id,
+        rnd["id"],
     )
-    rnd = await _load_round(conn, trivia_round_id)
-    q = await _current_question_row(conn, rnd)
-    public = _question_public(new_index, total, q, QUESTION_TIMER_SECONDS)
-    await rt_publish(_channel(rnd["table_id"]), "trivia:question", public)
-    return {"trivia_round_id": trivia_round_id, "question": public}
+    fully_done = await conn.fetchval(
+        """
+        SELECT COUNT(*) FROM (
+            SELECT phone_id FROM trivia_answers
+            WHERE trivia_round_id = $1
+            GROUP BY phone_id HAVING COUNT(*) >= $2
+        ) t
+        """,
+        rnd["id"], total_q,
+    )
+    if active == 0 or fully_done < active:
+        return
+    done = await conn.fetchrow(
+        "UPDATE trivia_rounds SET status = 'complete', ended_at = NOW() "
+        "WHERE id = $1 AND status = 'in_progress' RETURNING id",
+        rnd["id"],
+    )
+    if not done:
+        return
+    total_score = await conn.fetchval(
+        "SELECT COALESCE(SUM(score_awarded), 0) FROM trivia_answers WHERE trivia_round_id = $1",
+        rnd["id"],
+    )
+    await _record_analytics_round(conn, rnd, "completed", int(total_score or 0))
+    await rt_publish(
+        _channel(rnd["table_id"]),
+        "trivia:complete",
+        {"trivia_round_id": str(rnd["id"]), "leaderboard": await _leaderboard(conn, rnd["session_id"])},
+    )
 
 
 async def _leaderboard(conn, session_id) -> list[dict]:
@@ -604,42 +635,32 @@ async def get_current_state(conn, session_id: str, phone_id: str) -> dict | None
         base["phase"] = "gather"
         return base
 
-    # in_progress -> the live question, never including correct_option, plus
-    # this phone's own answer if it has already answered.
-    rnd = await _load_round(conn, trivia_round_id)
-    q = await _current_question_row(conn, rnd)
+    # in_progress -> the whole question list (never any correct_option), plus a
+    # map of THIS phone's answers so far. The phone self-paces: it shows the first
+    # index it hasn't answered, and on reload resumes from there.
     base["phase"] = "question"
-    # Remaining time computed server-side (NOW() and the column share one clock),
-    # so the poll-driven phones get an accurate countdown to resync to.
-    remaining = await conn.fetchval(
-        "SELECT GREATEST(0, $2 - EXTRACT(EPOCH FROM (NOW() - current_question_started_at)))::int "
-        "FROM trivia_rounds WHERE id = $1",
-        active["id"], QUESTION_TIMER_SECONDS,
-    )
-    base["question"] = _question_public(
-        active["current_index"], len(active["question_ids"]), q, remaining or 0,
-    )
-    base["answered_count"] = await _answered_count(conn, active["id"], active["current_index"])
-    my = await conn.fetchrow(
+    base["questions"] = await _questions_public(conn, active["question_ids"])
+    rows = await conn.fetch(
         """
-        SELECT ta.selected_option, ta.is_correct, ta.score_awarded, ta.before_timer,
-               tq.correct_option
+        SELECT ta.question_index, ta.selected_option, ta.is_correct,
+               ta.score_awarded, ta.before_timer, tq.correct_option
         FROM trivia_answers ta
         JOIN trivia_questions tq ON tq.id = ta.question_id
-        WHERE ta.trivia_round_id = $1 AND ta.question_index = $2 AND ta.phone_id = $3
+        WHERE ta.trivia_round_id = $1 AND ta.phone_id = $2
         """,
-        active["id"], active["current_index"], phone_id,
+        active["id"], phone_id,
     )
-    base["my_answer"] = (
-        {
-            "selected_option": my["selected_option"],
-            "is_correct": my["is_correct"],
-            "score_awarded": my["score_awarded"],
-            "before_timer": my["before_timer"],
-            "correct_option": my["correct_option"],
+    base["my_answers"] = {
+        str(r["question_index"]): {
+            "index": r["question_index"],
+            "selected_option": r["selected_option"],
+            "is_correct": r["is_correct"],
+            "score_awarded": r["score_awarded"],
+            "before_timer": r["before_timer"],
+            "correct_option": r["correct_option"],
         }
-        if my else None
-    )
+        for r in rows
+    }
     return base
 
 

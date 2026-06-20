@@ -3,21 +3,23 @@
 // answered) a per-phone reveal: your pick, whether it was right, and the correct
 // option. The correct option is only ever known AFTER answering (the server
 // withholds it until then), so `reveal` is null until the answer comes back.
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 const LETTERS = ['A', 'B', 'C', 'D']
 
 export default function AnswerTiles({ question, reveal, onAnswer, disabled }) {
-  const [secondsLeft, setSecondsLeft] = useState(question?.seconds_remaining ?? question?.duration_seconds ?? 20)
+  const [secondsLeft, setSecondsLeft] = useState(question?.duration_seconds ?? 20)
   const [submitting, setSubmitting] = useState(null)
+  // When THIS question was displayed — self-paced, so the 20s timer is per phone
+  // per question, measured on this device's own clock and reported on answer.
+  // Set in the countdown effect (runs on mount before any tap can happen).
+  const shownAtRef = useRef(null)
 
-  // Count down from the server's seconds_remaining using THIS device's own clock
-  // (no absolute server timestamp to parse), so timezone/clock differences can't
-  // make the timer read "time's up" instantly. Each poll resyncs to the latest
-  // server value via the seconds_remaining dependency.
+  // Fresh 20s countdown each question (reset when question.index changes).
   useEffect(() => {
-    const total = question?.seconds_remaining ?? question?.duration_seconds ?? 20
+    const total = question?.duration_seconds ?? 20
     const startMs = Date.now()
+    shownAtRef.current = startMs
     const tick = () => {
       const elapsed = (Date.now() - startMs) / 1000
       setSecondsLeft(Math.max(0, Math.ceil(total - elapsed)))
@@ -25,13 +27,13 @@ export default function AnswerTiles({ question, reveal, onAnswer, disabled }) {
     tick()
     const id = setInterval(tick, 250)
     return () => clearInterval(id)
-  }, [question?.index, question?.seconds_remaining, question?.duration_seconds])
+  }, [question?.index, question?.duration_seconds])
 
   const handlePick = async (letter) => {
     if (disabled || reveal || submitting) return
     setSubmitting(letter)
     try {
-      await onAnswer(letter)
+      await onAnswer(letter, Date.now() - (shownAtRef.current || Date.now()))
     } finally {
       setSubmitting(null)
     }

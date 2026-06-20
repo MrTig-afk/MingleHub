@@ -171,21 +171,16 @@ export const beginTrivia = (roundId, phoneId) =>
     return r.json()
   })
 
-export const answerTrivia = (roundId, phoneId, questionIndex, selectedOption) =>
+export const answerTrivia = (roundId, phoneId, questionIndex, selectedOption, timeToAnswerMs = 0) =>
   fetch(`${BASE}/api/patron/trivia/${roundId}/answer`, {
     method: 'POST',
     headers: h,
-    body: JSON.stringify({ phone_id: phoneId, question_index: questionIndex, selected_option: selectedOption }),
-  }).then(async (r) => {
-    if (!r.ok) throw new Error((await r.json()).detail || r.status)
-    return r.json()
-  })
-
-export const nextTrivia = (roundId, phoneId) =>
-  fetch(`${BASE}/api/patron/trivia/${roundId}/next`, {
-    method: 'POST',
-    headers: h,
-    body: JSON.stringify({ phone_id: phoneId }),
+    body: JSON.stringify({
+      phone_id: phoneId,
+      question_index: questionIndex,
+      selected_option: selectedOption,
+      time_to_answer_ms: Math.max(0, Math.round(timeToAnswerMs)),
+    }),
   }).then(async (r) => {
     if (!r.ok) throw new Error((await r.json()).detail || r.status)
     return r.json()

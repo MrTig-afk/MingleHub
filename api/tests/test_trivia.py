@@ -110,15 +110,12 @@ def _begin(client, h, rid, phone):
     return client.post(f"/api/patron/trivia/{rid}/begin", headers=h, json={"phone_id": phone})
 
 
-def _answer(client, h, rid, phone, index, option):
+def _answer(client, h, rid, phone, index, option, time_ms=0):
     return client.post(
         f"/api/patron/trivia/{rid}/answer", headers=h,
-        json={"phone_id": phone, "question_index": index, "selected_option": option},
+        json={"phone_id": phone, "question_index": index, "selected_option": option,
+              "time_to_answer_ms": time_ms},
     )
-
-
-def _next(client, h, rid, phone):
-    return client.post(f"/api/patron/trivia/{rid}/next", headers=h, json={"phone_id": phone})
 
 
 def _finish(client, h, rid, phone):
@@ -163,22 +160,6 @@ def _question_key(round_id, index):
 
 def _wrong_option(correct):
     return "A" if correct != "A" else "B"
-
-
-def _backdate_question(round_id, seconds):
-    """Push current_question_started_at into the past so an answer lands 'after timer'."""
-    async def _q():
-        conn = await asyncpg.connect(os.environ["DATABASE_URL"])
-        try:
-            await conn.execute(
-                "UPDATE trivia_rounds "
-                "SET current_question_started_at = NOW() - ($2 || ' seconds')::interval "
-                "WHERE id = $1",
-                uuid.UUID(round_id), str(seconds),
-            )
-        finally:
-            await conn.close()
-    asyncio.run(_q())
 
 
 def _player_score(session_id, phone_id):
@@ -248,14 +229,14 @@ def test_correct_option_never_leaked_before_answer(client, api_key_header, owner
     _join(client, api_key_header, rid, s["phones"][1])
     begin = _begin(client, api_key_header, rid, s["origin"])
     assert begin.status_code == 200, begin.text
-    question = begin.json()["question"]
-    # The question payload must NOT carry the answer.
-    assert "correct_option" not in question
-    assert "correct_option" not in str(question)
-    # The poll endpoint's live question must not leak it either.
+    questions = begin.json()["questions"]
+    # The full question list is sent up front, but NONE may carry the answer.
+    assert len(questions) == 5
+    assert "correct_option" not in str(questions)
+    # The poll endpoint's questions must not leak it either, and no answers yet.
     state = _current(client, api_key_header, s["session_id"], s["phones"][1]).json()
-    assert "correct_option" not in state["question"]
-    assert state["my_answer"] is None
+    assert "correct_option" not in str(state["questions"])
+    assert state["my_answers"] == {}
 
 
 def test_correct_before_timer_awards_10(client, api_key_header, owner_a_token, fresh_table):
@@ -272,6 +253,9 @@ def test_correct_before_timer_awards_10(client, api_key_header, owner_a_token, f
     assert data["before_timer"] is True
     assert data["score_awarded"] == 10
     assert data["correct_option"] == correct  # safe to reveal AFTER answering
+    # The response also echoes the phone's own pick so the UI can mark both the
+    # wrong tile (red) and the right tile (green).
+    assert data["selected_option"] == correct
     assert _player_score(s["session_id"], s["origin"]) == 10
 
 
@@ -296,17 +280,18 @@ def test_after_timer_scores_two_and_one(client, api_key_header, owner_a_token, f
     _join(client, api_key_header, rid, s["phones"][1])
     _begin(client, api_key_header, rid, s["origin"])
 
-    _backdate_question(rid, 25)  # 25s ago -> past the 20s timer
     _qid, correct = _question_key(rid, 0)
+    # Self-paced: the client reports how long it took. > 20s -> after the timer.
+    late_ms = 25000
 
     # Correct after timer -> 2
-    r1 = _answer(client, api_key_header, rid, s["origin"], 0, correct)
+    r1 = _answer(client, api_key_header, rid, s["origin"], 0, correct, time_ms=late_ms)
     assert r1.status_code == 200, r1.text
     assert r1.json()["before_timer"] is False
     assert r1.json()["score_awarded"] == 2
 
     # Wrong after timer -> 1 (the second phone)
-    r2 = _answer(client, api_key_header, rid, s["phones"][1], 0, _wrong_option(correct))
+    r2 = _answer(client, api_key_header, rid, s["phones"][1], 0, _wrong_option(correct), time_ms=late_ms)
     assert r2.status_code == 200, r2.text
     assert r2.json()["score_awarded"] == 1
 
@@ -344,15 +329,19 @@ def test_member_joining_after_start_cannot_answer(client, api_key_header, owner_
     assert resp.status_code == 403
 
 
-def test_stale_question_index_rejected(client, api_key_header, owner_a_token, fresh_table):
+def test_self_paced_any_index_ok_but_out_of_range_rejected(client, api_key_header, owner_a_token, fresh_table):
     s = _setup_session(client, api_key_header, owner_a_token, fresh_table, num_phones=2)
     rid = _start(client, api_key_header, s["session_id"], s["origin"]).json()["trivia_round_id"]
     _join(client, api_key_header, rid, s["phones"][1])
     _begin(client, api_key_header, rid, s["origin"])
-    # current_index is 0; answering index 1 must be rejected.
-    resp = _answer(client, api_key_header, rid, s["origin"], 1, "A")
-    assert resp.status_code == 409
-    assert resp.json()["detail"] == "stale_question"
+    # Self-paced: answering a later question (index 2) before index 0 is allowed.
+    _qid, correct2 = _question_key(rid, 2)
+    ok = _answer(client, api_key_header, rid, s["origin"], 2, correct2)
+    assert ok.status_code == 200, ok.text
+    # But an out-of-range index is rejected.
+    bad = _answer(client, api_key_header, rid, s["origin"], 99, "A")
+    assert bad.status_code == 409
+    assert bad.json()["detail"] == "bad_question_index"
 
 
 def test_full_five_question_flow(client, api_key_header, owner_a_token, fresh_table):
@@ -360,9 +349,11 @@ def test_full_five_question_flow(client, api_key_header, owner_a_token, fresh_ta
     rid = _start(client, api_key_header, s["session_id"], s["origin"]).json()["trivia_round_id"]
     _join(client, api_key_header, rid, s["phones"][1])
     begin = _begin(client, api_key_header, rid, s["origin"])
-    total = begin.json()["question"]["total"]
+    questions = begin.json()["questions"]
+    total = len(questions)
     assert total == 5
 
+    # Self-paced: each phone answers all 5 at its own pace (no shared "next").
     for index in range(total):
         _qid, correct = _question_key(rid, index)
         # Origin answers correct (10), second phone answers wrong (3).
@@ -370,17 +361,11 @@ def test_full_five_question_flow(client, api_key_header, owner_a_token, fresh_ta
         assert r_origin.status_code == 200, r_origin.text
         r_two = _answer(client, api_key_header, rid, s["phones"][1], index, _wrong_option(correct))
         assert r_two.status_code == 200, r_two.text
-        if index < total - 1:
-            nxt = _next(client, api_key_header, rid, s["origin"])
-            assert nxt.status_code == 200, nxt.text
-            assert nxt.json()["question"]["index"] == index + 1
 
-    # Advancing past the last question is rejected (use finish instead).
-    assert _next(client, api_key_header, rid, s["origin"]).status_code == 409
-
-    finish = _finish(client, api_key_header, rid, s["origin"])
-    assert finish.status_code == 200, finish.text
-    board = finish.json()["leaderboard"]
+    # Once everyone has answered all 5, the round auto-completes (no one is cut off).
+    state = _current(client, api_key_header, s["session_id"], s["origin"]).json()
+    assert state["phase"] == "between_rounds"
+    board = state["leaderboard"]
     # Origin: 5x10 = 50; second: 5x3 = 15.
     by_name = {row["name"]: row["score"] for row in board}
     assert by_name["Player 1"] == 50
@@ -388,6 +373,8 @@ def test_full_five_question_flow(client, api_key_header, owner_a_token, fresh_ta
     # Leaderboard is ordered best-first.
     assert board[0]["name"] == "Player 1"
     assert _player_score(s["session_id"], s["origin"]) == 50
+    # The explicit finish is now a no-op fallback -- the round already completed.
+    assert _finish(client, api_key_header, rid, s["origin"]).status_code == 409
 
 
 def test_leaderboard_endpoint_and_leave(client, api_key_header, owner_a_token, fresh_table):

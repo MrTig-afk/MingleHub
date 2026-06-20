@@ -145,6 +145,10 @@ class ChannelAuthRequest(PhoneIdBody):
 class AnswerRequest(PhoneIdBody):
     question_index: int = Field(ge=0)
     selected_option: str = Field(pattern="^[ABCD]$")
+    # Client-measured time from displaying the question to answering (self-paced
+    # timer). Correctness is still checked server-side; only the points bucket
+    # uses this. Defaults to 0 (treated as "before timer").
+    time_to_answer_ms: int = Field(default=0, ge=0)
 
 
 @router.get("/lobby/{lobby_id}")
@@ -557,31 +561,14 @@ async def trivia_answer(request: Request, round_id: str, body: AnswerRequest):
             result = await _run_trivia(
                 "answer",
                 trivia_service.submit_answer(
-                    conn, round_id, body.phone_id, body.question_index, body.selected_option
+                    conn, round_id, body.phone_id, body.question_index,
+                    body.selected_option, body.time_to_answer_ms,
                 ),
             )
     except HTTPException:
         raise
     except Exception:
         await notify_error("POST /patron/trivia/answer failed 🚨", traceback.format_exc()[:500])
-        raise HTTPException(status_code=500, detail="Internal error")
-    return result
-
-
-@router.post("/trivia/{round_id}/next")
-@limiter.limit("60/minute")
-async def trivia_next(request: Request, round_id: str, body: PhoneIdBody):
-    """Origin advances to the next question."""
-    try:
-        pool = await get_pool()
-        async with pool.acquire() as conn:
-            result = await _run_trivia(
-                "next", trivia_service.next_question(conn, round_id, body.phone_id)
-            )
-    except HTTPException:
-        raise
-    except Exception:
-        await notify_error("POST /patron/trivia/next failed 🚨", traceback.format_exc()[:500])
         raise HTTPException(status_code=500, detail="Internal error")
     return result
 
