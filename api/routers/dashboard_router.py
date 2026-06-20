@@ -3,10 +3,10 @@ import secrets
 import traceback
 import uuid
 from datetime import timedelta
-from typing import Literal
+from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from api.auth import CurrentUser, get_current_user, require_role
 from api.db import get_pool
@@ -613,6 +613,272 @@ async def overview(
         }
     except Exception:
         await notify_error("GET /dashboard/overview failed 🚨", traceback.format_exc()[:500])
+        raise HTTPException(status_code=500, detail="Internal error")
+
+
+class PatchSettingsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: Optional[str] = None
+    restrict_adult_content: Optional[bool] = None
+
+
+@router.get("/settings")
+@limiter.limit("60/minute")
+async def get_settings(
+    request: Request,
+    current_user: CurrentUser = Depends(require_role("venue_owner")),
+):
+    # venue_id always comes from the authenticated user — never from the request (BOLA).
+    # Only venue_owner role may read settings; venue_staff gets 403.
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT name, restrict_adult_content,
+                       retap_interval_minutes, billing_unit,
+                       nightly_cap_weekday, nightly_cap_weekend
+                FROM venues WHERE id = $1
+                """,
+                current_user.venue_id,
+            )
+        if not row:
+            raise HTTPException(status_code=404, detail="Venue not found")
+        return {
+            "editable": {
+                "name": row["name"],
+                "restrict_adult_content": row["restrict_adult_content"],
+            },
+            "read_only": {
+                "retap_interval_minutes": int(row["retap_interval_minutes"]),
+                "billing_unit": str(row["billing_unit"]),
+                "nightly_cap_weekday": str(row["nightly_cap_weekday"]),
+                "nightly_cap_weekend": str(row["nightly_cap_weekend"]),
+            },
+        }
+    except HTTPException:
+        raise
+    except Exception:
+        await notify_error("GET /dashboard/settings failed 🚨", traceback.format_exc()[:500])
+        raise HTTPException(status_code=500, detail="Internal error")
+
+
+@router.patch("/settings")
+@limiter.limit("60/minute")
+async def patch_settings(
+    request: Request,
+    body: PatchSettingsRequest,
+    current_user: CurrentUser = Depends(require_role("venue_owner")),
+):
+    # venue_id always comes from the authenticated user — never from the request (BOLA).
+    # Only venue_owner role may edit settings; venue_staff gets 403.
+    try:
+        if body.name is None and body.restrict_adult_content is None:
+            raise HTTPException(status_code=400, detail="No fields to update")
+
+        if body.name is not None:
+            stripped = body.name.strip()
+            if len(stripped) == 0 or len(stripped) > 120:
+                raise HTTPException(status_code=422, detail="Name must be 1-120 characters")
+            body.name = stripped
+
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            # Static queries per field combination — no f-string SQL.
+            # Column names are hardcoded string literals; values are $N parameters.
+            if body.name is not None and body.restrict_adult_content is not None:
+                row = await conn.fetchrow(
+                    """
+                    UPDATE venues SET name=$1, restrict_adult_content=$2, updated_at=NOW()
+                    WHERE id=$3
+                    RETURNING name, restrict_adult_content,
+                              retap_interval_minutes, billing_unit,
+                              nightly_cap_weekday, nightly_cap_weekend
+                    """,
+                    body.name, body.restrict_adult_content, current_user.venue_id,
+                )
+            elif body.name is not None:
+                row = await conn.fetchrow(
+                    """
+                    UPDATE venues SET name=$1, updated_at=NOW()
+                    WHERE id=$2
+                    RETURNING name, restrict_adult_content,
+                              retap_interval_minutes, billing_unit,
+                              nightly_cap_weekday, nightly_cap_weekend
+                    """,
+                    body.name, current_user.venue_id,
+                )
+            else:
+                # restrict_adult_content only
+                # restrict_adult_content change applies to NEW sessions only
+                row = await conn.fetchrow(
+                    """
+                    UPDATE venues SET restrict_adult_content=$1, updated_at=NOW()
+                    WHERE id=$2
+                    RETURNING name, restrict_adult_content,
+                              retap_interval_minutes, billing_unit,
+                              nightly_cap_weekday, nightly_cap_weekend
+                    """,
+                    body.restrict_adult_content, current_user.venue_id,
+                )
+
+        return {
+            "editable": {
+                "name": row["name"],
+                "restrict_adult_content": row["restrict_adult_content"],
+            },
+            "read_only": {
+                "retap_interval_minutes": int(row["retap_interval_minutes"]),
+                "billing_unit": str(row["billing_unit"]),
+                "nightly_cap_weekday": str(row["nightly_cap_weekday"]),
+                "nightly_cap_weekend": str(row["nightly_cap_weekend"]),
+            },
+        }
+    except HTTPException:
+        raise
+    except Exception:
+        await notify_error("PATCH /dashboard/settings failed 🚨", traceback.format_exc()[:500])
+        raise HTTPException(status_code=500, detail="Internal error")
+
+
+@router.get("/billing")
+@limiter.limit("60/minute")
+async def get_billing(
+    request: Request,
+    current_user: CurrentUser = Depends(require_role("venue_owner")),
+):
+    # venue_id always comes from the authenticated user — never from the request (BOLA).
+    # venue_staff must never see billing or dollar figures; only venue_owner allowed.
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            venue_row = await conn.fetchrow(
+                """
+                SELECT billing_unit, nightly_cap_weekday, nightly_cap_weekend,
+                       stripe_customer_id
+                FROM venues WHERE id = $1
+                """,
+                current_user.venue_id,
+            )
+
+            # Tonight boundary: same "last 4am local -> UTC" Postgres computation
+            # used by the overview endpoint to keep DST handling in the DB.
+            tonight_boundary = await conn.fetchval(
+                """
+                SELECT (
+                    (date_trunc('day', (NOW() AT TIME ZONE $1) - INTERVAL '4 hours')
+                        + INTERVAL '4 hours')
+                    AT TIME ZONE $1
+                ) AT TIME ZONE 'UTC'
+                """,
+                VENUE_TIMEZONE,
+            )
+
+            # Day-of-week at tonight's local date (DOW: 0=Sunday, 6=Saturday).
+            dow = await conn.fetchval(
+                """
+                SELECT EXTRACT(DOW FROM (NOW() AT TIME ZONE $1) - INTERVAL '4 hours')::int
+                """,
+                VENUE_TIMEZONE,
+            )
+
+            billable_tables_row = await conn.fetchrow(
+                """
+                SELECT COUNT(DISTINCT gs.table_id) AS billable_tables
+                FROM game_sessions gs
+                WHERE gs.venue_id = $1
+                  AND gs.started_at >= $2
+                  AND gs.started_at IS NOT NULL
+                """,
+                current_user.venue_id,
+                tonight_boundary,
+            )
+
+            # Month start: first 4am of the current local calendar month, in UTC.
+            month_start = await conn.fetchval(
+                """
+                SELECT (
+                    (date_trunc('month', (NOW() AT TIME ZONE $1) - INTERVAL '4 hours')
+                        + INTERVAL '4 hours')
+                    AT TIME ZONE $1
+                ) AT TIME ZONE 'UTC'
+                """,
+                VENUE_TIMEZONE,
+            )
+
+            night_rows = await conn.fetch(
+                """
+                SELECT
+                    date_trunc('day', (gs.started_at AT TIME ZONE 'UTC' AT TIME ZONE $3)
+                        - INTERVAL '4 hours')::date AS play_night,
+                    COUNT(DISTINCT gs.table_id) AS billable_tables,
+                    EXTRACT(DOW FROM date_trunc('day', (gs.started_at AT TIME ZONE 'UTC'
+                        AT TIME ZONE $3) - INTERVAL '4 hours'))::int AS dow
+                FROM game_sessions gs
+                WHERE gs.venue_id = $1
+                  AND gs.started_at >= $2
+                  AND gs.started_at IS NOT NULL
+                GROUP BY play_night, dow
+                ORDER BY play_night
+                """,
+                current_user.venue_id,
+                month_start,
+                VENUE_TIMEZONE,
+            )
+
+        billing_unit_f = float(venue_row["billing_unit"])
+        cap_weekday_f = float(venue_row["nightly_cap_weekday"])
+        cap_weekend_f = float(venue_row["nightly_cap_weekend"])
+
+        is_weekend = dow in (0, 6)
+        tonight_cap = cap_weekend_f if is_weekend else cap_weekday_f
+        billable_tables = int(billable_tables_row["billable_tables"])
+        tonight_raw = billable_tables * billing_unit_f
+        tonight_total = min(tonight_raw, tonight_cap)
+        tonight_capped = tonight_raw > tonight_cap
+
+        month_total = 0.0
+        nights = []
+        for row in night_rows:
+            raw = int(row["billable_tables"]) * billing_unit_f
+            night_is_weekend = int(row["dow"]) in (0, 6)
+            cap = cap_weekend_f if night_is_weekend else cap_weekday_f
+            capped = min(raw, cap)
+            month_total += capped
+            nights.append({
+                "date": str(row["play_night"]),
+                "tables": int(row["billable_tables"]),
+                "raw": f"{raw:.2f}",
+                "capped": f"{capped:.2f}",
+                "cap_applied": raw > cap,
+            })
+
+        return {
+            "is_estimate": True,
+            "model": {
+                "billing_unit": str(venue_row["billing_unit"]),
+                "nightly_cap_weekday": str(venue_row["nightly_cap_weekday"]),
+                "nightly_cap_weekend": str(venue_row["nightly_cap_weekend"]),
+                "currency": "AUD",
+            },
+            "tonight": {
+                "billable_tables": billable_tables,
+                "raw": f"{tonight_raw:.2f}",
+                "cap": f"{tonight_cap:.2f}",
+                "total": f"{tonight_total:.2f}",
+                "cap_applied": tonight_capped,
+                "is_weekend": is_weekend,
+            },
+            "month_estimate": {
+                "total": f"{month_total:.2f}",
+                "nights": nights,
+            },
+            "payment_status": "not_connected",
+            "invoice_history": [],
+        }
+    except Exception:
+        await notify_error("GET /dashboard/billing failed 🚨", traceback.format_exc()[:500])
         raise HTTPException(status_code=500, detail="Internal error")
 
 

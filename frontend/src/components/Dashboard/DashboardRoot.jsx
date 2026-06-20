@@ -9,6 +9,8 @@ import DashboardHome from './DashboardHome.jsx'
 import DashboardTables from './DashboardTables.jsx'
 import DashboardTableDetail from './DashboardTableDetail.jsx'
 import DashboardInsights from './DashboardInsights.jsx'
+import DashboardSettings from './DashboardSettings.jsx'
+import DashboardBilling from './DashboardBilling.jsx'
 import { cardStyle, buttonStyle } from './dashboardStyles'
 
 // Pushes a new path and triggers popstate so DashboardRoot re-reads location.
@@ -194,9 +196,9 @@ export default function DashboardRoot() {
   } else if (path === '/dashboard/insights') {
     content = <DashboardInsights token={token} />
   } else if (path === '/dashboard/settings') {
-    content = <Placeholder label="Settings" />
+    content = <DashboardSettings token={token} user={user} />
   } else if (path === '/dashboard/billing') {
-    content = <Placeholder label="Billing" />
+    content = <DashboardBilling token={token} user={user} />
   } else {
     content = <Placeholder label="Not Found" />
   }

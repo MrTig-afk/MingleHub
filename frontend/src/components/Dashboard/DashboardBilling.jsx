@@ -1,0 +1,186 @@
+import { useEffect, useState } from 'react'
+import { fetchBilling } from '../../services/dashboardApi'
+import { buttonStyle, cardStyle, labelStyle } from './dashboardStyles'
+
+const shimmerCard = (height = 80) => ({
+  ...cardStyle,
+  height,
+  animation: 'dev-shimmer 1.5s infinite',
+  background: 'var(--bg-container)',
+})
+
+export default function DashboardBilling({ token, user }) {
+  const [data, setData] = useState(null)
+  const [fetchError, setFetchError] = useState(null)
+  const [reloadKey, setReloadKey] = useState(0)
+
+  useEffect(() => {
+    let cancelled = false
+    const run = async () => {
+      try {
+        const d = await fetchBilling(token)
+        if (cancelled) return
+        setData(d)
+        setFetchError(null)
+      } catch (e) {
+        if (cancelled) return
+        const msg = e.message || ''
+        if (msg.includes('401') || msg.includes('token') || msg.includes('expired')) {
+          localStorage.removeItem('mh_dashboard_token')
+          window.location.reload()
+          return
+        }
+        setFetchError(msg)
+      }
+    }
+    run()
+    return () => { cancelled = true }
+  }, [token, reloadKey])
+
+  // Owner-only guard — checked after all hooks.
+  if (user.role !== 'venue_owner') {
+    return (
+      <div style={{ ...cardStyle, marginTop: '8px', textAlign: 'center' }}>
+        <p style={{ color: 'var(--on-surface-dim)' }}>
+          Billing is only available to venue owners.
+        </p>
+      </div>
+    )
+  }
+
+  if (data === null && fetchError === null) {
+    return (
+      <div>
+        {[60, 100, 120, 80, 80].map((h, i) => (
+          <div key={i} style={{ ...shimmerCard(h), marginBottom: '12px' }} />
+        ))}
+      </div>
+    )
+  }
+
+  if (fetchError !== null) {
+    return (
+      <div style={{ ...cardStyle, marginTop: '8px' }}>
+        <p style={{ color: 'var(--tertiary)', fontFamily: 'var(--font-mono)', fontSize: '13px', margin: '0 0 12px' }}>
+          Could not load billing. {fetchError}
+        </p>
+        <button
+          onClick={() => { setData(null); setFetchError(null); setReloadKey((k) => k + 1) }}
+          style={buttonStyle}
+        >
+          Retry
+        </button>
+      </div>
+    )
+  }
+
+  return (
+    <div>
+      {/* Estimate disclaimer badge */}
+      <div style={{
+        ...cardStyle,
+        background: 'rgba(255, 215, 0, 0.15)',
+        borderColor: 'rgba(255, 215, 0, 0.3)',
+        textAlign: 'center',
+        marginBottom: '16px',
+      }}>
+        <span style={{ color: '#FFD700', fontWeight: 700, fontSize: '13px' }}>
+          Estimate -- not a real charge
+        </span>
+      </div>
+
+      {/* Billing model card */}
+      <div style={{ ...cardStyle, marginBottom: '12px' }}>
+        <div style={{ fontWeight: 700, fontSize: '14px', marginBottom: '8px' }}>Billing Model</div>
+        <div style={{ fontSize: '13px' }}>A${data.model.billing_unit} per table per night</div>
+        <div style={{ fontSize: '13px' }}>Weekday cap: A${data.model.nightly_cap_weekday}</div>
+        <div style={{ fontSize: '13px' }}>Weekend cap: A${data.model.nightly_cap_weekend}</div>
+      </div>
+
+      {/* Tonight card */}
+      <div style={{ ...cardStyle, marginBottom: '12px' }}>
+        <div style={{ fontWeight: 700, fontSize: '14px', marginBottom: '8px' }}>Tonight</div>
+        <div style={{ fontFamily: 'var(--font-headline)', fontSize: '28px' }}>
+          A${data.tonight.total}
+        </div>
+        <div style={{ fontSize: '13px', color: 'var(--on-surface-dim)', marginTop: '4px' }}>
+          {data.tonight.billable_tables} tables played
+        </div>
+        {data.tonight.is_weekend && (
+          <div style={{ fontSize: '13px', color: 'var(--on-surface-dim)', marginTop: '2px' }}>
+            (weekend rate)
+          </div>
+        )}
+        {data.tonight.cap_applied && (
+          <div style={{
+            display: 'inline-block',
+            marginTop: '6px',
+            background: 'rgba(231, 0, 110, 0.15)',
+            color: 'var(--tertiary)',
+            fontSize: '11px',
+            padding: '2px 8px',
+            borderRadius: '10px',
+            fontWeight: 700,
+          }}>
+            Cap reached
+          </div>
+        )}
+      </div>
+
+      {/* Month estimate card */}
+      <div style={{ ...cardStyle, marginBottom: '12px' }}>
+        <div style={{ fontWeight: 700, fontSize: '14px', marginBottom: '8px' }}>Month to Date</div>
+        <div style={{ fontFamily: 'var(--font-headline)', fontSize: '28px' }}>
+          A${data.month_estimate.total}
+        </div>
+        <div style={{ marginTop: '8px' }}>
+          {data.month_estimate.nights.length > 0
+            ? data.month_estimate.nights.map((night) => {
+                const dateLabel = new Date(night.date + 'T00:00:00').toLocaleDateString([], {
+                  month: 'short',
+                  day: 'numeric',
+                })
+                return (
+                  <div
+                    key={night.date}
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      fontSize: '12px',
+                      padding: '4px 0',
+                    }}
+                  >
+                    <span>{dateLabel}</span>
+                    <span>
+                      {night.tables} tables -- A${night.capped}
+                      {night.cap_applied && (
+                        <span style={{ color: 'var(--on-surface-dim)' }}> (capped)</span>
+                      )}
+                    </span>
+                  </div>
+                )
+              })
+            : (
+              <div style={{ fontSize: '13px', color: 'var(--on-surface-dim)' }}>
+                No billable nights this month.
+              </div>
+            )
+          }
+        </div>
+      </div>
+
+      {/* Payment status card */}
+      <div style={{ ...cardStyle, marginBottom: '12px' }}>
+        <div style={{ fontWeight: 700, fontSize: '14px', marginBottom: '8px' }}>Payment</div>
+        <div style={{ fontSize: '16px', fontWeight: 700 }}>Not connected</div>
+        <div style={{ ...labelStyle, marginTop: '4px' }}>Stripe integration coming soon.</div>
+      </div>
+
+      {/* Invoice history card */}
+      <div style={cardStyle}>
+        <div style={{ fontWeight: 700, fontSize: '14px', marginBottom: '8px' }}>Invoice History</div>
+        <div style={{ fontSize: '13px', color: 'var(--on-surface-dim)' }}>No invoices yet.</div>
+      </div>
+    </div>
+  )
+}

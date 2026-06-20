@@ -77,3 +77,25 @@ export const fetchInsights = (token, range = 'tonight') =>
     if (!r.ok) throw new Error((await r.json()).detail || r.status)
     return r.json()
   })
+
+export const fetchSettings = (token) =>
+  fetch(`${BASE}/api/dashboard/settings`, { headers: h(token) }).then(async (r) => {
+    if (!r.ok) throw new Error((await r.json()).detail || r.status)
+    return r.json()
+  })
+
+export const patchSettings = (token, body) =>
+  fetch(`${BASE}/api/dashboard/settings`, {
+    method: 'PATCH',
+    headers: h(token),
+    body: JSON.stringify(body),
+  }).then(async (r) => {
+    if (!r.ok) throw new Error((await r.json()).detail || r.status)
+    return r.json()
+  })
+
+export const fetchBilling = (token) =>
+  fetch(`${BASE}/api/dashboard/billing`, { headers: h(token) }).then(async (r) => {
+    if (!r.ok) throw new Error((await r.json()).detail || r.status)
+    return r.json()
+  })
