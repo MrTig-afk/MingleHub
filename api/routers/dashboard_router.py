@@ -2,8 +2,10 @@ import os
 import secrets
 import traceback
 import uuid
+from datetime import timedelta
+from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from api.auth import CurrentUser, get_current_user, require_role
@@ -65,7 +67,11 @@ async def list_tables(
                        EXISTS (
                            SELECT 1 FROM nfc_tags n
                            WHERE n.table_id = t.id AND n.status = 'active'
-                       ) AS tag_paired
+                       ) AS tag_paired,
+                       (
+                           SELECT COUNT(*) FROM game_sessions gs
+                           WHERE gs.table_id = t.id AND gs.ended_at IS NULL
+                       ) AS active_session_count
                 FROM tables t
                 WHERE t.venue_id = $1
                 ORDER BY t.table_number
@@ -77,6 +83,381 @@ async def list_tables(
         raise HTTPException(status_code=500, detail="Internal error")
 
     return [dict(row) for row in rows]
+
+
+@router.get("/tables/{table_id}")
+@limiter.limit("60/minute")
+async def table_detail(
+    table_id: str,
+    request: Request,
+    current_user: CurrentUser = Depends(require_role("venue_owner", "venue_staff")),
+):
+    # BOLA: the table must belong to the token's venue — never trust client IDs.
+    try:
+        validated_id = str(uuid.UUID(table_id))
+    except (ValueError, AttributeError):
+        raise HTTPException(status_code=404, detail="Table not found")
+
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            table = await conn.fetchrow(
+                "SELECT id, table_number, content_ceiling FROM tables WHERE id = $1 AND venue_id = $2",
+                validated_id, current_user.venue_id,
+            )
+            if not table:
+                raise HTTPException(status_code=404, detail="Table not found")
+
+            tag = await conn.fetchrow(
+                """
+                SELECT tag_uid, status, paired_at
+                FROM nfc_tags
+                WHERE table_id = $1 AND venue_id = $2
+                ORDER BY paired_at DESC NULLS LAST
+                LIMIT 1
+                """,
+                validated_id, current_user.venue_id,
+            )
+
+            # Reuse the "last 4am local -> UTC" boundary for recent ended sessions.
+            tonight_boundary = await conn.fetchval(
+                """
+                SELECT (
+                    (date_trunc('day', (NOW() AT TIME ZONE $1) - INTERVAL '4 hours')
+                        + INTERVAL '4 hours')
+                    AT TIME ZONE $1
+                ) AT TIME ZONE 'UTC'
+                """,
+                VENUE_TIMEZONE,
+            )
+
+            session_rows = await conn.fetch(
+                """
+                SELECT
+                    gs.id AS session_id,
+                    gs.group_label,
+                    gs.started_at,
+                    gs.created_at,
+                    gs.current_round_number,
+                    gs.origin_phone_id,
+                    EXTRACT(EPOCH FROM NOW() - gs.started_at) AS seconds_active,
+                    EXTRACT(EPOCH FROM NOW() - COALESCE(gs.last_activity_at, gs.created_at))
+                        AS idle_seconds,
+                    COALESCE(v.retap_interval_minutes, 15) * 60 AS threshold_seconds
+                FROM game_sessions gs
+                JOIN venues v ON v.id = gs.venue_id
+                WHERE gs.table_id = $1
+                  AND gs.venue_id = $2
+                  AND gs.ended_at IS NULL
+                ORDER BY gs.created_at
+                """,
+                validated_id, current_user.venue_id,
+            )
+
+            state_map = {
+                "active": "active",
+                "prompt": "active",
+                "paused": "paused",
+                "expired": "idle",
+            }
+
+            active_sessions = []
+            for row in session_rows:
+                session_id = str(row["session_id"])
+
+                if row["started_at"] is None:
+                    status = "lobby"
+                    secs_active = 0
+                else:
+                    retap = compute_retap_state(
+                        float(row["idle_seconds"]),
+                        int(row["threshold_seconds"]),
+                    )
+                    status = state_map.get(retap["state"], "active")
+                    secs_active = int(row["seconds_active"])
+
+                leaderboard_rows = await conn.fetch(
+                    """
+                    SELECT name, score, left_early
+                    FROM game_players
+                    WHERE session_id = $1
+                    ORDER BY left_early ASC, score DESC, name ASC
+                    """,
+                    session_id,
+                )
+
+                round_rows = await conn.fetch(
+                    """
+                    SELECT round_number, round_type, result, score_awarded
+                    FROM rounds
+                    WHERE session_id = $1
+                    ORDER BY created_at
+                    """,
+                    session_id,
+                )
+
+                # Derive current round type from the last round row — no extra query.
+                current_round_type = round_rows[-1]["round_type"] if round_rows else None
+
+                host_name = None
+                if row["origin_phone_id"] is not None:
+                    host_row = await conn.fetchrow(
+                        """
+                        SELECT name FROM game_players
+                        WHERE session_id = $1 AND phone_id = $2 AND left_early = FALSE
+                        LIMIT 1
+                        """,
+                        session_id, str(row["origin_phone_id"]),
+                    )
+                    if host_row:
+                        host_name = host_row["name"]
+
+                active_sessions.append({
+                    "session_id": session_id,
+                    "group_label": row["group_label"],
+                    "status": status,
+                    "current_round_number": row["current_round_number"],
+                    "current_round_type": current_round_type,
+                    "seconds_active": secs_active,
+                    "host_name": host_name,
+                    "leaderboard": [
+                        {
+                            "name": r["name"],
+                            "score": int(r["score"]),
+                            "left_early": r["left_early"],
+                        }
+                        for r in leaderboard_rows
+                    ],
+                    "round_history": [
+                        {
+                            "round_number": r["round_number"],
+                            "round_type": r["round_type"],
+                            "result": r["result"],
+                            "score_awarded": int(r["score_awarded"]) if r["score_awarded"] is not None else 0,
+                        }
+                        for r in round_rows
+                    ],
+                })
+
+            recent_rows = await conn.fetch(
+                """
+                SELECT
+                    gs.id AS session_id,
+                    gs.group_label,
+                    gs.player_count,
+                    gs.total_score,
+                    gs.total_rounds,
+                    gs.ended_at,
+                    gs.end_reason
+                FROM game_sessions gs
+                WHERE gs.table_id = $1
+                  AND gs.venue_id = $2
+                  AND gs.ended_at IS NOT NULL
+                  AND gs.started_at >= $3
+                ORDER BY gs.ended_at DESC
+                """,
+                validated_id, current_user.venue_id, tonight_boundary,
+            )
+
+        return {
+            "table": {
+                "id": str(table["id"]),
+                "table_number": table["table_number"],
+                "content_ceiling": table["content_ceiling"],
+            },
+            "tag": {
+                "tag_uid": tag["tag_uid"],
+                "status": tag["status"],
+                "paired_at": tag["paired_at"].isoformat() if tag["paired_at"] else None,
+            } if tag else None,
+            "active_sessions": active_sessions,
+            "recent_sessions": [
+                {
+                    "session_id": str(r["session_id"]),
+                    "group_label": r["group_label"],
+                    "player_count": r["player_count"],
+                    "total_score": int(r["total_score"]) if r["total_score"] is not None else 0,
+                    "total_rounds": int(r["total_rounds"]) if r["total_rounds"] is not None else 0,
+                    "ended_at": r["ended_at"].isoformat() if r["ended_at"] else None,
+                    "end_reason": r["end_reason"],
+                }
+                for r in recent_rows
+            ],
+        }
+    except HTTPException:
+        raise
+    except Exception:
+        await notify_error("GET /dashboard/tables/{id} failed \U0001f6a8", traceback.format_exc()[:500])
+        raise HTTPException(status_code=500, detail="Internal error")
+
+
+@router.get("/insights")
+@limiter.limit("60/minute")
+async def insights(
+    request: Request,
+    range_param: Literal["tonight", "7d", "30d"] = Query("tonight", alias="range"),
+    current_user: CurrentUser = Depends(require_role("venue_owner", "venue_staff")),
+):
+    # venue_id always comes from the authenticated user, never from the request (BOLA).
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            tonight_boundary = await conn.fetchval(
+                """
+                SELECT (
+                    (date_trunc('day', (NOW() AT TIME ZONE $1) - INTERVAL '4 hours')
+                        + INTERVAL '4 hours')
+                    AT TIME ZONE $1
+                ) AT TIME ZONE 'UTC'
+                """,
+                VENUE_TIMEZONE,
+            )
+
+            if range_param == "tonight":
+                range_start = tonight_boundary
+            elif range_param == "7d":
+                range_start = tonight_boundary - timedelta(days=6)
+            else:  # 30d
+                range_start = tonight_boundary - timedelta(days=29)
+
+            totals_row = await conn.fetchrow(
+                """
+                SELECT
+                    COUNT(*) AS session_count,
+                    COALESCE(SUM(gs.total_rounds), 0) AS total_rounds,
+                    ROUND(AVG(gs.player_count)::numeric, 1) AS avg_players
+                FROM game_sessions gs
+                JOIN tables t ON t.id = gs.table_id
+                WHERE t.venue_id = $1
+                  AND gs.started_at >= $2
+                """,
+                current_user.venue_id, range_start,
+            )
+
+            avg_minutes_val = await conn.fetchval(
+                """
+                SELECT
+                    ROUND(AVG(EXTRACT(EPOCH FROM gs.ended_at - gs.started_at) / 60.0)::numeric, 1)
+                FROM game_sessions gs
+                JOIN tables t ON t.id = gs.table_id
+                WHERE t.venue_id = $1
+                  AND gs.started_at >= $2
+                  AND gs.ended_at IS NOT NULL
+                  AND gs.started_at IS NOT NULL
+                """,
+                current_user.venue_id, range_start,
+            )
+
+            player_count = await conn.fetchval(
+                """
+                SELECT COUNT(*) AS player_count
+                FROM game_players gp
+                JOIN game_sessions gs ON gs.id = gp.session_id
+                JOIN tables t ON t.id = gs.table_id
+                WHERE t.venue_id = $1
+                  AND gs.started_at >= $2
+                  AND gp.left_early = FALSE
+                """,
+                current_user.venue_id, range_start,
+            )
+
+            round_mix_rows = await conn.fetch(
+                """
+                SELECT r.round_type, COUNT(*) AS count
+                FROM rounds r
+                JOIN game_sessions gs ON gs.id = r.session_id
+                JOIN tables t ON t.id = gs.table_id
+                WHERE t.venue_id = $1
+                  AND gs.started_at >= $2
+                GROUP BY r.round_type
+                """,
+                current_user.venue_id, range_start,
+            )
+
+            trivia_row = await conn.fetchrow(
+                """
+                SELECT
+                    COALESCE(SUM(gs.trivia_correct), 0) AS trivia_correct,
+                    COALESCE(SUM(gs.trivia_wrong), 0) AS trivia_wrong
+                FROM game_sessions gs
+                JOIN tables t ON t.id = gs.table_id
+                WHERE t.venue_id = $1
+                  AND gs.started_at >= $2
+                """,
+                current_user.venue_id, range_start,
+            )
+
+            roulette_row = await conn.fetchrow(
+                """
+                SELECT
+                    COUNT(*) FILTER (WHERE r.round_type = 'roulette' AND r.result = 'completed')
+                        AS roulette_completed,
+                    COUNT(*) FILTER (WHERE r.card_type = 'drink')
+                        AS drink_rounds
+                FROM rounds r
+                JOIN game_sessions gs ON gs.id = r.session_id
+                JOIN tables t ON t.id = gs.table_id
+                WHERE t.venue_id = $1
+                  AND gs.started_at >= $2
+                """,
+                current_user.venue_id, range_start,
+            )
+
+            trend_rows = await conn.fetch(
+                """
+                SELECT
+                    date_trunc('day', (gs.started_at AT TIME ZONE 'UTC' AT TIME ZONE $3)
+                        - INTERVAL '4 hours')::date AS play_night,
+                    COUNT(*) AS session_count
+                FROM game_sessions gs
+                JOIN tables t ON t.id = gs.table_id
+                WHERE t.venue_id = $1
+                  AND gs.started_at >= $2
+                GROUP BY play_night
+                ORDER BY play_night
+                """,
+                current_user.venue_id, range_start, VENUE_TIMEZONE,
+            )
+
+        round_mix = {"chooser": 0, "roulette": 0, "trivia": 0}
+        for row in round_mix_rows:
+            if row["round_type"] in round_mix:
+                round_mix[row["round_type"]] = int(row["count"])
+
+        trivia_correct = int(trivia_row["trivia_correct"])
+        trivia_wrong = int(trivia_row["trivia_wrong"])
+        total_trivia = trivia_correct + trivia_wrong
+        trivia_accuracy = round(trivia_correct / total_trivia, 3) if total_trivia > 0 else None
+
+        trend = [
+            {"date": str(row["play_night"]), "count": int(row["session_count"])}
+            for row in trend_rows
+        ]
+
+        return {
+            "range": range_param,
+            "totals": {
+                "sessions": int(totals_row["session_count"]),
+                "players": int(player_count),
+                "rounds": int(totals_row["total_rounds"]),
+                "avg_session_minutes": float(avg_minutes_val) if avg_minutes_val is not None else None,
+                "avg_players": float(totals_row["avg_players"]) if totals_row["avg_players"] is not None else None,
+            },
+            "round_mix": round_mix,
+            "trivia": {
+                "correct": trivia_correct,
+                "wrong": trivia_wrong,
+                "accuracy": trivia_accuracy,
+            },
+            "roulette_and_drinks": {
+                "roulette_completed": int(roulette_row["roulette_completed"]),
+                "drink_rounds": int(roulette_row["drink_rounds"]),
+            },
+            "trend": trend,
+        }
+    except Exception:
+        await notify_error("GET /dashboard/insights failed \U0001f6a8", traceback.format_exc()[:500])
+        raise HTTPException(status_code=500, detail="Internal error")
 
 
 @router.get("/tags")

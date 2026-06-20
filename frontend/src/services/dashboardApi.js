@@ -65,3 +65,15 @@ export const devResetTable = (token, tableNumber) =>
     if (!r.ok) throw new Error((await r.json()).detail || r.status)
     return r.json()
   })
+
+export const fetchTableDetail = (token, tableId) =>
+  fetch(`${BASE}/api/dashboard/tables/${tableId}`, { headers: h(token) }).then(async (r) => {
+    if (!r.ok) throw new Error((await r.json()).detail || r.status)
+    return r.json()
+  })
+
+export const fetchInsights = (token, range = 'tonight') =>
+  fetch(`${BASE}/api/dashboard/insights?range=${range}`, { headers: h(token) }).then(async (r) => {
+    if (!r.ok) throw new Error((await r.json()).detail || r.status)
+    return r.json()
+  })

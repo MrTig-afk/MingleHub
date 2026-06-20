@@ -6,6 +6,9 @@ import PairTags from '../PairTags/PairTags.jsx'
 import DashboardLogin from './DashboardLogin.jsx'
 import DashboardShell from './DashboardShell.jsx'
 import DashboardHome from './DashboardHome.jsx'
+import DashboardTables from './DashboardTables.jsx'
+import DashboardTableDetail from './DashboardTableDetail.jsx'
+import DashboardInsights from './DashboardInsights.jsx'
 import { cardStyle, buttonStyle } from './dashboardStyles'
 
 // Pushes a new path and triggers popstate so DashboardRoot re-reads location.
@@ -183,10 +186,13 @@ export default function DashboardRoot() {
     content = <DashboardHome token={token} navigate={navigate} />
   } else if (path === '/dashboard/pair-tags') {
     content = <PairTags />
-  } else if (path === '/dashboard/tables') {
-    content = <Placeholder label="Tables" />
+  } else if (path === '/dashboard/tables' || path === '/dashboard/tables/') {
+    content = <DashboardTables token={token} navigate={navigate} />
+  } else if (path.startsWith('/dashboard/tables/')) {
+    const tableId = path.replace('/dashboard/tables/', '').replace(/\/$/, '')
+    content = <DashboardTableDetail token={token} tableId={tableId} navigate={navigate} user={user} />
   } else if (path === '/dashboard/insights') {
-    content = <Placeholder label="Insights" />
+    content = <DashboardInsights token={token} />
   } else if (path === '/dashboard/settings') {
     content = <Placeholder label="Settings" />
   } else if (path === '/dashboard/billing') {
