@@ -473,6 +473,15 @@ async def join_existing_session(conn, session_id: str, name: str | None, phone_i
         if existing:
             return {"session_id": session_id, "player_id": str(existing["id"]), "name": existing["name"]}
 
+    # Cap new joiners at MAX_PLAYERS (active). Re-tap resume above bypasses this so an
+    # existing player always gets back in; only brand-new players are capped.
+    active_count = await conn.fetchval(
+        "SELECT COUNT(*) FROM game_players WHERE session_id = $1 AND left_early = FALSE",
+        session_id,
+    )
+    if active_count >= MAX_PLAYERS:
+        raise ValueError("session_full")
+
     player_id = str(uuid.uuid4())
     player_name = name or "New Player"
     await conn.execute(

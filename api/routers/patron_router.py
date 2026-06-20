@@ -345,6 +345,8 @@ async def join_session(request: Request, session_id: str, body: JoinSessionReque
                 result = await lobby_service.join_existing_session(conn, session_id, body.name, body.phone_id)
             except LookupError:
                 raise HTTPException(status_code=404, detail="Not found")
+            except ValueError:
+                raise HTTPException(status_code=409, detail="Session full")
     except HTTPException:
         raise
     except Exception:
@@ -665,9 +667,13 @@ async def leave_session(request: Request, session_id: str, body: PhoneIdBody):
                 raise HTTPException(status_code=404, detail="Not found")
 
             if origin == body.phone_id:
-                # Host leave -> migration path
-                result = await session_service.migrate_host(
-                    conn, session_id, body.phone_id
+                # Host leave -> migration path. Route through _run_trivia so its
+                # LookupError/PermissionError/ValueError map to 404/403/409 instead
+                # of a blanket 500 (e.g. the session ending between the check above
+                # and migrate_host's own guard).
+                result = await _run_trivia(
+                    "migrate_host",
+                    session_service.migrate_host(conn, session_id, body.phone_id),
                 )
             else:
                 # Non-host leave -> existing path

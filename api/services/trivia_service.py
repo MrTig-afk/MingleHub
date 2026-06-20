@@ -448,12 +448,18 @@ async def _maybe_complete(conn, rnd) -> None:
         """,
         rnd["id"],
     )
+    # Only ACTIVE participants count toward "everyone's done" — otherwise a player
+    # who answered everything and then left would satisfy the threshold and close
+    # the round while still-present players are mid-question (their answers lost).
     fully_done = await conn.fetchval(
         """
         SELECT COUNT(*) FROM (
-            SELECT phone_id FROM trivia_answers
-            WHERE trivia_round_id = $1
-            GROUP BY phone_id HAVING COUNT(*) >= $2
+            SELECT ta.phone_id FROM trivia_answers ta
+            JOIN trivia_participants tp
+              ON tp.trivia_round_id = ta.trivia_round_id AND tp.phone_id = ta.phone_id
+            JOIN game_players gp ON gp.id = tp.player_id
+            WHERE ta.trivia_round_id = $1 AND gp.left_early = FALSE
+            GROUP BY ta.phone_id HAVING COUNT(*) >= $2
         ) t
         """,
         rnd["id"], total_q,
@@ -606,10 +612,23 @@ async def get_current_state(conn, session_id: str, phone_id: str) -> dict | None
         return None
 
     player = await _resolve_player(conn, session_id, phone_id)
+    if player is None:
+        # BOLA: a phone that isn't a member of this session gets nothing sensitive
+        # (no questions, leaderboard, or round state). is_origin is still surfaced
+        # (always False here — the origin is always a member) to preserve the
+        # promotion poll-fallback contract. A real participant — even one who left —
+        # always has a game_players row, so legit polling is unaffected.
+        return {
+            "session_id": session_id,
+            "is_member": False,
+            "left_early": False,
+            "is_origin": session["origin_phone_id"] == phone_id,
+            "phase": "not_member",
+        }
     base = {
         "session_id": session_id,
-        "is_member": player is not None,
-        "left_early": bool(player["left_early"]) if player else False,
+        "is_member": True,
+        "left_early": bool(player["left_early"]),
         # Poll fallback for host promotion: if this phone is now the origin,
         # SessionParticipant can detect promotion even if host_changed broadcast was missed.
         "is_origin": session["origin_phone_id"] == phone_id,
