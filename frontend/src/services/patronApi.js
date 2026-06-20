@@ -250,6 +250,44 @@ export const fetchChannelAuth = (tableId, phoneId) =>
     return r.json()
   })
 
+// --- Roulette round (gamespec Round Type 3). Origin-driven start/skip/reveal;
+// every active phone votes via voteLoser.
+export const startRoulette = (sessionId, phoneId) =>
+  fetch(`${BASE}/api/patron/sessions/${sessionId}/roulette/start`, {
+    method: 'POST', headers: h,
+    body: JSON.stringify({ phone_id: phoneId }),
+  }).then(async (r) => {
+    if (!r.ok) throw new Error((await r.json()).detail || r.status)
+    return r.json()
+  })
+
+export const voteLoser = (roundId, phoneId, votedPlayerId) =>
+  fetch(`${BASE}/api/patron/rounds/${roundId}/vote-loser`, {
+    method: 'POST', headers: h,
+    body: JSON.stringify({ phone_id: phoneId, voted_player_id: votedPlayerId }),
+  }).then(async (r) => {
+    if (!r.ok) throw new Error((await r.json()).detail || r.status)
+    return r.json()
+  })
+
+export const revealRoulette = (roundId, phoneId) =>
+  fetch(`${BASE}/api/patron/rounds/${roundId}/roulette/reveal`, {
+    method: 'POST', headers: h,
+    body: JSON.stringify({ phone_id: phoneId }),
+  }).then(async (r) => {
+    if (!r.ok) throw new Error((await r.json()).detail || r.status)
+    return r.json()
+  })
+
+export const skipRoulette = (roundId, phoneId) =>
+  fetch(`${BASE}/api/patron/rounds/${roundId}/roulette/skip`, {
+    method: 'POST', headers: h,
+    body: JSON.stringify({ phone_id: phoneId }),
+  }).then(async (r) => {
+    if (!r.ok) throw new Error((await r.json()).detail || r.status)
+    return r.json()
+  })
+
 // Dev-only — stands in for a physical tag by computing the signature it
 // would produce for a given tag_uid + counter. 404s outside DEV_MODE.
 export const simulateTap = (tagUid, counter) =>

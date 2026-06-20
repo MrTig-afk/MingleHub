@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 
 from api.db import get_pool
 from api.security import limiter, verify_api_key
-from api.services import chooser_service, lobby_service, realtime_auth, round_service, trivia_service
+from api.services import chooser_service, lobby_service, realtime_auth, round_service, roulette_service, trivia_service
 from api.services.notify import notify_error
 from api.services.nfc_crypto import decrypt_tag_key
 from api.services.nfc_verify import verify_signature
@@ -140,6 +140,10 @@ class JoinSessionRequest(BaseModel):
 
 class ChannelAuthRequest(PhoneIdBody):
     table_id: str = Field(min_length=1)
+
+
+class VoteLoserRequest(PhoneIdBody):
+    voted_player_id: str = Field(min_length=1)
 
 
 class AnswerRequest(PhoneIdBody):
@@ -672,5 +676,87 @@ async def rejoin_session(request: Request, session_id: str, body: PhoneIdBody):
         raise
     except Exception:
         await notify_error("POST /patron/sessions/rejoin failed 🚨", traceback.format_exc()[:500])
+        raise HTTPException(status_code=500, detail="Internal error")
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Roulette round (gamespec.md: Round Type 3 -- Roulette). Group challenge:
+# the whole table plays, then votes on who lost. Origin drives start/skip/reveal;
+# every active phone votes via vote-loser. correct_option not applicable here.
+# ---------------------------------------------------------------------------
+
+@router.post("/sessions/{session_id}/roulette/start")
+@limiter.limit("30/minute")
+async def roulette_start(request: Request, session_id: str, body: PhoneIdBody):
+    """Origin opens a Roulette round (picks a challenge card, broadcasts)."""
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            result = await _run_trivia(
+                "roulette_start",
+                roulette_service.start_roulette(conn, session_id, body.phone_id),
+            )
+    except HTTPException:
+        raise
+    except Exception:
+        await notify_error("POST /patron/roulette/start failed", traceback.format_exc()[:500])
+        raise HTTPException(status_code=500, detail="Internal error")
+    return result
+
+
+@router.post("/rounds/{round_id}/vote-loser")
+@limiter.limit("60/minute")
+async def vote_loser(request: Request, round_id: str, body: VoteLoserRequest):
+    """Any active player votes for who lost the Roulette challenge."""
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            result = await _run_trivia(
+                "vote_loser",
+                roulette_service.cast_vote(conn, round_id, body.phone_id, body.voted_player_id),
+            )
+    except HTTPException:
+        raise
+    except Exception:
+        await notify_error("POST /patron/rounds/vote-loser failed", traceback.format_exc()[:500])
+        raise HTTPException(status_code=500, detail="Internal error")
+    return result
+
+
+@router.post("/rounds/{round_id}/roulette/reveal")
+@limiter.limit("30/minute")
+async def roulette_reveal(request: Request, round_id: str, body: PhoneIdBody):
+    """Origin force-tallies with votes cast so far (partial votes OK)."""
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            result = await _run_trivia(
+                "roulette_reveal",
+                roulette_service.tally_roulette(conn, round_id, body.phone_id),
+            )
+    except HTTPException:
+        raise
+    except Exception:
+        await notify_error("POST /patron/roulette/reveal failed", traceback.format_exc()[:500])
+        raise HTTPException(status_code=500, detail="Internal error")
+    return result
+
+
+@router.post("/rounds/{round_id}/roulette/skip")
+@limiter.limit("30/minute")
+async def roulette_skip(request: Request, round_id: str, body: PhoneIdBody):
+    """Origin skips the Roulette round -- 0 points, move on."""
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            result = await _run_trivia(
+                "roulette_skip",
+                roulette_service.skip_roulette(conn, round_id, body.phone_id),
+            )
+    except HTTPException:
+        raise
+    except Exception:
+        await notify_error("POST /patron/roulette/skip failed", traceback.format_exc()[:500])
         raise HTTPException(status_code=500, detail="Internal error")
     return result

@@ -16,6 +16,7 @@ load_dotenv(os.path.join(ROOT, "api", ".env"))
 from api.dev_fixtures import OWNER_A_CLERK_ID, VENUE_A_ID  # noqa: E402
 from scripts.seed_bar_cards import seed as seed_bar_cards  # noqa: E402
 from scripts.seed_platform import seed as seed_platform  # noqa: E402
+from scripts.seed_roulette_cards import seed as seed_roulette_cards  # noqa: E402
 from scripts.seed_trivia_questions import seed as seed_trivia_questions  # noqa: E402
 
 
@@ -33,6 +34,7 @@ def _seed_dev_fixtures():
             await seed_platform(conn)
             await seed_bar_cards(conn)
             await seed_trivia_questions(conn)
+            await seed_roulette_cards(conn)
         finally:
             await conn.close()
 
@@ -176,6 +178,11 @@ def _teardown_table(table_id):
             )
             await conn.execute(
                 f"DELETE FROM trivia_rounds WHERE session_id IN ({sessions_subq})",
+                table_id,
+            )
+            await conn.execute(
+                "DELETE FROM roulette_votes WHERE round_id IN "
+                "(SELECT id FROM rounds WHERE session_id IN (SELECT id FROM game_sessions WHERE table_id = $1))",
                 table_id,
             )
             await conn.execute(

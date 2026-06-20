@@ -3,7 +3,7 @@ import AnswerTiles from './AnswerTiles'
 import Leaderboard from './Leaderboard'
 import Toast from '../Toast'
 import useSessionChannel from '../../hooks/useSessionChannel'
-import { answerTrivia, fetchTriviaCurrent, leaveSession, rejoinSession } from '../../services/patronApi'
+import { answerTrivia, fetchTriviaCurrent, leaveSession, rejoinSession, voteLoser } from '../../services/patronApi'
 
 const POLL_MS = 2000
 
@@ -25,9 +25,11 @@ export default function SessionParticipant({ venueName, sessionId, phoneId, tabl
   const [left, setLeft] = useState(false)
   const [error, setError] = useState(null)
   const [toast, setToast] = useState(null)
+  const [rouletteResult, setRouletteResult] = useState(null) // brief result flash
   const pollRef = useRef(null)
   const roundRef = useRef(null)
   const toastTimer = useRef(null)
+  const rouletteTimer = useRef(null)
 
   const showToast = useCallback((msg) => {
     setToast(msg)
@@ -63,12 +65,31 @@ export default function SessionParticipant({ venueName, sessionId, phoneId, tabl
   useSessionChannel(tableId, phoneId, (event, payload) => {
     if (event === 'player_left') showToast(`${payload?.name || 'A player'} left the game`)
     if (event === 'player_rejoined') showToast(`${payload?.name || 'A player'} rejoined`)
+    // Once the roulette round resolves, get_current_state returns between_rounds,
+    // so show the result (who lost) from the broadcast for a few seconds before
+    // the poll replaces it with the scoreboard.
+    if (event === 'roulette:result') {
+      setRouletteResult(payload)
+      clearTimeout(rouletteTimer.current)
+      rouletteTimer.current = setTimeout(() => setRouletteResult(null), 3500)
+    }
+    // roulette:vote re-polls to update the vote count; other events too.
     if (pollRef.current) pollRef.current()
   })
 
   const handleAnswer = async (letter, timeMs) => {
     const data = await answerTrivia(state.trivia_round_id, phoneId, myIndex, letter, timeMs)
     setLocalAnswers((prev) => ({ ...prev, [myIndex]: data }))
+  }
+
+  const handleVoteLoser = async (playerId) => {
+    try {
+      await voteLoser(state.round_id, phoneId, playerId)
+      // Re-poll to get updated vote count / result from server
+      pollRef.current?.()
+    } catch (e) {
+      setError(e.message)
+    }
   }
 
   const handleNext = () => {
@@ -112,8 +133,54 @@ export default function SessionParticipant({ venueName, sessionId, phoneId, tabl
         </Screen>
       )
     }
+    // Brief Roulette result flash (overrides the poll's between_rounds for ~3.5s).
+    if (rouletteResult) {
+      if (rouletteResult.skipped) {
+        return <Screen><p style={{ fontSize: '48px', margin: 0 }}>⏭️</p><h2 style={headlineStyle}>Skipped</h2></Screen>
+      }
+      const losers = rouletteResult.losers || []
+      const names = losers.map((l) => l.name).join(', ')
+      return (
+        <Screen>
+          <p style={{ fontSize: '48px', margin: 0 }}>🎰</p>
+          <h2 style={headlineStyle}>{losers.length > 0 ? `${names} lost!` : 'All tied!'}</h2>
+          {losers.length > 0 && rouletteResult.drink_consequence && (
+            <p style={dimMono}>{rouletteResult.drink_consequence}</p>
+          )}
+          {rouletteResult.points_awarded > 0 && <p style={dimMono}>+3 for everyone else</p>}
+        </Screen>
+      )
+    }
     if (!state) {
       return <Screen><p style={dimMono}>Connecting…</p>{error && <p style={errStyle}>{error}</p>}</Screen>
+    }
+
+    if (state.phase === 'roulette') {
+      // Active Roulette round -- show vote UI if not yet voted, progress if already voted.
+      return (
+        <Screen>
+          <p style={{ fontSize: '44px', margin: 0 }}>🎰</p>
+          <h1 style={headlineStyle}>Roulette!</h1>
+          <p style={{ ...dimMono, fontSize: '16px', margin: '0 0 8px' }}>{state.prompt}</p>
+          <p style={dimMono}>{state.drink_consequence}</p>
+
+          {/* Vote UI: player buttons (hidden once voted) */}
+          {!state.my_vote && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', width: '100%', maxWidth: '320px' }}>
+              <p style={dimMono}>Who lost?</p>
+              {(state.players || []).map((p) => (
+                <button key={p.id} onClick={() => handleVoteLoser(p.id)} style={primaryButton}>
+                  {p.name}
+                </button>
+              ))}
+            </div>
+          )}
+          {state.my_vote && <p style={dimMono}>Voted! {state.voted_count}/{state.active_total}</p>}
+
+          <button onClick={handleLeave} style={leaveButton}>Leave game</button>
+          {error && <p style={errStyle}>{error}</p>}
+        </Screen>
+      )
     }
 
     if (state.phase === 'gather') {
