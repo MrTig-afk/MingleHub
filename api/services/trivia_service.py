@@ -612,6 +612,14 @@ async def get_current_state(conn, session_id: str, phone_id: str) -> dict | None
         "leaderboard": await _leaderboard(conn, session_id),
     }
 
+    # Game over -> tell the polling phone to show the Recap. This is the reliable
+    # path: the game_ended realtime broadcast accelerates it, but a dropped/late
+    # broadcast (or a missed channel re-auth) must not strand a joined phone on
+    # the between-rounds screen -- the 2s poll catches it within a tick.
+    if session["ended_at"] is not None:
+        base["phase"] = "ended"
+        return base
+
     # Check for active roulette round (takes priority over trivia)
     roulette_round = await conn.fetchrow(
         """

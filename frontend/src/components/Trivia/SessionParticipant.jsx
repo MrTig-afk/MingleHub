@@ -138,7 +138,9 @@ export default function SessionParticipant({ venueName, sessionId, phoneId, tabl
   }
 
   const renderContent = () => {
-    if (gameEnded) {
+    // Game over: the realtime game_ended flag is the fast path; the poll's
+    // phase==='ended' is the reliable fallback if that broadcast was missed.
+    if (gameEnded || state?.phase === 'ended') {
       return <Recap sessionId={sessionId} venueName={venueName} />
     }
     // Left this game (just tapped Leave, or re-tapped back in later — the server
