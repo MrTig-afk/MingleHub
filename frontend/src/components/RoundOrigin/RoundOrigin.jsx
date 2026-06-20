@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import ChooserRound from '../ChooserRound/ChooserRound'
 import FingerChooser from '../FingerChooser/FingerChooser'
+import Recap from '../Recap/Recap'
 import RouletteRound from '../Roulette/RouletteRound'
 import TriviaOriginRound from '../Trivia/TriviaOriginRound'
 import Toast from '../Toast'
 import useSessionChannel from '../../hooks/useSessionChannel'
-import { fetchLeaderboard, pickHotSeat } from '../../services/patronApi'
+import { endGame, fetchLeaderboard, pickHotSeat } from '../../services/patronApi'
 
 // Round cadence: Chooser -> Roulette -> Trivia -> Chooser -> Roulette -> Trivia …
 // Falls back to Chooser when a round type needs >= 2 active players and there
@@ -37,6 +38,7 @@ export default function RoundOrigin({ venueName, sessionId, phoneId, tableId, ad
   const [recentWinners, setRecentWinners] = useState([])
   const [activeCount, setActiveCount] = useState(playerCount)
   const [toast, setToast] = useState(null)
+  const [gameEnded, setGameEnded] = useState(false)
   const toastTimer = useRef(null)
 
   const roundType = decideRoundType(roundNumber, activeCount)
@@ -73,6 +75,11 @@ export default function RoundOrigin({ venueName, sessionId, phoneId, tableId, ad
   }, [sessionId])
 
   useSessionChannel(tableId, phoneId, (event, payload) => {
+    // Multi-group safety: only react to game_ended for our own session.
+    if (event === 'game_ended' && payload?.session_id === sessionId) {
+      queueMicrotask(() => setGameEnded(true))
+      return
+    }
     if (event !== 'player_left' && event !== 'player_rejoined') return
     const name = payload?.name || 'A player'
     const msg = event === 'player_left' ? `${name} left the game` : `${name} rejoined`
@@ -105,6 +112,9 @@ export default function RoundOrigin({ venueName, sessionId, phoneId, tableId, ad
   }
 
   const renderRound = () => {
+    if (gameEnded) {
+      return <Recap sessionId={sessionId} venueName={venueName} />
+    }
     if (roundType === 'roulette') {
       // key by roundNumber so advancing Roulette -> Roulette remounts it
       // and starts a fresh round (same guard as TriviaOriginRound).
@@ -161,6 +171,20 @@ export default function RoundOrigin({ venueName, sessionId, phoneId, tableId, ad
           Round {roundNumber} · {roundType === 'roulette' ? 'Roulette' : roundType === 'trivia' ? 'Trivia' : 'Chooser'}
         </p>
         <p style={venueLabelStyle}>{venueName}</p>
+        <button
+          onClick={async () => {
+            if (!window.confirm('End the game for everyone?')) return
+            try {
+              await endGame(sessionId, phoneId)
+              setGameEnded(true)
+            } catch (e) {
+              setError(e.message)
+            }
+          }}
+          style={endGameButtonStyle}
+        >
+          End Game
+        </button>
       </div>
     )
   }
@@ -206,5 +230,19 @@ const venueLabelStyle = {
   fontSize: '11px',
   color: 'var(--on-surface-dim)',
   fontFamily: 'var(--font-mono)',
+  zIndex: 30,
+}
+
+const endGameButtonStyle = {
+  position: 'fixed',
+  bottom: 'calc(env(safe-area-inset-bottom, 0px) + 16px)',
+  right: 'var(--safe-margin)',
+  background: 'transparent',
+  color: 'var(--on-surface-dim)',
+  border: '1px solid var(--outline)',
+  borderRadius: '8px',
+  padding: '10px 18px',
+  fontSize: '13px',
+  cursor: 'pointer',
   zIndex: 30,
 }

@@ -601,7 +601,9 @@ def test_stranger_phone_sees_join_or_new_not_resume(client, api_key_header, owne
 
 
 def test_ended_session_does_not_resume(client, api_key_header, owner_a_token, fresh_table):
-    """Origin phone re-tapping after the session has ended falls through to lobby."""
+    """Origin phone re-tapping LONG after the session ended falls through to lobby.
+    A recently-ended session routes to the recap instead (see test_endgame); here
+    we age ended_at well past the recap window so it lands on a fresh lobby."""
     tag_uid = pair_tag(client, api_key_header, owner_a_token, fresh_table["table_number"])
     venue_slug, table_number = fresh_table["venue_slug"], fresh_table["table_number"]
     host_phone, second_phone = _fresh_phone(), _fresh_phone()
@@ -616,7 +618,10 @@ def test_ended_session_does_not_resume(client, api_key_header, owner_a_token, fr
     async def _end():
         conn = await asyncpg.connect(os.environ["DATABASE_URL"])
         try:
-            await conn.execute("UPDATE game_sessions SET ended_at = NOW() WHERE id = $1", session_id)
+            await conn.execute(
+                "UPDATE game_sessions SET ended_at = NOW() - INTERVAL '120 minutes' WHERE id = $1",
+                session_id,
+            )
         finally:
             await conn.close()
     asyncio.run(_end())
@@ -624,7 +629,7 @@ def test_ended_session_does_not_resume(client, api_key_header, owner_a_token, fr
     retap = _tap_with_phone(client, api_key_header, venue_slug, table_number, tag_uid, 3, host_phone)
     state = retap["table_state"]
     assert state["phase"] != "resume"
-    # No active sessions remain after end → fresh lobby created.
+    # Ended long ago (past the recap window) → no active session → fresh lobby.
     assert state["phase"] == "lobby"
 
 

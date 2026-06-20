@@ -7,7 +7,10 @@ from pydantic import BaseModel, Field
 
 from api.db import get_pool
 from api.security import limiter, verify_api_key
-from api.services import chooser_service, lobby_service, realtime_auth, round_service, roulette_service, trivia_service
+from api.services import (
+    chooser_service, lobby_service, realtime_auth, round_service,
+    roulette_service, session_service, trivia_service,
+)
 from api.services.notify import notify_error
 from api.services.nfc_crypto import decrypt_tag_key
 from api.services.nfc_verify import verify_signature
@@ -758,5 +761,43 @@ async def roulette_skip(request: Request, round_id: str, body: PhoneIdBody):
         raise
     except Exception:
         await notify_error("POST /patron/roulette/skip failed", traceback.format_exc()[:500])
+        raise HTTPException(status_code=500, detail="Internal error")
+    return result
+
+
+@router.post("/sessions/{session_id}/end-game")
+@limiter.limit("30/minute")
+async def end_game(request: Request, session_id: str, body: PhoneIdBody):
+    """Origin-only: end the game for everyone, broadcast game_ended."""
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            result = await _run_trivia(
+                "end_game",
+                session_service.end_game(conn, session_id, body.phone_id),
+            )
+    except HTTPException:
+        raise
+    except Exception:
+        await notify_error("POST /patron/sessions/end-game failed", traceback.format_exc()[:500])
+        raise HTTPException(status_code=500, detail="Internal error")
+    return result
+
+
+@router.get("/sessions/{session_id}/recap")
+@limiter.limit("120/minute")
+async def get_recap(request: Request, session_id: str):
+    """Recap stats for an ended session -- session-scoped, no secrets."""
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            result = await _run_trivia(
+                "recap",
+                session_service.get_recap(conn, session_id),
+            )
+    except HTTPException:
+        raise
+    except Exception:
+        await notify_error("GET /patron/sessions/recap failed", traceback.format_exc()[:500])
         raise HTTPException(status_code=500, detail="Internal error")
     return result

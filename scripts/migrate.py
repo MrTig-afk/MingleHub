@@ -211,6 +211,15 @@ async def migrate():
         """)
         print("OK game_sessions.current_round_number / drink_disclaimer_shown ready")
 
+        # Tracks the last time any player action occurred in a session so the
+        # idle-expiry check in _check_phone_session_resume can compare against
+        # retap_interval_minutes in SQL (avoiding naive-timestamp/tz bugs).
+        await conn.execute("""
+            ALTER TABLE game_sessions
+            ADD COLUMN IF NOT EXISTS last_activity_at TIMESTAMP DEFAULT NOW()
+        """)
+        print("OK game_sessions.last_activity_at ready")
+
         # Not in gamespec.md's table list — gamespec describes lobby *behavior*
         # (Player Flow -> Step 2) without naming a table for it. This is the
         # implementation detail needed to track "who's tapped in, who's host"

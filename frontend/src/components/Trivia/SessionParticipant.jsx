@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import AnswerTiles from './AnswerTiles'
 import Leaderboard from './Leaderboard'
+import Recap from '../Recap/Recap'
 import Toast from '../Toast'
 import useSessionChannel from '../../hooks/useSessionChannel'
 import { answerTrivia, fetchTriviaCurrent, leaveSession, rejoinSession, voteLoser } from '../../services/patronApi'
@@ -26,6 +27,7 @@ export default function SessionParticipant({ venueName, sessionId, phoneId, tabl
   const [left, setLeft] = useState(false)
   const [error, setError] = useState(null)
   const [toast, setToast] = useState(null)
+  const [gameEnded, setGameEnded] = useState(false)
   const [rouletteResult, setRouletteResult] = useState(null) // brief result flash
   const [rouletteVoteOpen, setRouletteVoteOpen] = useState(false) // false during the read window
   const pollRef = useRef(null)
@@ -77,6 +79,10 @@ export default function SessionParticipant({ venueName, sessionId, phoneId, tabl
   }, [state?.phase, state?.round_id])
 
   useSessionChannel(tableId, phoneId, (event, payload) => {
+    // Multi-group safety: only react to game_ended for our own session.
+    if (event === 'game_ended' && payload?.session_id === sessionId) {
+      queueMicrotask(() => setGameEnded(true))
+    }
     if (event === 'player_left') showToast(`${payload?.name || 'A player'} left the game`)
     if (event === 'player_rejoined') showToast(`${payload?.name || 'A player'} rejoined`)
     // Once the roulette round resolves, get_current_state returns between_rounds,
@@ -132,6 +138,9 @@ export default function SessionParticipant({ venueName, sessionId, phoneId, tabl
   }
 
   const renderContent = () => {
+    if (gameEnded) {
+      return <Recap sessionId={sessionId} venueName={venueName} />
+    }
     // Left this game (just tapped Leave, or re-tapped back in later — the server
     // remembers via left_early). Offer Rejoin with the live scoreboard; never the
     // Leave button. A new phone never reaches here (it gets Join-or-New instead).

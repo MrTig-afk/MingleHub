@@ -19,6 +19,7 @@ import uuid
 
 import asyncpg
 
+from api.services import session_service
 from api.services.realtime_service import publish as rt_publish
 
 MAX_GROUPS_PER_TABLE = 3
@@ -35,9 +36,18 @@ async def _check_phone_session_resume(conn, table_id: str, phone_id: str) -> dic
     Origin check runs first — a phone that started a session always resumes
     as origin, even if it also appears as a participant in another session."""
     # Origin check — fastest path; no join needed.
+    # idle_expired: compare in SQL (not Python) to avoid naive-timestamp/tz bugs.
+    # COALESCE(last_activity_at, created_at) handles sessions created before
+    # the migration where last_activity_at is NULL.
     row = await conn.fetchrow(
         """
-        SELECT id, adults_only, player_count
+        SELECT id, adults_only, player_count,
+               (NOW() - COALESCE(last_activity_at, created_at)) > (
+                   SELECT COALESCE(retap_interval_minutes, 30) * INTERVAL '1 minute'
+                   FROM venues v
+                   JOIN game_sessions gs2 ON gs2.venue_id = v.id
+                   WHERE gs2.id = game_sessions.id
+               ) AS idle_expired
         FROM game_sessions
         WHERE table_id = $1 AND origin_phone_id = $2 AND ended_at IS NULL
         ORDER BY created_at DESC
@@ -46,6 +56,9 @@ async def _check_phone_session_resume(conn, table_id: str, phone_id: str) -> dic
         table_id, phone_id,
     )
     if row:
+        if row["idle_expired"]:
+            await session_service.idle_end_session(conn, str(row["id"]))
+            return {"phase": "recap", "session_id": str(row["id"])}
         return {
             "phase": "resume",
             "session_id": str(row["id"]),
@@ -58,7 +71,13 @@ async def _check_phone_session_resume(conn, table_id: str, phone_id: str) -> dic
     # gs.origin_phone_id != $2 prevents the origin from matching here too.
     row = await conn.fetchrow(
         """
-        SELECT gs.id, gs.adults_only, gs.player_count
+        SELECT gs.id, gs.adults_only, gs.player_count,
+               (NOW() - COALESCE(gs.last_activity_at, gs.created_at)) > (
+                   SELECT COALESCE(retap_interval_minutes, 30) * INTERVAL '1 minute'
+                   FROM venues v
+                   JOIN game_sessions gs2 ON gs2.venue_id = v.id
+                   WHERE gs2.id = gs.id
+               ) AS idle_expired
         FROM game_sessions gs
         JOIN table_lobbies tl ON tl.converted_session_id = gs.id
         JOIN table_lobby_phones tlp ON tlp.lobby_id = tl.id
@@ -72,6 +91,9 @@ async def _check_phone_session_resume(conn, table_id: str, phone_id: str) -> dic
         table_id, phone_id,
     )
     if row:
+        if row["idle_expired"]:
+            await session_service.idle_end_session(conn, str(row["id"]))
+            return {"phase": "recap", "session_id": str(row["id"])}
         return {
             "phase": "resume",
             "session_id": str(row["id"]),
@@ -90,10 +112,50 @@ async def resolve_table_state(conn, venue_id: str, table_id: str, table_number: 
     # Re-tap resume: if this phone already belongs to an active session at
     # this table, send it straight back into that session rather than
     # showing join-or-new. Checked before _active_sessions so a returning
-    # phone never sees the chooser for its own session.
+    # phone never sees the chooser for its own session. Idle sessions are
+    # lazily ended here and return recap phase instead of resume.
     resume = await _check_phone_session_resume(conn, table_id, phone_id)
     if resume:
         return resume
+
+    # Recap for recently-ended session: if this phone belonged to a session
+    # at this table that ended within the idle window, show recap not lobby.
+    recap_row = await conn.fetchrow(
+        """
+        SELECT gs.id
+        FROM game_sessions gs
+        WHERE gs.table_id = $1
+          AND gs.ended_at IS NOT NULL
+          AND gs.origin_phone_id = $2
+          AND (NOW() - gs.ended_at) < (
+              SELECT COALESCE(retap_interval_minutes, 30) * INTERVAL '1 minute'
+              FROM venues WHERE id = gs.venue_id
+          )
+        ORDER BY gs.ended_at DESC LIMIT 1
+        """,
+        table_id, phone_id,
+    )
+    if not recap_row:
+        recap_row = await conn.fetchrow(
+            """
+            SELECT gs.id
+            FROM game_sessions gs
+            JOIN table_lobbies tl ON tl.converted_session_id = gs.id
+            JOIN table_lobby_phones tlp ON tlp.lobby_id = tl.id
+            WHERE gs.table_id = $1
+              AND gs.ended_at IS NOT NULL
+              AND gs.origin_phone_id != $2
+              AND tlp.phone_id = $2
+              AND (NOW() - gs.ended_at) < (
+                  SELECT COALESCE(retap_interval_minutes, 30) * INTERVAL '1 minute'
+                  FROM venues WHERE id = gs.venue_id
+              )
+            ORDER BY gs.ended_at DESC LIMIT 1
+            """,
+            table_id, phone_id,
+        )
+    if recap_row:
+        return {"phase": "recap", "session_id": str(recap_row["id"])}
 
     groups = await _active_sessions(conn, table_id)
 

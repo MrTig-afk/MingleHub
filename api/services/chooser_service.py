@@ -136,11 +136,12 @@ async def draw_card(conn, session_id: str, player_id: str, phone_id: str) -> dic
     if not card:
         raise ValueError("no_cards_available")
 
-    # Increment round counter atomically
+    # Increment round counter atomically and record activity
     round_number = await conn.fetchval(
         """
         UPDATE game_sessions
-        SET current_round_number = current_round_number + 1
+        SET current_round_number = current_round_number + 1,
+            last_activity_at = NOW()
         WHERE id = $1
         RETURNING current_round_number
         """,
@@ -226,7 +227,8 @@ async def complete_round(conn, round_id: str, phone_id: str) -> dict:
         """
         UPDATE game_sessions
         SET cards_completed = cards_completed + 1,
-            total_rounds = total_rounds + 1
+            total_rounds = total_rounds + 1,
+            last_activity_at = NOW()
         WHERE id = $1
         """,
         row["session_id"],
@@ -278,7 +280,8 @@ async def skip_round(conn, round_id: str, phone_id: str) -> dict:
         """
         UPDATE game_sessions
         SET cards_skipped = cards_skipped + 1,
-            total_rounds = total_rounds + 1
+            total_rounds = total_rounds + 1,
+            last_activity_at = NOW()
         WHERE id = $1
         """,
         row["session_id"],

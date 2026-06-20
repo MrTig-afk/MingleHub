@@ -216,6 +216,10 @@ async def start_trivia(conn, session_id: str, phone_id: str) -> dict:
         )
 
     joined_count = len(members)
+    await conn.execute(
+        "UPDATE game_sessions SET last_activity_at = NOW() WHERE id = $1",
+        session_id,
+    )
     await rt_publish(
         _channel(session["table_id"]),
         "trivia:gather",
@@ -402,7 +406,8 @@ async def submit_answer(conn, trivia_round_id: str, phone_id: str,
         UPDATE game_sessions
         SET total_score = total_score + $1,
             trivia_correct = trivia_correct + $2,
-            trivia_wrong = trivia_wrong + $3
+            trivia_wrong = trivia_wrong + $3,
+            last_activity_at = NOW()
         WHERE id = $4
         """,
         score, 1 if is_correct else 0, 0 if is_correct else 1, rnd["session_id"],
@@ -569,7 +574,8 @@ async def _record_analytics_round(conn, rnd, result: str, score_awarded: int) ->
         """
         UPDATE game_sessions
         SET current_round_number = current_round_number + 1,
-            total_rounds = total_rounds + 1
+            total_rounds = total_rounds + 1,
+            last_activity_at = NOW()
         WHERE id = $1
         RETURNING current_round_number
         """,

@@ -60,7 +60,7 @@ async def select_hot_seat(conn, session: dict, phone_id: str) -> dict:
         winner["id"],
     )
     await conn.execute(
-        "UPDATE game_sessions SET last_hot_seat_player_id = $1 WHERE id = $2",
+        "UPDATE game_sessions SET last_hot_seat_player_id = $1, last_activity_at = NOW() WHERE id = $2",
         winner["id"], session["id"],
     )
 
