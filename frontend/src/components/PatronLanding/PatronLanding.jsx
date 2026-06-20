@@ -72,16 +72,29 @@ export default function PatronLanding() {
   }, [])
 
   useEffect(() => {
-    fetchTap(initialTap)
-      .then((result) => {
+    let cancelled = false
+    // The serverless backend cold-starts when idle, so the very first tap can be
+    // slow or fail. Retry a few times before giving up, rather than leaving the
+    // screen looking frozen (which previously needed a manual refresh).
+    const attempt = async (triesLeft) => {
+      try {
+        const result = await fetchTap(initialTap)
+        if (cancelled) return
         setVenue(result)
         setTableState(result.table_state ?? null)
         setStatus(result.table_state?.phase ?? 'success')
-      })
-      .catch((e) => {
-        setError(e.message)
-        setStatus('error')
-      })
+      } catch (e) {
+        if (cancelled) return
+        if (triesLeft > 0) {
+          setTimeout(() => attempt(triesLeft - 1), 2500)
+        } else {
+          setError(e.message)
+          setStatus('error')
+        }
+      }
+    }
+    attempt(3)
+    return () => { cancelled = true }
   }, [])
 
   if (status === 'lobby') {
@@ -206,7 +219,17 @@ export default function PatronLanding() {
       padding: '24px',
       textAlign: 'center',
     }}>
-      {status === 'loading' && <p>Verifying tap…</p>}
+      {status === 'loading' && (
+        <>
+          <span style={{ fontSize: '36px' }}>🍺</span>
+          <h1 className="headline" style={{ fontFamily: 'var(--font-headline)', fontSize: '22px', margin: 0 }}>
+            Setting up the game…
+          </h1>
+          <p style={{ fontSize: '13px', color: 'var(--on-surface-dim)', fontFamily: 'var(--font-mono)', margin: 0 }}>
+            First load can take a few seconds
+          </p>
+        </>
+      )}
 
       {status === 'success' && (
         <h1 className="headline" style={{ fontFamily: 'var(--font-headline)' }}>

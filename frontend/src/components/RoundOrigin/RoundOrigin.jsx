@@ -1,18 +1,18 @@
-import { useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import ChooserRound from '../ChooserRound/ChooserRound'
 import FingerChooser from '../FingerChooser/FingerChooser'
 import TriviaOriginRound from '../Trivia/TriviaOriginRound'
-import { pickHotSeat } from '../../services/patronApi'
+import Toast from '../Toast'
+import useSessionChannel from '../../hooks/useSessionChannel'
+import { fetchLeaderboard, pickHotSeat } from '../../services/patronApi'
 
 // Round-type cadence stand-in until the weighted theme engine exists. Trivia is
 // NOT something anyone taps to start -- the game surfaces it automatically.
 // TRIVIA_EVERY fires Trivia on every Nth round: 1 = EVERY round is Trivia (so the
 // very first round, immediately after Start, is Trivia -- a deliberate diagnostic
-// setting to confirm the Trivia flow works in isolation). Use 3 for the real
-// rhythm (rounds 1 & 2 Chooser, round 3 Trivia), or 0/null for a random ~50/50
-// mix -- NOTE random mode must store the per-round decision in state rather than
-// computing it inline below, or it would re-roll on every render.
-// (gamespec: "draws from a weighted pool of round types".)
+// setting). Use 3 for the real rhythm (rounds 1 & 2 Chooser, round 3 Trivia), or
+// 0/null for a random ~50/50 mix -- NOTE random mode must store the per-round
+// decision in state rather than computing it inline below.
 const TRIVIA_EVERY = 1
 
 function decideRoundType(roundNumber) {
@@ -20,13 +20,12 @@ function decideRoundType(roundNumber) {
   return roundNumber % TRIVIA_EVERY === 0 ? 'trivia' : 'chooser'
 }
 
-// gamespec.md Step 5 — Round Flow, on the session-origin phone. Everyone else's
-// phone runs SessionParticipant. The origin's round engine decides each round's
-// type automatically (no manual picker): a Chooser round runs the finger picker
-// -> ChooserRound; a Trivia round runs TriviaOriginRound, which auto-enters with
-// a brief "get ready" splash on all phones. Finishing a round advances to the
-// next one. The round counter is persisted per session so a re-tap or reload of
-// the table phone resumes the right round (NFC re-taps are normal mid-session).
+// gamespec.md Step 5 — Round Flow, on the session-origin (table) phone. The round
+// engine picks each round's type automatically. Chooser runs the finger picker;
+// Trivia runs TriviaOriginRound. The finger picker waits for the number of ACTIVE
+// players (refreshed when someone leaves) so a Chooser round still starts after a
+// leave -- otherwise it would wait for more fingers than are at the table. The
+// host also gets a toast whenever a player leaves.
 export default function RoundOrigin({ venueName, sessionId, phoneId, tableId, adultsOnly, playerCount = 2 }) {
   const roundKey = `mh_round_${sessionId}`
   const [roundNumber, setRoundNumber] = useState(() => {
@@ -37,10 +36,49 @@ export default function RoundOrigin({ venueName, sessionId, phoneId, tableId, ad
   const [error, setError] = useState(null)
   const [picking, setPicking] = useState(false)
   const [recentWinners, setRecentWinners] = useState([])
+  const [activeCount, setActiveCount] = useState(playerCount)
+  const [toast, setToast] = useState(null)
+  const toastTimer = useRef(null)
 
-  // Derive the type directly from the (persisted) round number so it can't
-  // drift out of sync with the counter across re-renders/remounts.
   const roundType = decideRoundType(roundNumber)
+
+  const showToast = useCallback((msg) => {
+    setToast(msg)
+    clearTimeout(toastTimer.current)
+    toastTimer.current = setTimeout(() => setToast(null), 3500)
+  }, [])
+
+  // Keep requiredFingers in sync with how many players are actually still in.
+  const refreshActiveCount = useCallback(async () => {
+    try {
+      const data = await fetchLeaderboard(sessionId)
+      const active = (data.leaderboard || []).filter((r) => !r.left_early).length
+      if (active >= 2) setActiveCount(active)
+    } catch {
+      // keep the current count on a transient failure
+    }
+  }, [sessionId])
+
+  // Initial active-player count (await precedes setState — the state update is
+  // not synchronous within the effect).
+  useEffect(() => {
+    let cancelled = false
+    fetchLeaderboard(sessionId)
+      .then((data) => {
+        if (cancelled) return
+        const active = (data.leaderboard || []).filter((r) => !r.left_early).length
+        if (active >= 2) setActiveCount(active)
+      })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [sessionId])
+
+  useSessionChannel(tableId, phoneId, (event, payload) => {
+    if (event !== 'player_left') return
+    const name = payload?.name || 'A player'
+    // Defer the state updates out of the broadcast handler's synchronous path.
+    queueMicrotask(() => { showToast(`${name} left the game`); refreshActiveCount() })
+  })
 
   const advanceRound = () => {
     const next = roundNumber + 1
@@ -62,55 +100,52 @@ export default function RoundOrigin({ venueName, sessionId, phoneId, tableId, ad
     }
   }
 
-  // --- Trivia round (auto-entered) ---
-  if (roundType === 'trivia') {
+  const renderRound = () => {
+    if (roundType === 'trivia') {
+      return (
+        <TriviaOriginRound sessionId={sessionId} phoneId={phoneId} tableId={tableId} onDone={advanceRound} />
+      )
+    }
+    if (hotSeat) {
+      return (
+        <ChooserRound
+          sessionId={sessionId}
+          phoneId={phoneId}
+          hotSeat={hotSeat}
+          adultsOnly={adultsOnly}
+          onRoundComplete={advanceRound}
+        />
+      )
+    }
+    const nextIsTrivia = decideRoundType(roundNumber + 1) === 'trivia'
     return (
-      <TriviaOriginRound
-        sessionId={sessionId}
-        phoneId={phoneId}
-        tableId={tableId}
-        onDone={advanceRound}
-      />
+      <div style={{ position: 'relative', minHeight: '100dvh' }}>
+        <FingerChooser
+          onCardDraw={handleChosen}
+          requiredFingers={activeCount}
+          recentWinnerPositions={recentWinners}
+          onWinnerChosen={(pos) => setRecentWinners((prev) => [...prev, pos].slice(-3))}
+          hideBack
+        />
+        {(picking || error) && (
+          <div style={bannerStyle}>
+            {picking && <p style={{ margin: 0 }}>Picking…</p>}
+            {error && <p style={{ margin: 0, color: 'var(--tertiary)' }}>{error}</p>}
+          </div>
+        )}
+        <p style={roundBadgeStyle}>
+          Round {roundNumber} · Chooser{nextIsTrivia ? '  ·  🧠 Trivia next' : ''}
+        </p>
+        <p style={venueLabelStyle}>{venueName}</p>
+      </div>
     )
   }
 
-  // --- Chooser round ---
-  if (hotSeat) {
-    return (
-      <ChooserRound
-        sessionId={sessionId}
-        phoneId={phoneId}
-        hotSeat={hotSeat}
-        adultsOnly={adultsOnly}
-        onRoundComplete={advanceRound}
-      />
-    )
-  }
-
-  const nextIsTrivia = decideRoundType(roundNumber + 1) === 'trivia'
   return (
-    <div style={{ position: 'relative', minHeight: '100dvh' }}>
-      <FingerChooser
-        onCardDraw={handleChosen}
-        requiredFingers={playerCount}
-        recentWinnerPositions={recentWinners}
-        // Keep only the last 3 winning spots — a sliding window the picker
-        // steers away from so selection spreads around the table.
-        onWinnerChosen={(pos) => setRecentWinners((prev) => [...prev, pos].slice(-3))}
-        hideBack
-      />
-      {(picking || error) && (
-        <div style={bannerStyle}>
-          {picking && <p style={{ margin: 0 }}>Picking…</p>}
-          {error && <p style={{ margin: 0, color: 'var(--tertiary)' }}>{error}</p>}
-        </div>
-      )}
-      {/* Round indicator — also confirms the table phone is on the latest build. */}
-      <p style={roundBadgeStyle}>
-        Round {roundNumber} · Chooser{nextIsTrivia ? '  ·  🧠 Trivia next' : ''}
-      </p>
-      <p style={venueLabelStyle}>{venueName}</p>
-    </div>
+    <>
+      {renderRound()}
+      <Toast message={toast} />
+    </>
   )
 }
 
