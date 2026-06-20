@@ -699,3 +699,39 @@ async def leave_session(conn, session_id: str, phone_id: str) -> dict:
         {"session_id": session_id, "name": row["name"]},
     )
     return {"left": True, "name": row["name"], "score": row["score"]}
+
+
+async def rejoin_session(conn, session_id: str, phone_id: str) -> dict:
+    """Undo a leave: clear left_early so the phone is an active player again
+    (gamespec: a friend who left by mistake can come back). Score is preserved.
+    Enrollment into Trivia happens at the NEXT round's start_trivia; a round
+    already in progress is spectated, not joined mid-way. Mirror of leave_session.
+    """
+    session = await conn.fetchrow(
+        "SELECT table_id FROM game_sessions WHERE id = $1 AND ended_at IS NULL", session_id
+    )
+    if not session:
+        raise LookupError("session_not_found_or_ended")
+
+    row = await conn.fetchrow(
+        """
+        UPDATE game_players SET left_early = FALSE, left_at = NULL
+        WHERE session_id = $1 AND phone_id = $2 AND left_early = TRUE
+        RETURNING id, name, score
+        """,
+        session_id, phone_id,
+    )
+    if not row:
+        # Already active, or not a member -- idempotent success for a member,
+        # clean not-found otherwise (BOLA: non-members can't rejoin).
+        existing = await _resolve_player(conn, session_id, phone_id)
+        if not existing:
+            raise PermissionError("not_a_member")
+        return {"rejoined": True, "name": existing["name"], "score": existing["score"]}
+
+    await rt_publish(
+        _channel(session["table_id"]),
+        "player_rejoined",
+        {"session_id": session_id, "name": row["name"]},
+    )
+    return {"rejoined": True, "name": row["name"], "score": row["score"]}

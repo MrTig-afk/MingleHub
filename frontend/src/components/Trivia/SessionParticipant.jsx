@@ -3,7 +3,7 @@ import AnswerTiles from './AnswerTiles'
 import Leaderboard from './Leaderboard'
 import Toast from '../Toast'
 import useSessionChannel from '../../hooks/useSessionChannel'
-import { answerTrivia, fetchTriviaCurrent, leaveSession } from '../../services/patronApi'
+import { answerTrivia, fetchTriviaCurrent, leaveSession, rejoinSession } from '../../services/patronApi'
 
 const POLL_MS = 2000
 
@@ -62,6 +62,7 @@ export default function SessionParticipant({ venueName, sessionId, phoneId, tabl
 
   useSessionChannel(tableId, phoneId, (event, payload) => {
     if (event === 'player_left') showToast(`${payload?.name || 'A player'} left the game`)
+    if (event === 'player_rejoined') showToast(`${payload?.name || 'A player'} rejoined`)
     if (pollRef.current) pollRef.current()
   })
 
@@ -85,12 +86,29 @@ export default function SessionParticipant({ venueName, sessionId, phoneId, tabl
     }
   }
 
+  const handleRejoin = async () => {
+    try {
+      await rejoinSession(sessionId, phoneId)
+      setLeft(false)
+      pollRef.current?.()
+    } catch (e) {
+      setError(e.message)
+    }
+  }
+
   const renderContent = () => {
-    if (left) {
+    // Left this game (just tapped Leave, or re-tapped back in later — the server
+    // remembers via left_early). Offer Rejoin with the live scoreboard; never the
+    // Leave button. A new phone never reaches here (it gets Join-or-New instead).
+    const amLeft = left || Boolean(state?.left_early)
+    if (amLeft) {
       return (
         <Screen>
-          <h1 style={headlineStyle}>Thanks for playing 🍺</h1>
-          <p style={dimMono}>You've left the game. Your score is saved on the recap.</p>
+          <h1 style={headlineStyle}>You left the game</h1>
+          <p style={dimMono}>Tap rejoin to come back — your score is saved.</p>
+          <Leaderboard rows={state?.leaderboard || []} title="Scoreboard" />
+          <button onClick={handleRejoin} style={primaryButton}>Rejoin game</button>
+          {error && <p style={errStyle}>{error}</p>}
         </Screen>
       )
     }
@@ -113,9 +131,11 @@ export default function SessionParticipant({ venueName, sessionId, phoneId, tabl
 
     if (state.phase === 'question' && (state.questions || []).length > 0) {
       if (!state.is_participant) {
+        // Rejoined (or arrived) after this round was already underway — sit it out
+        // and join the next one, without disrupting the players mid-round.
         return (
           <Screen>
-            <p style={dimMono}>Trivia in progress — you didn't join this round</p>
+            <p style={dimMono}>A round's in progress — you'll join the next one</p>
             <Leaderboard rows={state.leaderboard} title="Scoreboard" />
             <button onClick={handleLeave} style={leaveButton}>Leave game</button>
           </Screen>

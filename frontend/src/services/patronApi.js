@@ -230,6 +230,16 @@ export const leaveSession = (sessionId, phoneId) =>
     return r.json()
   })
 
+export const rejoinSession = (sessionId, phoneId) =>
+  fetch(`${BASE}/api/patron/sessions/${sessionId}/rejoin`, {
+    method: 'POST',
+    headers: h,
+    body: JSON.stringify({ phone_id: phoneId }),
+  }).then(async (r) => {
+    if (!r.ok) throw new Error((await r.json()).detail || r.status)
+    return r.json()
+  })
+
 export const fetchChannelAuth = (tableId, phoneId) =>
   fetch(`${BASE}/api/patron/channel-auth`, {
     method: 'POST',
