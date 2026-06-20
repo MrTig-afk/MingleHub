@@ -130,7 +130,6 @@ export default function RoundOrigin({ venueName, sessionId, phoneId, tableId, ad
         />
       )
     }
-    const nextIsTrivia = decideRoundType(roundNumber + 1) === 'trivia'
     return (
       <div style={{ position: 'relative', minHeight: '100dvh' }}>
         <FingerChooser
@@ -146,8 +145,9 @@ export default function RoundOrigin({ venueName, sessionId, phoneId, tableId, ad
             {error && <p style={{ margin: 0, color: 'var(--tertiary)' }}>{error}</p>}
           </div>
         )}
+        {/* Trivia surfaces by surprise -- never hint that it's coming next. */}
         <p style={roundBadgeStyle}>
-          Round {roundNumber} · Chooser{nextIsTrivia ? '  ·  🧠 Trivia next' : ''}
+          Round {roundNumber} · Chooser
         </p>
         <p style={venueLabelStyle}>{venueName}</p>
       </div>
