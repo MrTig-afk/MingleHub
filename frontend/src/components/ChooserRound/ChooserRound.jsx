@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
-import { completeRound, drawCard, redrawRound, skipRound } from '../../services/patronApi'
+import { completeRound, drawCard, skipRound } from '../../services/patronApi'
 
-// gamespec.md: Chooser round -- card display, Complete/Skip/Redraw actions,
-// responsible drinking disclaimer (once per session, server-controlled).
+// gamespec.md: Chooser round -- card display, Complete/Skip actions, responsible
+// drinking disclaimer (once per session, server-controlled). No redraw: the prompt
+// stands, so a drawn card (incl. a dare/drink) can't be dodged for a softer one --
+// Complete and Skip both just move on to the next round.
 //
 // State machine:
 //   card_loading -> card_shown -> resolving -> result -> (onRoundComplete)
@@ -26,7 +28,6 @@ export default function ChooserRound({ sessionId, phoneId, hotSeat, onRoundCompl
   const [phase, setPhase] = useState('card_loading') // card_loading | disclaimer | card_shown | resolving | result
   const [card, setCard] = useState(null)
   const [roundId, setRoundId] = useState(null)
-  const [redrawCount, setRedrawCount] = useState(0)
   const [resultData, setResultData] = useState(null) // { result }
   const [error, setError] = useState(null)
   const resultTimerRef = useRef(null)
@@ -39,7 +40,6 @@ export default function ChooserRound({ sessionId, phoneId, hotSeat, onRoundCompl
         if (cancelled) return
         setCard(data.card)
         setRoundId(data.round_id)
-        setRedrawCount(0)
         if (data.show_drink_disclaimer) {
           setPhase('disclaimer')
         } else {
@@ -86,21 +86,6 @@ export default function ChooserRound({ sessionId, phoneId, hotSeat, onRoundCompl
     } catch (e) {
       setError(e.message)
       setPhase('card_shown')
-    }
-  }
-
-  const handleRedraw = async () => {
-    setError(null)
-    try {
-      const data = await redrawRound(roundId, phoneId)
-      setCard(data.card)
-      setRedrawCount(data.redraw_count)
-      if (data.show_drink_disclaimer) {
-        setPhase('disclaimer')
-      }
-      // stay on card_shown (or keep current phase if already there)
-    } catch (e) {
-      setError(e.message)
     }
   }
 
@@ -188,13 +173,6 @@ export default function ChooserRound({ sessionId, phoneId, hotSeat, onRoundCompl
         <p style={{ color: 'var(--tertiary)', fontFamily: 'var(--font-mono)' }}>{error || 'No card loaded'}</p>
       )}
 
-      {/* Redraw count hint */}
-      {redrawCount > 0 && (
-        <p style={{ fontSize: '12px', color: 'var(--on-surface-dim)', fontFamily: 'var(--font-mono)', margin: 0 }}>
-          Redrawn {redrawCount}x
-        </p>
-      )}
-
       {/* Error */}
       {error && (
         <p style={{ color: 'var(--tertiary)', fontSize: '12px', fontFamily: 'var(--font-mono)', margin: 0 }}>
@@ -206,9 +184,6 @@ export default function ChooserRound({ sessionId, phoneId, hotSeat, onRoundCompl
       <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', width: '100%', maxWidth: '320px' }}>
         <button onClick={handleComplete} style={primaryButtonStyle} disabled={!card}>
           Complete
-        </button>
-        <button onClick={handleRedraw} style={secondaryButtonStyle} disabled={!card}>
-          Redraw
         </button>
         <button onClick={handleSkip} style={secondaryButtonStyle} disabled={!card}>
           Skip
