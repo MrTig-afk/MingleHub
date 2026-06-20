@@ -606,6 +606,54 @@ async def get_current_state(conn, session_id: str, phone_id: str) -> dict | None
         "leaderboard": await _leaderboard(conn, session_id),
     }
 
+    # Check for active roulette round (takes priority over trivia)
+    roulette_round = await conn.fetchrow(
+        """
+        SELECT r.id, r.card_id
+        FROM rounds r
+        WHERE r.session_id = $1 AND r.round_type = 'roulette' AND r.result IS NULL
+        ORDER BY r.created_at DESC LIMIT 1
+        """,
+        session_id,
+    )
+    if roulette_round:
+        rcard = await conn.fetchrow(
+            "SELECT prompt_text, drink_consequence_standard, drink_consequence_adults "
+            "FROM roulette_cards WHERE id = $1",
+            roulette_round["card_id"],
+        )
+        session_full = await conn.fetchrow(
+            "SELECT adults_only FROM game_sessions WHERE id = $1", session_id
+        )
+        drink_consequence = (
+            rcard["drink_consequence_adults"]
+            if session_full["adults_only"]
+            else rcard["drink_consequence_standard"]
+        )
+        active_players = await conn.fetch(
+            "SELECT id, name FROM game_players "
+            "WHERE session_id = $1 AND left_early = FALSE AND phone_id IS NOT NULL",
+            session_id,
+        )
+        my_vote = await conn.fetchval(
+            "SELECT voted_player_id FROM roulette_votes "
+            "WHERE round_id = $1 AND voter_phone_id = $2",
+            roulette_round["id"], phone_id,
+        )
+        voted_count = await conn.fetchval(
+            "SELECT COUNT(*) FROM roulette_votes WHERE round_id = $1",
+            roulette_round["id"],
+        )
+        base["phase"] = "roulette"
+        base["round_id"] = str(roulette_round["id"])
+        base["prompt"] = rcard["prompt_text"]
+        base["drink_consequence"] = drink_consequence
+        base["players"] = [{"id": str(p["id"]), "name": p["name"]} for p in active_players]
+        base["my_vote"] = str(my_vote) if my_vote else None
+        base["voted_count"] = int(voted_count)
+        base["active_total"] = len(active_players)
+        return base
+
     active = await conn.fetchrow(
         """
         SELECT id, status, question_ids, current_index, current_question_started_at

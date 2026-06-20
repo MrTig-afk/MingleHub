@@ -350,6 +350,31 @@ async def migrate():
         """)
         print("OK trivia_answers table ready")
 
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS roulette_cards (
+                id                          UUID PRIMARY KEY,
+                prompt_text                 TEXT NOT NULL,
+                content_tier                TEXT NOT NULL DEFAULT 'standard'
+                    CHECK (content_tier IN ('standard', 'adults_allowed')),
+                drink_consequence_standard  TEXT NOT NULL,
+                drink_consequence_adults    TEXT NOT NULL,
+                created_at                  TIMESTAMP DEFAULT NOW()
+            )
+        """)
+        print("OK roulette_cards table ready")
+
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS roulette_votes (
+                id               UUID PRIMARY KEY,
+                round_id         UUID NOT NULL REFERENCES rounds(id),
+                voter_phone_id   TEXT NOT NULL,
+                voted_player_id  UUID NOT NULL REFERENCES game_players(id),
+                created_at       TIMESTAMP DEFAULT NOW(),
+                UNIQUE (round_id, voter_phone_id)
+            )
+        """)
+        print("OK roulette_votes table ready")
+
         from scripts.seed_bar_cards import seed as seed_bar_cards  # noqa: E402
         await seed_bar_cards(conn)
         print("OK bar_cards seeded")
@@ -357,6 +382,10 @@ async def migrate():
         from scripts.seed_trivia_questions import seed as seed_trivia_questions  # noqa: E402
         await seed_trivia_questions(conn)
         print("OK trivia_questions seeded")
+
+        from scripts.seed_roulette_cards import seed as seed_roulette_cards  # noqa: E402
+        await seed_roulette_cards(conn)
+        print("OK roulette_cards seeded")
 
         schema = await conn.fetch("""
             SELECT column_name, data_type, is_nullable, column_default

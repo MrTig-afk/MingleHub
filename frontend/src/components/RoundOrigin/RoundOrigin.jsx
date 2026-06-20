@@ -1,23 +1,22 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import ChooserRound from '../ChooserRound/ChooserRound'
 import FingerChooser from '../FingerChooser/FingerChooser'
+import RouletteRound from '../Roulette/RouletteRound'
 import TriviaOriginRound from '../Trivia/TriviaOriginRound'
 import Toast from '../Toast'
 import useSessionChannel from '../../hooks/useSessionChannel'
 import { fetchLeaderboard, pickHotSeat } from '../../services/patronApi'
 
-// Round-type cadence stand-in until the weighted theme engine exists. Trivia is
-// NOT something anyone taps to start -- the game surfaces it automatically.
-// TRIVIA_EVERY fires Trivia on every Nth round: 3 = the real rhythm (rounds 1 & 2
-// Chooser, round 3 Trivia, round 4 & 5 Chooser, round 6 Trivia, …). 1 = EVERY round
-// is Trivia (a diagnostic that skips Chooser entirely). 0/null = random ~50/50 mix
-// -- NOTE random mode must store the per-round decision in state rather than
-// computing it inline below.
-const TRIVIA_EVERY = 3
+// Round cadence: Chooser -> Roulette -> Trivia -> Chooser -> Roulette -> Trivia …
+// Falls back to Chooser when a round type needs >= 2 active players and there
+// aren't enough at the table (Roulette and Trivia both require at least 2).
+const ROUND_CADENCE = ['chooser', 'roulette', 'trivia']
 
-function decideRoundType(roundNumber) {
-  if (!TRIVIA_EVERY) return Math.random() < 0.5 ? 'trivia' : 'chooser'
-  return roundNumber % TRIVIA_EVERY === 0 ? 'trivia' : 'chooser'
+function decideRoundType(roundNumber, activeCount) {
+  const type = ROUND_CADENCE[(roundNumber - 1) % 3]
+  if (type === 'roulette' && activeCount < 2) return 'chooser'
+  if (type === 'trivia' && activeCount < 2) return 'chooser'
+  return type
 }
 
 // gamespec.md Step 5 — Round Flow, on the session-origin (table) phone. The round
@@ -40,7 +39,7 @@ export default function RoundOrigin({ venueName, sessionId, phoneId, tableId, ad
   const [toast, setToast] = useState(null)
   const toastTimer = useRef(null)
 
-  const roundType = decideRoundType(roundNumber)
+  const roundType = decideRoundType(roundNumber, activeCount)
 
   const showToast = useCallback((msg) => {
     setToast(msg)
@@ -106,6 +105,19 @@ export default function RoundOrigin({ venueName, sessionId, phoneId, tableId, ad
   }
 
   const renderRound = () => {
+    if (roundType === 'roulette') {
+      // key by roundNumber so advancing Roulette -> Roulette remounts it
+      // and starts a fresh round (same guard as TriviaOriginRound).
+      return (
+        <RouletteRound
+          key={roundNumber}
+          sessionId={sessionId}
+          phoneId={phoneId}
+          tableId={tableId}
+          onDone={advanceRound}
+        />
+      )
+    }
     if (roundType === 'trivia') {
       // key by roundNumber so advancing Trivia -> Trivia remounts it and actually
       // starts a fresh round (otherwise the same element just re-renders).
@@ -145,9 +157,8 @@ export default function RoundOrigin({ venueName, sessionId, phoneId, tableId, ad
             {error && <p style={{ margin: 0, color: 'var(--tertiary)' }}>{error}</p>}
           </div>
         )}
-        {/* Trivia surfaces by surprise -- never hint that it's coming next. */}
         <p style={roundBadgeStyle}>
-          Round {roundNumber} · Chooser
+          Round {roundNumber} · {roundType === 'roulette' ? 'Roulette' : roundType === 'trivia' ? 'Trivia' : 'Chooser'}
         </p>
         <p style={venueLabelStyle}>{venueName}</p>
       </div>
