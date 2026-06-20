@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import AnswerTiles from './AnswerTiles'
 import Leaderboard from './Leaderboard'
 import {
@@ -6,20 +6,24 @@ import {
 } from '../../services/patronApi'
 
 const GET_READY_MS = 3500
+const WAIT_POLL_MS = 2500
 
 function firstUnanswered(answers, total) {
   for (let i = 0; i < total; i++) if (!answers[i]) return i
   return Math.max(0, total - 1)
 }
 
+const activePlayers = (rows) => (rows || []).filter((r) => !r.left_early).length
+
 // gamespec Round Type 2 — Trivia, from the session-origin phone's side. Trivia is
-// auto-entered between Chooser rounds (no manual start). SELF-PACED: every phone
-// gets all 5 questions up front and walks them at its own speed — answering, then
-// tapping "Next" to move to ITS next question (nobody is advanced by anyone else).
-// The origin holder plays like everyone, and when they finish they tap "Finish" /
-// "Back to the game", which ends the round and returns to the round loop.
+// auto-entered between rounds (no manual start). SELF-PACED: every phone gets all
+// 5 questions and walks them at its own speed. The origin holder plays like
+// everyone, and when they finish they tap "Back to the game" to return to the loop.
 //
-// Phases: starting -> getready -> question -> leaderboard. <2 players -> onDone().
+// Phases: starting -> getready -> question -> leaderboard. If a new round can't
+// start because fewer than 2 players are still in (e.g. someone left), it shows a
+// "waiting for players" screen with the scoreboard (who left) and auto-resumes
+// when enough players are back — instead of silently failing to start.
 export default function TriviaOriginRound({ sessionId, phoneId, onDone }) {
   const [phase, setPhase] = useState('starting')
   const [questions, setQuestions] = useState([])
@@ -29,31 +33,66 @@ export default function TriviaOriginRound({ sessionId, phoneId, onDone }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
   const roundIdRef = useRef(null)
+  const startingRef = useRef(false)
+  const startedRef = useRef(false)
 
-  // Open the round on mount (idempotent). Resume straight into the questions if
-  // it's already in progress (re-tap mid-Trivia).
-  useEffect(() => {
-    let cancelled = false
-    startTrivia(sessionId, phoneId)
-      .then(async (data) => {
-        if (cancelled) return
-        roundIdRef.current = data.trivia_round_id
-        if (data.status === 'in_progress') {
-          const cur = await fetchTriviaCurrent(sessionId, phoneId)
-          if (cancelled) return
-          const qs = cur.questions || []
-          const ans = cur.my_answers || {}
-          setQuestions(qs)
-          setAnswers(ans)
-          setMyIndex(firstUnanswered(ans, qs.length))
-          setPhase('question')
-        } else {
-          setPhase('getready')
-        }
-      })
-      .catch(() => { if (!cancelled) onDone() }) // not_enough_players etc -> skip Trivia
-    return () => { cancelled = true }
+  // Open (or resume) the round. On "not enough players" -> waiting screen rather
+  // than bailing out of the round loop. Idempotent + guarded against overlap.
+  const tryStart = useCallback(async () => {
+    if (startingRef.current) return
+    startingRef.current = true
+    try {
+      const data = await startTrivia(sessionId, phoneId)
+      roundIdRef.current = data.trivia_round_id
+      if (data.status === 'in_progress') {
+        const cur = await fetchTriviaCurrent(sessionId, phoneId)
+        const qs = cur.questions || []
+        const ans = cur.my_answers || {}
+        setQuestions(qs)
+        setAnswers(ans)
+        setMyIndex(firstUnanswered(ans, qs.length))
+        setPhase('question')
+      } else {
+        setPhase('getready')
+      }
+    } catch (e) {
+      if (e.message === 'not_enough_players') setPhase('waiting')
+      else onDone()
+    } finally {
+      startingRef.current = false
+    }
   }, [sessionId, phoneId, onDone])
+
+  // Start exactly once on mount. Guard against the effect re-firing when onDone
+  // (or any other dep of tryStart) changes mid-round -- re-running tryStart would
+  // resume the round and snap the question index back to the server's first
+  // unanswered, yanking the player forward. The waiting-screen poll re-calls
+  // tryStart deliberately for the auto-resume; this guard doesn't touch that.
+  useEffect(() => {
+    if (startedRef.current) return
+    startedRef.current = true
+    queueMicrotask(tryStart)
+  }, [tryStart])
+
+  // While waiting (or showing results) keep the scoreboard fresh — so a leave is
+  // reflected — and auto-resume the moment 2+ players are in again.
+  useEffect(() => {
+    if (phase !== 'waiting' && phase !== 'leaderboard') return
+    let cancelled = false
+    const tick = async () => {
+      try {
+        const data = await fetchLeaderboard(sessionId)
+        if (cancelled) return
+        setLeaderboard(data.leaderboard || [])
+        if (phase === 'waiting' && activePlayers(data.leaderboard) >= 2) tryStart()
+      } catch {
+        // keep the last scoreboard on a transient failure
+      }
+    }
+    tick()
+    const id = setInterval(tick, WAIT_POLL_MS)
+    return () => { cancelled = true; clearInterval(id) }
+  }, [phase, sessionId, tryStart])
 
   // After the get-ready splash, fetch all questions and start.
   useEffect(() => {
@@ -139,6 +178,17 @@ export default function TriviaOriginRound({ sessionId, phoneId, onDone }) {
         )}
         {!answered && <p style={dimMono}>Pick your answer to continue</p>}
         {error && <p style={errStyle}>{error}</p>}
+      </Screen>
+    )
+  }
+
+  if (phase === 'waiting') {
+    return (
+      <Screen>
+        <p style={{ fontSize: '32px', margin: 0 }}>⏳</p>
+        <h1 style={headlineStyle}>Waiting for players</h1>
+        <p style={dimMono}>Need at least 2 players for a new round. Others can tap the tag to join.</p>
+        <Leaderboard rows={leaderboard} title="Who's here" />
       </Screen>
     )
   }
