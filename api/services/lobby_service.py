@@ -41,7 +41,7 @@ async def _check_phone_session_resume(conn, table_id: str, phone_id: str) -> dic
     # the migration where last_activity_at is NULL.
     row = await conn.fetchrow(
         """
-        SELECT id, adults_only, player_count,
+        SELECT id, adults_only, player_count, current_round_number,
                (NOW() - COALESCE(last_activity_at, created_at)) > (
                    SELECT COALESCE(retap_interval_minutes, 30) * INTERVAL '1 minute'
                    FROM venues v
@@ -65,13 +65,14 @@ async def _check_phone_session_resume(conn, table_id: str, phone_id: str) -> dic
             "is_origin": True,
             "adults_only": row["adults_only"],
             "player_count": row["player_count"],
+            "current_round_number": row["current_round_number"],
         }
 
     # Participant check — phone was in the converted lobby but didn't start.
     # gs.origin_phone_id != $2 prevents the origin from matching here too.
     row = await conn.fetchrow(
         """
-        SELECT gs.id, gs.adults_only, gs.player_count,
+        SELECT gs.id, gs.adults_only, gs.player_count, gs.current_round_number,
                (NOW() - COALESCE(gs.last_activity_at, gs.created_at)) > (
                    SELECT COALESCE(retap_interval_minutes, 30) * INTERVAL '1 minute'
                    FROM venues v
@@ -100,6 +101,7 @@ async def _check_phone_session_resume(conn, table_id: str, phone_id: str) -> dic
             "is_origin": False,
             "adults_only": row["adults_only"],
             "player_count": row["player_count"],
+            "current_round_number": row["current_round_number"],
         }
 
     return None

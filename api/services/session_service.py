@@ -1,15 +1,19 @@
-"""End-game and recap logic.
+"""End-game, host migration, and recap logic.
 
 Pure async functions taking `conn` as first arg -- same pattern as
 roulette_service.py / chooser_service.py.
 
-end_game:       Origin-only. Atomically marks the session ended and broadcasts
-                game_ended to all phones so they transition to the Recap screen.
-get_recap:      Session-scoped read. Aggregates stats for the Recap screen.
-                No secrets -- same access level as /leaderboard.
+end_game:         Origin-only. Atomically marks the session ended and broadcasts
+                  game_ended to all phones so they transition to the Recap screen.
+migrate_host:     Host-leave path. Marks old host left_early, picks the next host
+                  (earliest-joined active player), atomically reassigns
+                  origin_phone_id, and broadcasts host_changed + player_left.
+                  If no active candidate remains, ends the game inline.
+get_recap:        Session-scoped read. Aggregates stats for the Recap screen.
+                  No secrets -- same access level as /leaderboard.
 idle_end_session: Called lazily by lobby_service when a session's last_activity_at
-                is further in the past than retap_interval_minutes. No broadcast
-                (nobody is listening at that point).
+                  is further in the past than retap_interval_minutes. No broadcast
+                  (nobody is listening at that point).
 """
 from api.services.realtime_service import publish as rt_publish
 
@@ -142,6 +146,145 @@ async def get_recap(conn, session_id: str) -> dict:
         "roulette_rounds": roulette_rounds,
         "end_reason": session["end_reason"],
         "share_text": share_text,
+    }
+
+
+async def migrate_host(conn, session_id: str, phone_id: str) -> dict:
+    """Host-leave path: mark old host left_early, pick the new host
+    (earliest-joined active player), reassign origin_phone_id,
+    broadcast host_changed + player_left. If no active candidate
+    remains, end the game.
+
+    BOLA: only the current origin_phone_id may trigger this.
+    Atomic: UPDATE ... WHERE origin_phone_id = $old.
+
+    Returns:
+      {"migrated": True, "new_host_phone_id": ..., "new_host_name": ..., "old_host_name": ...}
+    or:
+      {"ended": True, "session_id": ...}
+    """
+    session = await conn.fetchrow(
+        "SELECT id, table_id, ended_at, origin_phone_id FROM game_sessions WHERE id = $1",
+        session_id,
+    )
+    if not session:
+        raise LookupError("session_not_found")
+    if session["ended_at"] is not None:
+        raise ValueError("session_already_ended")
+    # BOLA: only the current host may trigger migration
+    if session["origin_phone_id"] != phone_id:
+        raise PermissionError("not_origin_phone")
+
+    table_id = str(session["table_id"])
+
+    # Mark old host left_early; fetch their name for the player_left broadcast.
+    old_player = await conn.fetchrow(
+        """
+        UPDATE game_players SET left_early = TRUE, left_at = NOW()
+        WHERE session_id = $1 AND phone_id = $2 AND left_early = FALSE
+        RETURNING id, name, score
+        """,
+        session_id, phone_id,
+    )
+    if old_player:
+        old_host_name = old_player["name"]
+    else:
+        # Already marked left (idempotent call) -- fetch name for broadcast
+        old_host_name = await conn.fetchval(
+            "SELECT name FROM game_players WHERE session_id = $1 AND phone_id = $2",
+            session_id, phone_id,
+        ) or "The host"
+
+    # Resolve any in-flight Chooser round (orphaned card on leaving host's phone)
+    orphan = await conn.fetchrow(
+        """
+        UPDATE rounds SET result = 'skipped', score_awarded = 0
+        WHERE session_id = $1 AND round_type = 'chooser' AND result IS NULL
+        RETURNING id
+        """,
+        session_id,
+    )
+    if orphan:
+        await conn.execute(
+            """
+            UPDATE game_sessions
+            SET cards_skipped = cards_skipped + 1,
+                total_rounds = total_rounds + 1,
+                last_activity_at = NOW()
+            WHERE id = $1
+            """,
+            session_id,
+        )
+
+    # Pick new host: earliest-joined active player from the converted lobby
+    candidate = await conn.fetchrow(
+        """
+        SELECT gp.phone_id, gp.name
+        FROM game_players gp
+        JOIN table_lobby_phones tlp ON tlp.phone_id = gp.phone_id
+        JOIN table_lobbies tl ON tl.id = tlp.lobby_id
+        WHERE gp.session_id = $1
+          AND gp.left_early = FALSE
+          AND gp.phone_id IS NOT NULL
+          AND gp.phone_id != $2
+          AND tl.converted_session_id = $1
+        ORDER BY tlp.joined_at ASC
+        LIMIT 1
+        """,
+        session_id, phone_id,
+    )
+
+    if not candidate:
+        # No active players left — end the game
+        await conn.execute(
+            """
+            UPDATE game_sessions SET ended_at = NOW(), end_reason = 'host_left_no_players'
+            WHERE id = $1 AND ended_at IS NULL
+            """,
+            session_id,
+        )
+        await rt_publish(_channel(table_id), "game_ended", {"session_id": session_id})
+        return {"ended": True, "session_id": session_id}
+
+    new_phone_id = candidate["phone_id"]
+    new_host_name = candidate["name"]
+
+    # Atomically reassign origin (WHERE origin_phone_id = old guards against races)
+    updated = await conn.fetchrow(
+        """
+        UPDATE game_sessions SET origin_phone_id = $1
+        WHERE id = $2 AND origin_phone_id = $3
+        RETURNING id
+        """,
+        new_phone_id, session_id, phone_id,
+    )
+    if not updated:
+        # Race: another call already changed origin -- treat as idempotent success
+        new_phone_id = await conn.fetchval(
+            "SELECT origin_phone_id FROM game_sessions WHERE id = $1", session_id
+        )
+        new_host_name = await conn.fetchval(
+            "SELECT name FROM game_players WHERE session_id = $1 AND phone_id = $2",
+            session_id, new_phone_id,
+        ) or "New host"
+
+    # Single broadcast carries both facts (old host left + new host) so the
+    # client shows one combined toast instead of two that clobber each other.
+    await rt_publish(
+        _channel(table_id),
+        "host_changed",
+        {
+            "session_id": session_id,
+            "new_host_phone_id": new_phone_id,
+            "new_host_name": new_host_name,
+            "old_host_name": old_host_name,
+        },
+    )
+    return {
+        "migrated": True,
+        "new_host_phone_id": new_phone_id,
+        "new_host_name": new_host_name,
+        "old_host_name": old_host_name,
     }
 
 

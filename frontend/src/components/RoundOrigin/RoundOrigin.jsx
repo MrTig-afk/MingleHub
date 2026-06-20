@@ -6,7 +6,14 @@ import RouletteRound from '../Roulette/RouletteRound'
 import TriviaOriginRound from '../Trivia/TriviaOriginRound'
 import Toast from '../Toast'
 import useSessionChannel from '../../hooks/useSessionChannel'
-import { endGame, fetchLeaderboard, pickHotSeat } from '../../services/patronApi'
+import {
+  endGame,
+  fetchCurrentRound,
+  fetchLeaderboard,
+  leaveSession,
+  pickHotSeat,
+  rejoinSession,
+} from '../../services/patronApi'
 
 // Round cadence: Chooser -> Roulette -> Trivia -> Chooser -> Roulette -> Trivia …
 // Falls back to Chooser when a round type needs >= 2 active players and there
@@ -26,11 +33,18 @@ function decideRoundType(roundNumber, activeCount) {
 // players (refreshed when someone leaves) so a Chooser round still starts after a
 // leave -- otherwise it would wait for more fingers than are at the table. The
 // host also gets a toast whenever a player leaves.
-export default function RoundOrigin({ venueName, sessionId, phoneId, tableId, adultsOnly, playerCount = 2 }) {
-  const roundKey = `mh_round_${sessionId}`
+//
+// initialRoundNumber: provided on resume (from server resume payload) so a
+// reloaded or newly-promoted host continues at the correct round without
+// relying on localStorage. When absent, fetched from GET /sessions/{id}/current-round.
+export default function RoundOrigin({
+  venueName, sessionId, phoneId, tableId, adultsOnly,
+  playerCount = 2, initialRoundNumber,
+}) {
+  // roundNumber === null means "loading" — waiting on the server-authoritative value.
   const [roundNumber, setRoundNumber] = useState(() => {
-    const saved = Number(localStorage.getItem(roundKey))
-    return saved >= 1 ? saved : 1
+    if (initialRoundNumber != null && initialRoundNumber >= 1) return initialRoundNumber
+    return null // will fetch on mount
   })
   const [hotSeat, setHotSeat] = useState(null)
   const [error, setError] = useState(null)
@@ -39,9 +53,30 @@ export default function RoundOrigin({ venueName, sessionId, phoneId, tableId, ad
   const [activeCount, setActiveCount] = useState(playerCount)
   const [toast, setToast] = useState(null)
   const [gameEnded, setGameEnded] = useState(false)
+  const [hostLeft, setHostLeft] = useState(false)
   const toastTimer = useRef(null)
 
-  const roundType = decideRoundType(roundNumber, activeCount)
+  // roundNumber is null only when we need to fetch it from the server (no prop provided).
+  // The effect deps include roundNumber so it re-evaluates after any set, but the early
+  // return on `roundNumber !== null` means it only actually fetches once.
+  useEffect(() => {
+    if (roundNumber !== null) return
+    let cancelled = false
+    fetchCurrentRound(sessionId)
+      .then((data) => {
+        if (cancelled) return
+        // current_round_number is the last CREATED round; the next round to play is +1.
+        setRoundNumber(data.current_round_number + 1)
+        if (data.active_count >= 2) setActiveCount(data.active_count)
+      })
+      .catch(() => {
+        if (!cancelled) setRoundNumber(1) // safe fallback
+      })
+    return () => { cancelled = true }
+  }, [sessionId, roundNumber])
+
+  // roundType is only meaningful once roundNumber is loaded.
+  const roundType = roundNumber !== null ? decideRoundType(roundNumber, activeCount) : null
 
   const showToast = useCallback((msg) => {
     setToast(msg)
@@ -81,22 +116,18 @@ export default function RoundOrigin({ venueName, sessionId, phoneId, tableId, ad
       return
     }
     if (event !== 'player_left' && event !== 'player_rejoined') return
+    if (payload?.session_id !== sessionId) return // multi-group safety
     const name = payload?.name || 'A player'
     const msg = event === 'player_left' ? `${name} left the game` : `${name} rejoined`
     // Defer the state updates out of the broadcast handler's synchronous path.
     queueMicrotask(() => { showToast(msg); refreshActiveCount() })
   })
 
-  // Stable within a round (roundNumber only changes when we advance), so passing
-  // it as onDone doesn't change identity on unrelated re-renders (e.g. a toast).
+  // Stable within a round (roundNumber only changes when we advance).
   const advanceRound = useCallback(() => {
     setHotSeat(null)
-    setRoundNumber((n) => {
-      const next = n + 1
-      localStorage.setItem(roundKey, String(next))
-      return next
-    })
-  }, [roundKey])
+    setRoundNumber((n) => n + 1)
+  }, [])
 
   const handleChosen = async () => {
     setPicking(true)
@@ -111,14 +142,70 @@ export default function RoundOrigin({ venueName, sessionId, phoneId, tableId, ad
     }
   }
 
+  const handleEndGame = async () => {
+    if (!window.confirm('End the game for everyone?')) return
+    try {
+      await endGame(sessionId, phoneId)
+      setGameEnded(true)
+    } catch (e) {
+      setError(e.message)
+    }
+  }
+
+  const handleHostLeave = async () => {
+    if (!window.confirm('Leave the game? Another player will become the host.')) return
+    try {
+      const result = await leaveSession(sessionId, phoneId)
+      if (result.ended) {
+        setGameEnded(true)
+      } else {
+        setHostLeft(true)
+      }
+    } catch (e) {
+      setError(e.message)
+    }
+  }
+
+  const handleRejoin = async () => {
+    try {
+      await rejoinSession(sessionId, phoneId)
+      // We're no longer the host (it migrated away). Re-resolve via a reload so
+      // PatronLanding routes us back in as a participant (is_origin is now false)
+      // instead of resuming a host UI whose actions would 403.
+      window.location.reload()
+    } catch (e) {
+      setError(e.message)
+    }
+  }
+
   const renderRound = () => {
     if (gameEnded) {
       return <Recap sessionId={sessionId} venueName={venueName} />
     }
+    if (hostLeft) {
+      return (
+        <div style={screenStyle}>
+          <h1 style={headlineStyle}>You left the game</h1>
+          <p style={dimMono}>Another player is now the host. Your score is saved.</p>
+          <button onClick={handleRejoin} style={primaryButton}>Rejoin game</button>
+          {error && <p style={errStyle}>{error}</p>}
+        </div>
+      )
+    }
+    // Loading: waiting on server-authoritative round number
+    if (roundNumber === null) {
+      return (
+        <div style={screenStyle}>
+          <p style={dimMono}>Loading…</p>
+        </div>
+      )
+    }
+
+    let roundContent
     if (roundType === 'roulette') {
       // key by roundNumber so advancing Roulette -> Roulette remounts it
       // and starts a fresh round (same guard as TriviaOriginRound).
-      return (
+      roundContent = (
         <RouletteRound
           key={roundNumber}
           sessionId={sessionId}
@@ -127,11 +214,10 @@ export default function RoundOrigin({ venueName, sessionId, phoneId, tableId, ad
           onDone={advanceRound}
         />
       )
-    }
-    if (roundType === 'trivia') {
+    } else if (roundType === 'trivia') {
       // key by roundNumber so advancing Trivia -> Trivia remounts it and actually
       // starts a fresh round (otherwise the same element just re-renders).
-      return (
+      roundContent = (
         <TriviaOriginRound
           key={roundNumber}
           sessionId={sessionId}
@@ -140,9 +226,8 @@ export default function RoundOrigin({ venueName, sessionId, phoneId, tableId, ad
           onDone={advanceRound}
         />
       )
-    }
-    if (hotSeat) {
-      return (
+    } else if (hotSeat) {
+      roundContent = (
         <ChooserRound
           sessionId={sessionId}
           phoneId={phoneId}
@@ -151,48 +236,48 @@ export default function RoundOrigin({ venueName, sessionId, phoneId, tableId, ad
           onRoundComplete={advanceRound}
         />
       )
+    } else {
+      roundContent = (
+        <div style={{ position: 'relative', minHeight: '100dvh' }}>
+          <FingerChooser
+            onCardDraw={handleChosen}
+            requiredFingers={activeCount}
+            recentWinnerPositions={recentWinners}
+            onWinnerChosen={(pos) => setRecentWinners((prev) => [...prev, pos].slice(-3))}
+            hideBack
+          />
+          {(picking || error) && (
+            <div style={bannerStyle}>
+              {picking && <p style={{ margin: 0 }}>Picking…</p>}
+              {error && <p style={{ margin: 0, color: 'var(--tertiary)' }}>{error}</p>}
+            </div>
+          )}
+          <p style={roundBadgeStyle}>
+            Round {roundNumber} · {roundType === 'roulette' ? 'Roulette' : roundType === 'trivia' ? 'Trivia' : 'Chooser'}
+          </p>
+          <p style={venueLabelStyle}>{venueName}</p>
+        </div>
+      )
     }
+
+    // Host controls (Leave + End Game) persist as a fixed overlay over all round types.
     return (
-      <div style={{ position: 'relative', minHeight: '100dvh' }}>
-        <FingerChooser
-          onCardDraw={handleChosen}
-          requiredFingers={activeCount}
-          recentWinnerPositions={recentWinners}
-          onWinnerChosen={(pos) => setRecentWinners((prev) => [...prev, pos].slice(-3))}
-          hideBack
-        />
-        {(picking || error) && (
-          <div style={bannerStyle}>
-            {picking && <p style={{ margin: 0 }}>Picking…</p>}
-            {error && <p style={{ margin: 0, color: 'var(--tertiary)' }}>{error}</p>}
-          </div>
-        )}
-        <p style={roundBadgeStyle}>
-          Round {roundNumber} · {roundType === 'roulette' ? 'Roulette' : roundType === 'trivia' ? 'Trivia' : 'Chooser'}
-        </p>
-        <p style={venueLabelStyle}>{venueName}</p>
-        <button
-          onClick={async () => {
-            if (!window.confirm('End the game for everyone?')) return
-            try {
-              await endGame(sessionId, phoneId)
-              setGameEnded(true)
-            } catch (e) {
-              setError(e.message)
-            }
-          }}
-          style={endGameButtonStyle}
-        >
-          End Game
-        </button>
-      </div>
+      <>
+        {roundContent}
+        <div style={hostControlsStyle}>
+          <button onClick={handleHostLeave} style={hostLeaveButtonStyle}>Leave</button>
+          <button onClick={handleEndGame} style={endGameButtonStyle}>End Game</button>
+        </div>
+        <Toast message={toast} />
+      </>
     )
   }
 
   return (
     <>
       {renderRound()}
-      <Toast message={toast} />
+      {/* Toast rendered here too so it shows on the non-round screens (hostLeft, loading) */}
+      {(gameEnded || hostLeft || roundNumber === null) && <Toast message={toast} />}
     </>
   )
 }
@@ -233,10 +318,27 @@ const venueLabelStyle = {
   zIndex: 30,
 }
 
-const endGameButtonStyle = {
+// Parent container positions both buttons; individual buttons don't need position:fixed.
+const hostControlsStyle = {
   position: 'fixed',
   bottom: 'calc(env(safe-area-inset-bottom, 0px) + 16px)',
   right: 'var(--safe-margin)',
+  display: 'flex',
+  gap: '8px',
+  zIndex: 30,
+}
+
+const hostLeaveButtonStyle = {
+  background: 'transparent',
+  color: 'var(--on-surface-dim)',
+  border: '1px solid var(--outline)',
+  borderRadius: '8px',
+  padding: '10px 14px',
+  fontSize: '13px',
+  cursor: 'pointer',
+}
+
+const endGameButtonStyle = {
   background: 'transparent',
   color: 'var(--on-surface-dim)',
   border: '1px solid var(--outline)',
@@ -244,5 +346,35 @@ const endGameButtonStyle = {
   padding: '10px 18px',
   fontSize: '13px',
   cursor: 'pointer',
-  zIndex: 30,
+}
+
+const screenStyle = {
+  minHeight: '100dvh',
+  background: 'var(--bg-floor)',
+  color: 'var(--on-surface)',
+  fontFamily: 'var(--font-body)',
+  display: 'flex',
+  flexDirection: 'column',
+  alignItems: 'center',
+  justifyContent: 'center',
+  gap: '16px',
+  padding: '24px',
+  textAlign: 'center',
+}
+
+const headlineStyle = { fontFamily: 'var(--font-headline)', fontSize: '26px', margin: 0 }
+const dimMono = { fontFamily: 'var(--font-mono)', fontSize: '13px', color: 'var(--on-surface-dim)', margin: 0 }
+const errStyle = { color: 'var(--tertiary)', fontFamily: 'var(--font-mono)', fontSize: '12px', margin: 0 }
+
+const primaryButton = {
+  padding: '16px',
+  borderRadius: '10px',
+  background: 'var(--primary)',
+  color: 'var(--bg-floor)',
+  fontWeight: 700,
+  fontSize: '16px',
+  border: 'none',
+  width: '100%',
+  maxWidth: '320px',
+  cursor: 'pointer',
 }

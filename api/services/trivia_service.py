@@ -599,7 +599,8 @@ async def get_current_state(conn, session_id: str, phone_id: str) -> dict | None
     (no correct_option), or between-rounds leaderboard.
     """
     session = await conn.fetchrow(
-        "SELECT id, ended_at FROM game_sessions WHERE id = $1", session_id
+        "SELECT id, ended_at, origin_phone_id FROM game_sessions WHERE id = $1",
+        session_id,
     )
     if not session:
         return None
@@ -609,6 +610,9 @@ async def get_current_state(conn, session_id: str, phone_id: str) -> dict | None
         "session_id": session_id,
         "is_member": player is not None,
         "left_early": bool(player["left_early"]) if player else False,
+        # Poll fallback for host promotion: if this phone is now the origin,
+        # SessionParticipant can detect promotion even if host_changed broadcast was missed.
+        "is_origin": session["origin_phone_id"] == phone_id,
         "leaderboard": await _leaderboard(conn, session_id),
     }
 

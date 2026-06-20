@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import AnswerTiles from './AnswerTiles'
 import Leaderboard from './Leaderboard'
 import Recap from '../Recap/Recap'
+import RoundOrigin from '../RoundOrigin/RoundOrigin'
 import Toast from '../Toast'
 import useSessionChannel from '../../hooks/useSessionChannel'
 import { answerTrivia, fetchTriviaCurrent, leaveSession, rejoinSession, voteLoser } from '../../services/patronApi'
@@ -30,6 +31,10 @@ export default function SessionParticipant({ venueName, sessionId, phoneId, tabl
   const [gameEnded, setGameEnded] = useState(false)
   const [rouletteResult, setRouletteResult] = useState(null) // brief result flash
   const [rouletteVoteOpen, setRouletteVoteOpen] = useState(false) // false during the read window
+  // Host migration: pendingPromotion is set on host_changed broadcast or poll fallback.
+  // promoted is only set true at a between-rounds boundary so we never interrupt a round.
+  const [pendingPromotion, setPendingPromotion] = useState(false)
+  const [promoted, setPromoted] = useState(false)
   const pollRef = useRef(null)
   const roundRef = useRef(null)
   const toastTimer = useRef(null)
@@ -43,7 +48,8 @@ export default function SessionParticipant({ venueName, sessionId, phoneId, tabl
   }, [])
 
   useEffect(() => {
-    if (left) return
+    // Stop polling once the phone has left or been promoted (RoundOrigin manages its own state).
+    if (left || promoted) return
     let cancelled = false
     const tick = async () => {
       try {
@@ -57,6 +63,10 @@ export default function SessionParticipant({ venueName, sessionId, phoneId, tabl
           setDone(false)
         }
         if (data.phase !== 'question') roundRef.current = data.trivia_round_id || null
+        // Poll fallback: detect promotion even if host_changed broadcast was missed.
+        if (data.is_origin && !promoted) {
+          setPendingPromotion(true)
+        }
       } catch (e) {
         if (!cancelled) setError(e.message)
       }
@@ -65,7 +75,7 @@ export default function SessionParticipant({ venueName, sessionId, phoneId, tabl
     tick()
     const id = setInterval(tick, POLL_MS)
     return () => { cancelled = true; clearInterval(id); pollRef.current = null }
-  }, [sessionId, phoneId, left])
+  }, [sessionId, phoneId, left, promoted])
 
   // Roulette read window: when a new roulette round appears, hold the vote UI for
   // ~10s so everyone can read the challenge, then open voting automatically.
@@ -78,13 +88,36 @@ export default function SessionParticipant({ venueName, sessionId, phoneId, tabl
     return () => clearTimeout(open)
   }, [state?.phase, state?.round_id])
 
+  // Deferred promotion: only switch to host at a between-rounds boundary so we
+  // never interrupt a mid-round new host. StrictMode: setPromoted(true) is idempotent.
+  // queueMicrotask defers the setState out of the effect's synchronous body.
+  useEffect(() => {
+    if (!pendingPromotion) return
+    if (!state) return
+    // between_rounds or ended -> promote immediately; otherwise wait for the next poll tick.
+    if (state.phase === 'between_rounds' || state.phase === 'ended') {
+      queueMicrotask(() => setPromoted(true))
+    }
+  }, [pendingPromotion, state])
+
   useSessionChannel(tableId, phoneId, (event, payload) => {
     // Multi-group safety: only react to game_ended for our own session.
     if (event === 'game_ended' && payload?.session_id === sessionId) {
       queueMicrotask(() => setGameEnded(true))
     }
-    if (event === 'player_left') showToast(`${payload?.name || 'A player'} left the game`)
-    if (event === 'player_rejoined') showToast(`${payload?.name || 'A player'} rejoined`)
+    // Host migration broadcast: promote this phone or show a toast to everyone else.
+    if (event === 'host_changed' && payload?.session_id === sessionId) {
+      if (payload.new_host_phone_id === phoneId) {
+        queueMicrotask(() => setPendingPromotion(true))
+      } else {
+        const who = payload.old_host_name ? `${payload.old_host_name} left — ` : ''
+        showToast(`${who}${payload.new_host_name || 'A player'} is now the host`)
+      }
+      return
+    }
+    // Multi-group safety: scope the player toasts to our own session.
+    if (event === 'player_left' && payload?.session_id === sessionId) showToast(`${payload?.name || 'A player'} left the game`)
+    if (event === 'player_rejoined' && payload?.session_id === sessionId) showToast(`${payload?.name || 'A player'} rejoined`)
     // Once the roulette round resolves, get_current_state returns between_rounds,
     // so show the result (who lost) from the broadcast for a few seconds before
     // the poll replaces it with the scoreboard.
@@ -138,6 +171,18 @@ export default function SessionParticipant({ venueName, sessionId, phoneId, tabl
   }
 
   const renderContent = () => {
+    // Host promotion: this phone is now the session origin. Render RoundOrigin
+    // inline -- it fetches the server-authoritative round number on mount.
+    if (promoted) {
+      return (
+        <RoundOrigin
+          venueName={venueName}
+          sessionId={sessionId}
+          phoneId={phoneId}
+          tableId={tableId}
+        />
+      )
+    }
     // Game over: the realtime game_ended flag is the fast path; the poll's
     // phase==='ended' is the reliable fallback if that broadcast was missed.
     if (gameEnded || state?.phase === 'ended') {
