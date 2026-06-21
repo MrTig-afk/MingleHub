@@ -299,7 +299,7 @@ export default function SessionParticipant({ venueName, sessionId, phoneId, tabl
       const isLast = myIndex >= state.questions.length - 1
       return (
         <Screen>
-          <AnswerTiles question={question} reveal={reveal} onAnswer={handleAnswer} />
+          <AnswerTiles question={question} reveal={reveal} onAnswer={handleAnswer} phoneId={phoneId} />
           {answered && (
             <button onClick={handleNext} style={primaryButton}>
               {isLast ? 'See scores →' : 'Next question →'}

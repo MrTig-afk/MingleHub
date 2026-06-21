@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { fetchOverview } from '../../services/dashboardApi'
+import { fetchOverview, fetchTables } from '../../services/dashboardApi'
 import { buttonStyle, cardStyle, chipStyle, formatDuration, formatRelativeTime } from './dashboardStyles'
 import usePolling from './usePolling'
 
@@ -12,7 +12,8 @@ const shimmerCard = (height = 80) => ({
 
 export default function DashboardHome({ token, navigate }) {
   const { data, status, error, lastUpdatedAt, reload } = usePolling(
-    () => fetchOverview(token),
+    () => Promise.all([fetchOverview(token), fetchTables(token)])
+      .then(([overview, tables]) => ({ ...overview, tables })),
     { intervalMs: 7000, tokenKey: 'mh_dashboard_token' }
   )
 
@@ -48,8 +49,12 @@ export default function DashboardHome({ token, navigate }) {
   }
 
   const tonight = data?.tonight || {}
-  const sessions = data?.active_sessions || []
-  const noTablesNight = tonight.active_tables === 0 && tonight.sessions_tonight === 0
+  const activeSessions = data?.active_sessions || []
+  const pairedTables = (data?.tables || []).filter((t) => t.tag_paired)
+  // Idle = a paired table with no live session right now. Active tables render
+  // first (highlighted), idle ones below (dimmed) — both open the same detail.
+  const idleTables = pairedTables.filter((t) => t.active_session_count === 0)
+  const hasTables = pairedTables.length > 0 || activeSessions.length > 0
 
   const tonightCards = [
     { value: tonight.active_tables,   label: 'active now' },
@@ -84,8 +89,8 @@ export default function DashboardHome({ token, navigate }) {
         ))}
       </div>
 
-      {/* No tables CTA */}
-      {noTablesNight && (
+      {/* No tables configured at all */}
+      {!hasTables && (
         <div style={{ ...cardStyle, marginTop: '16px', textAlign: 'center' }}>
           <p style={{ color: 'var(--on-surface-dim)', margin: '0 0 12px' }}>No tables set up yet.</p>
           <button onClick={() => navigate('/dashboard/pair-tags')} style={buttonStyle}>
@@ -94,26 +99,20 @@ export default function DashboardHome({ token, navigate }) {
         </div>
       )}
 
-      {/* Live sessions section */}
-      {!noTablesNight && (
+      {/* Tables: active (highlighted) first, idle (dimmed) below — both clickable */}
+      {hasTables && (
         <>
           <h2 style={{ fontFamily: 'var(--font-headline)', fontSize: '18px', margin: '24px 0 12px' }}>
-            Live Tables
+            Tables
           </h2>
 
-          {sessions.length === 0 && tonight.sessions_tonight > 0 && (
-            <p style={{ color: 'var(--on-surface-dim)', textAlign: 'center', padding: '16px 0' }}>
+          {activeSessions.length === 0 && (
+            <p style={{ color: 'var(--on-surface-dim)', fontSize: '13px', margin: '0 0 12px' }}>
               No active games right now.
             </p>
           )}
 
-          {sessions.length === 0 && tonight.sessions_tonight === 0 && !noTablesNight && (
-            <p style={{ color: 'var(--on-surface-dim)', textAlign: 'center', padding: '32px 0' }}>
-              No games tonight yet. Sessions will appear here when patrons start playing.
-            </p>
-          )}
-
-          {sessions.map((s) => {
+          {activeSessions.map((s) => {
             const isLobby = s.status === 'lobby'
             const roundTypeLabel = s.current_round_type
               ? s.current_round_type.charAt(0).toUpperCase() + s.current_round_type.slice(1)
@@ -131,10 +130,17 @@ export default function DashboardHome({ token, navigate }) {
             }
 
             return (
-              <div key={s.session_id} style={{ ...cardStyle, marginBottom: '12px' }}>
+              <div
+                key={s.session_id}
+                style={{ ...cardStyle, marginBottom: '12px', cursor: s.table_id ? 'pointer' : 'default' }}
+                onClick={s.table_id ? () => navigate(`/dashboard/tables/${s.table_id}`) : undefined}
+              >
                 {/* Top row: table number + status chip */}
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
-                  <span style={{ fontWeight: 700 }}>Table {s.table_number}</span>
+                  <span style={{ fontWeight: 700 }}>
+                    Table {s.table_number}
+                    <span style={{ color: 'var(--on-surface-dim)', fontWeight: 400, marginLeft: '6px' }}>&rsaquo;</span>
+                  </span>
                   <span style={chipStyle(s.status)}>
                     {s.status === 'active' && (
                       <span style={{
@@ -168,6 +174,22 @@ export default function DashboardHome({ token, navigate }) {
               </div>
             )
           })}
+
+          {idleTables.map((t) => (
+            <div
+              key={t.id}
+              style={{ ...cardStyle, marginBottom: '8px', cursor: 'pointer', opacity: 0.5 }}
+              onClick={() => navigate(`/dashboard/tables/${t.id}`)}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontWeight: 700 }}>
+                  Table {t.table_number}
+                  <span style={{ color: 'var(--on-surface-dim)', fontWeight: 400, marginLeft: '6px' }}>&rsaquo;</span>
+                </span>
+                <span style={{ fontSize: '12px', color: 'var(--on-surface-dim)' }}>idle</span>
+              </div>
+            </div>
+          ))}
         </>
       )}
     </div>

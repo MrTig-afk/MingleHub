@@ -77,7 +77,13 @@ export default function Recap({ sessionId, venueName }) {
         <StatRow label="Roulette Rounds" value={String(recap.roulette_rounds)} />
       </div>
 
-      <button onClick={handleShare} style={primaryButton}>
+      <button
+        onClick={() => { window.location.href = `${window.location.pathname}?newgame=1` }}
+        style={primaryButton}
+      >
+        New game
+      </button>
+      <button onClick={handleShare} style={secondaryButton}>
         {copied ? 'Copied!' : 'Share'}
       </button>
     </Screen>
@@ -125,6 +131,14 @@ const primaryButton = {
   width: '100%',
   maxWidth: '320px',
   cursor: 'pointer',
+}
+
+const secondaryButton = {
+  ...primaryButton,
+  background: 'transparent',
+  color: 'var(--on-surface)',
+  border: '1px solid var(--outline)',
+  fontWeight: 600,
 }
 
 const statsCardStyle = {

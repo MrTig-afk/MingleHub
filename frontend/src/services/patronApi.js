@@ -9,7 +9,7 @@ const h = { 'Content-Type': 'application/json', 'X-API-Key': KEY }
 // if the venue/table can't be resolved. Signature params are omitted when
 // the tag is a plain NTAG 213 (no crypto), letting the backend skip
 // verification and still resolve the table.
-export const fetchTap = ({ venueSlug, tableNumber, tagUid, counter, sig, phoneId }) => {
+export const fetchTap = ({ venueSlug, tableNumber, tagUid, counter, sig, phoneId, newGame }) => {
   const params = new URLSearchParams({
     venue_slug: venueSlug,
     table_number: tableNumber,
@@ -18,6 +18,7 @@ export const fetchTap = ({ venueSlug, tableNumber, tagUid, counter, sig, phoneId
   if (tagUid) params.set('tag_uid', tagUid)
   if (sig) params.set('sig', sig)
   if (counter != null && !isNaN(counter)) params.set('counter', counter)
+  if (newGame) params.set('new_game', '1')
   return fetch(`${BASE}/api/patron/tap?${params}`, { headers: h }).then(async (r) => {
     if (!r.ok) throw new Error((await r.json()).detail || r.status)
     return r.json()

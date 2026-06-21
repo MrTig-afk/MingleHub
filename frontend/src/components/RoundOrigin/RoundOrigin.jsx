@@ -21,6 +21,11 @@ import {
 // aren't enough at the table (Roulette and Trivia both require at least 2).
 const ROUND_CADENCE = ['chooser', 'roulette', 'trivia']
 
+// When a game drops below 2 active players it parks on "Waiting"; if no one
+// rejoins within this window it auto-ends (a 1-player social game is pointless).
+// A re-tap/rejoin before it expires cancels the countdown and resumes play.
+const SOLO_TIMEOUT_SECONDS = 60
+
 function decideRoundType(roundNumber, activeCount) {
   const type = ROUND_CADENCE[(roundNumber - 1) % 3]
   if (type === 'roulette' && activeCount < 2) return 'chooser'
@@ -48,6 +53,11 @@ export default function RoundOrigin({
     return null // will fetch on mount
   })
   const [hotSeat, setHotSeat] = useState(null)
+  // Host-gated rounds: Roulette/Trivia don't auto-start — the host taps "Start"
+  // on a gate screen first (Chooser is already gated by the finger picker).
+  // Reset to false each time we advance to a new round.
+  const [roundStarted, setRoundStarted] = useState(false)
+  const [soloLeft, setSoloLeft] = useState(SOLO_TIMEOUT_SECONDS)
   const [error, setError] = useState(null)
   const [picking, setPicking] = useState(false)
   const [recentWinners, setRecentWinners] = useState([])
@@ -125,6 +135,32 @@ export default function RoundOrigin({
     return () => clearInterval(id)
   }, [activeCount, refreshActiveCount])
 
+  // Drop-to-1 auto-end (design choice C): while parked below 2 players, run a
+  // short countdown. If a rejoin lifts the count back to 2 the effect resets;
+  // if it hits 0, end the game (the lone player is the origin, so endGame is
+  // allowed). Resets to the full window whenever the game is healthy again.
+  useEffect(() => {
+    if (gameEnded || hostLeft || activeCount >= 2) return
+    const startMs = Date.now()
+    let done = false
+    let id
+    const tick = () => {
+      const left = Math.max(0, SOLO_TIMEOUT_SECONDS - Math.floor((Date.now() - startMs) / 1000))
+      setSoloLeft(left)
+      if (left <= 0 && !done) {
+        done = true
+        clearInterval(id)
+        endGame(sessionId, phoneId).catch(() => {}).finally(() => setGameEnded(true))
+      }
+    }
+    // First tick off the synchronous effect body (avoids set-state-in-effect),
+    // then once a second. A rejoin (activeCount >= 2) re-runs the effect and the
+    // cleanup clears these — cancelling the auto-end.
+    const t0 = setTimeout(tick, 0)
+    id = setInterval(tick, 1000)
+    return () => { clearTimeout(t0); clearInterval(id) }
+  }, [activeCount, gameEnded, hostLeft, sessionId, phoneId])
+
   // Periodic poll (~10s) for retap state + lazy-end detection.
   // The mount-only fetch above seeds roundNumber; this poll is separate and
   // complementary -- it updates the retap overlay and catches lazy session ends.
@@ -167,6 +203,7 @@ export default function RoundOrigin({
   // Stable within a round (roundNumber only changes when we advance).
   const advanceRound = useCallback(() => {
     setHotSeat(null)
+    setRoundStarted(false)
     setRoundNumber((n) => n + 1)
   }, [])
 
@@ -243,7 +280,25 @@ export default function RoundOrigin({
     }
 
     let roundContent
-    if (roundType === 'roulette') {
+    if ((roundType === 'roulette' || roundType === 'trivia') && !roundStarted) {
+      // Host-gated start screen — the round only begins when the host taps Start,
+      // so rounds never auto-advance past an unattended table.
+      const label = roundType === 'roulette' ? 'Roulette' : 'Trivia'
+      const blurb = roundType === 'roulette'
+        ? 'Whole table plays — then vote who lost.'
+        : 'Everyone answers 5 questions on their own phone.'
+      roundContent = (
+        <div style={screenStyle}>
+          <p style={dimMono}>Round {roundNumber}</p>
+          <h1 style={headlineStyle}>{label} round</h1>
+          <p style={dimMono}>{blurb}</p>
+          <button onClick={() => setRoundStarted(true)} style={primaryButton}>
+            Start {label} round
+          </button>
+          <p style={venueLabelStyle}>{venueName}</p>
+        </div>
+      )
+    } else if (roundType === 'roulette') {
       // key by roundNumber so advancing Roulette -> Roulette remounts it
       // and starts a fresh round (same guard as TriviaOriginRound).
       roundContent = (
@@ -284,7 +339,9 @@ export default function RoundOrigin({
       roundContent = (
         <div style={screenStyle}>
           <h1 style={headlineStyle}>Waiting for players…</h1>
-          <p style={dimMono}>The game needs at least 2 players. It’ll continue as soon as someone joins or re-taps back in.</p>
+          <p style={dimMono}>The game needs at least 2 players. Someone can re-tap the tag to jump back in.</p>
+          <p style={dimMono}>Ending in {soloLeft}s if no one rejoins.</p>
+          <button onClick={handleEndGame} style={primaryButton}>End game now</button>
           <p style={venueLabelStyle}>{venueName}</p>
         </div>
       )

@@ -32,6 +32,7 @@ async def tap(
     counter: Optional[int] = Query(None, ge=0),
     sig: Optional[str] = Query(None),
     phone_id: Optional[str] = Query(None, max_length=64),
+    new_game: bool = Query(False),
 ):
     """Resolves an NFC tap into a venue/table.
 
@@ -107,6 +108,7 @@ async def tap(
                 )
                 table_state = await lobby_service.resolve_table_state(
                     conn, str(venue["id"]), str(table["id"]), table_number, phone_id,
+                    force_new=new_game,
                 )
     except HTTPException:
         raise

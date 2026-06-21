@@ -166,7 +166,7 @@ export default function TriviaOriginRound({ sessionId, phoneId, onDone }) {
     const isLast = myIndex >= questions.length - 1
     return (
       <Screen>
-        <AnswerTiles question={questions[myIndex]} reveal={reveal} onAnswer={handleAnswer} />
+        <AnswerTiles question={questions[myIndex]} reveal={reveal} onAnswer={handleAnswer} phoneId={phoneId} />
         {answered && (
           isLast ? (
             <button onClick={handleSeeScores} disabled={busy} style={primaryButton}>

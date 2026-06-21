@@ -43,6 +43,9 @@ function parseTapFromLocation() {
     counter: Number(params.get('counter')),
     sig: params.get('sig'),
     phoneId: resolvePhoneId(),
+    // "New game" button on the recap screen navigates here with ?newgame=1 so
+    // the tap skips the recap-lock and starts a fresh lobby.
+    newGame: params.get('newgame') === '1',
   }
 }
 

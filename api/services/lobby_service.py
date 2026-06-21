@@ -138,7 +138,9 @@ async def _check_phone_session_resume(conn, table_id: str, phone_id: str) -> dic
     return None
 
 
-async def resolve_table_state(conn, venue_id: str, table_id: str, table_number: int, phone_id: str) -> dict:
+async def resolve_table_state(
+    conn, venue_id: str, table_id: str, table_number: int, phone_id: str, force_new: bool = False,
+) -> dict:
     """Called right after a tap verifies. Decides what this phone should see:
     a lobby to wait in, a Join-or-New chooser, "table full", or a session
     resume (re-tap of a phone that already belongs to an active session)."""
@@ -187,7 +189,9 @@ async def resolve_table_state(conn, venue_id: str, table_id: str, table_number: 
             """,
             table_id, phone_id,
         )
-    if recap_row:
+    # force_new (the "New game" button on the recap screen) bypasses the recap-lock
+    # so a fresh tap starts a new lobby instead of re-showing the just-ended recap.
+    if recap_row and not force_new:
         return {"phase": "recap", "session_id": str(recap_row["id"])}
 
     groups = await _active_sessions(conn, table_id)

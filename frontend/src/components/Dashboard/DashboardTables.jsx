@@ -78,10 +78,17 @@ export default function DashboardTables({ token, navigate }) {
     )
   }
 
-  if (!tables || tables.length === 0) {
+  // Show tables that are configured (an NFC tag paired) OR currently in use (a
+  // live session). A seeded-but-never-configured, idle table stays hidden — so a
+  // venue that hasn't paired anything shows an empty state, not phantom tables.
+  const visibleTables = (tables || []).filter((t) => t.tag_paired || t.active_session_count > 0)
+
+  if (visibleTables.length === 0) {
     return (
       <div style={{ ...cardStyle, marginTop: '8px', textAlign: 'center' }}>
-        <p style={{ color: 'var(--on-surface-dim)', margin: '0 0 12px' }}>No tables configured yet.</p>
+        <p style={{ color: 'var(--on-surface-dim)', margin: '0 0 12px' }}>
+          No tables configured yet. Pair an NFC tag to add one.
+        </p>
         <button onClick={() => navigate('/dashboard/pair-tags')} style={buttonStyle}>
           Pair NFC Tags
         </button>
@@ -95,10 +102,10 @@ export default function DashboardTables({ token, navigate }) {
         Tables
       </h2>
 
-      {tables.map((table) => (
+      {visibleTables.map((table) => (
         <div key={table.id}>
           <div
-            style={{ ...cardStyle, cursor: 'pointer', marginBottom: table.tag_paired ? '12px' : '4px' }}
+            style={{ ...cardStyle, cursor: 'pointer', marginBottom: '12px' }}
             onClick={() => navigate(`/dashboard/tables/${table.id}`)}
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>

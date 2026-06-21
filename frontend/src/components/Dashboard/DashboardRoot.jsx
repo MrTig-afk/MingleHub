@@ -147,7 +147,8 @@ export default function DashboardRoot() {
         padding: '24px',
       }}>
         <div style={{ ...cardStyle, maxWidth: '480px', textAlign: 'center' }}>
-          <p>Admin accounts use /admin. This dashboard is for venue owners and staff.</p>
+          <p style={{ marginBottom: '16px' }}>Admin accounts use /admin. This dashboard is for venue owners and staff.</p>
+          <button onClick={handleLogout} style={buttonStyle}>Log out / use a different account</button>
         </div>
       </div>
     )
@@ -170,6 +171,9 @@ export default function DashboardRoot() {
             {error}
           </p>
           <button onClick={checkAuth} style={buttonStyle}>Retry</button>
+          <button onClick={handleLogout} style={{ ...buttonStyle, background: 'transparent', color: 'var(--on-surface-dim)', marginTop: '10px' }}>
+            Log out / use a different account
+          </button>
         </div>
       </div>
     )

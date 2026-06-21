@@ -294,12 +294,6 @@ export default function DashboardTableDetail({ token, tableId, navigate, user })
           >
             Re-pair Tag
           </button>
-          <button
-            onClick={() => navigate('/dashboard/pair-tags')}
-            style={{ ...buttonSecondaryStyle, color: 'var(--tertiary)' }}
-          >
-            Reset Table (dev)
-          </button>
         </div>
       )}
     </div>

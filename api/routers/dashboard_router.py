@@ -578,6 +578,7 @@ async def overview(
                 """
                 SELECT
                     gs.id AS session_id,
+                    t.id AS table_id,
                     t.table_number,
                     gs.group_label,
                     gs.started_at,
@@ -630,6 +631,7 @@ async def overview(
 
             active_sessions.append({
                 "session_id": str(row["session_id"]),
+                "table_id": str(row["table_id"]),
                 "table_number": row["table_number"],
                 "group_label": row["group_label"],
                 "player_count": int(row["player_count"]),

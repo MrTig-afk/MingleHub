@@ -7,7 +7,31 @@ import { useEffect, useRef, useState } from 'react'
 
 const LETTERS = ['A', 'B', 'C', 'D']
 
-export default function AnswerTiles({ question, reveal, onAnswer, disabled }) {
+// Deterministic per (phoneId, question): renders the four options in a shuffled
+// order that differs per phone but is stable for a given question (so tiles never
+// move under a finger). Badges stay A-D by POSITION; each tile still submits its
+// TRUE letter, so the server-side answer check is unaffected.
+function shuffledOrder(seed) {
+  let h = 2166136261
+  for (let i = 0; i < seed.length; i++) {
+    h ^= seed.charCodeAt(i)
+    h = Math.imul(h, 16777619)
+  }
+  const next = () => {
+    h += 0x6d2b79f5
+    let t = Math.imul(h ^ (h >>> 15), 1 | h)
+    t ^= t + Math.imul(t ^ (t >>> 7), 61 | t)
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+  }
+  const arr = ['A', 'B', 'C', 'D']
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(next() * (i + 1))
+    const tmp = arr[i]; arr[i] = arr[j]; arr[j] = tmp
+  }
+  return arr
+}
+
+export default function AnswerTiles({ question, reveal, onAnswer, disabled, phoneId }) {
   const [secondsLeft, setSecondsLeft] = useState(question?.duration_seconds ?? 20)
   const [submitting, setSubmitting] = useState(null)
   // When THIS question was displayed — self-paced, so the 20s timer is per phone
@@ -42,6 +66,8 @@ export default function AnswerTiles({ question, reveal, onAnswer, disabled }) {
   if (!question) return null
   const answered = Boolean(reveal)
   const expired = secondsLeft <= 0
+  // Per-phone display order, stable per question. Badges remain A-D by position.
+  const order = shuffledOrder(`${phoneId || ''}:${question.index}`)
 
   return (
     <div style={wrapStyle}>
@@ -60,9 +86,9 @@ export default function AnswerTiles({ question, reveal, onAnswer, disabled }) {
       <p style={questionStyle}>{question.question}</p>
 
       <div style={tilesStyle}>
-        {LETTERS.map((letter) => {
-          const isMine = reveal?.selected_option === letter
-          const isCorrect = reveal?.correct_option === letter
+        {order.map((trueLetter, pos) => {
+          const isMine = reveal?.selected_option === trueLetter
+          const isCorrect = reveal?.correct_option === trueLetter
           let background = 'var(--glass-bg)'
           let borderColor = 'var(--outline)'
           if (answered) {
@@ -71,13 +97,13 @@ export default function AnswerTiles({ question, reveal, onAnswer, disabled }) {
           }
           return (
             <button
-              key={letter}
-              onClick={() => handlePick(letter)}
+              key={trueLetter}
+              onClick={() => handlePick(trueLetter)}
               disabled={disabled || answered || Boolean(submitting)}
               style={{ ...tileStyle, background, borderColor }}
             >
-              <span style={letterBadgeStyle}>{letter}</span>
-              <span style={{ flex: 1, textAlign: 'left' }}>{question.options[letter]}</span>
+              <span style={letterBadgeStyle}>{LETTERS[pos]}</span>
+              <span style={{ flex: 1, textAlign: 'left' }}>{question.options[trueLetter]}</span>
               {answered && isCorrect && <span>✅</span>}
               {answered && isMine && !isCorrect && <span>❌</span>}
             </button>
