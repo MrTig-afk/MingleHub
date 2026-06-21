@@ -491,17 +491,23 @@ def test_ninth_player_gets_409_session_full(
     Strategy: The session is created with 8 phones via _setup_session (the lobby
     start path is the natural way to get 8 players in, since each _tap adds a
     player to the lobby which becomes game_players on start).
-    Then a 9th fresh phone tries to join the already-started session.
+    Then a 9th fresh phone taps (proving presence) and tries to join.
     """
     # Start with 8 phones in the session (MAX_PLAYERS)
     s = _setup_session(client, api_key_header, owner_a_token, fresh_table, num_phones=8)
     session_id = s["session_id"]
+    tag_uid = s["tag_uid"]
 
     # Confirm 8 active players
     assert _active_player_count(session_id) == 8
 
-    # 9th brand-new phone tries to join
+    # BOLA fix: 9th phone must tap the table first to prove physical presence.
+    # _setup_session used counters 1-8, so use counter 9.
     ninth = _fresh_phone()
+    _tap(
+        client, api_key_header, fresh_table["venue_slug"], fresh_table["table_number"],
+        tag_uid, 9, ninth,
+    )
     resp = _join_session(client, api_key_header, session_id, ninth, name="Ninth")
     assert resp.status_code == 409, (
         f"Expected 409 for 9th player at cap, got {resp.status_code}: {resp.text}"
@@ -547,11 +553,17 @@ def test_join_cap_not_triggered_below_max(
     joining a 6-player session must succeed (200)."""
     s = _setup_session(client, api_key_header, owner_a_token, fresh_table, num_phones=6)
     session_id = s["session_id"]
+    tag_uid = s["tag_uid"]
 
     assert _active_player_count(session_id) == 6
 
-    # 7th phone -- still under cap
+    # BOLA fix: 7th phone must tap the table first to prove physical presence.
+    # _setup_session used counters 1-6, so use counter 7.
     seventh = _fresh_phone()
+    _tap(
+        client, api_key_header, fresh_table["venue_slug"], fresh_table["table_number"],
+        tag_uid, 7, seventh,
+    )
     resp = _join_session(client, api_key_header, session_id, seventh, name="Seventh")
     assert resp.status_code == 200, (
         f"7th player (under cap) must join successfully, got {resp.status_code}: {resp.text}"
@@ -566,22 +578,32 @@ def test_join_cap_exact_boundary_eighth_ok_ninth_rejected(
     -> 9th new phone rejected with 409.
 
     Uses a 7-player session, adds one more via join (=8=MAX), then tries one more.
+    Both phones tap first to pass the BOLA presence check.
     """
     s = _setup_session(client, api_key_header, owner_a_token, fresh_table, num_phones=7)
     session_id = s["session_id"]
+    tag_uid = s["tag_uid"]
 
     assert _active_player_count(session_id) == 7
 
-    # 8th player joins (should succeed: 7 < 8 == MAX, so not at cap yet)
+    # BOLA fix: 8th phone taps first (counters 1-7 used by _setup_session).
     eighth = _fresh_phone()
+    _tap(
+        client, api_key_header, fresh_table["venue_slug"], fresh_table["table_number"],
+        tag_uid, 8, eighth,
+    )
     resp8 = _join_session(client, api_key_header, session_id, eighth, name="Eighth")
     assert resp8.status_code == 200, (
         f"8th player must join OK (reaching cap), got {resp8.status_code}: {resp8.text}"
     )
     assert _active_player_count(session_id) == 8
 
-    # 9th player -- now at cap (8 active) -> rejected
+    # BOLA fix: 9th phone also taps first, then gets rejected at cap.
     ninth = _fresh_phone()
+    _tap(
+        client, api_key_header, fresh_table["venue_slug"], fresh_table["table_number"],
+        tag_uid, 9, ninth,
+    )
     resp9 = _join_session(client, api_key_header, session_id, ninth, name="Ninth")
     assert resp9.status_code == 409, (
         f"9th player must be rejected at cap, got {resp9.status_code}: {resp9.text}"

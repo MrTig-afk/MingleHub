@@ -225,3 +225,95 @@ def test_channel_auth_rejects_session_non_member(client, api_key_header, owner_a
         json={"phone_id": stranger, "table_id": table_id},
     )
     assert resp.status_code == 403
+
+
+def test_channel_auth_rejects_left_phone(client, api_key_header, owner_a_token, fresh_table):
+    """Item 1: A phone that left the session (left_early=TRUE) is rejected by
+    /channel-auth even though it still has a table_lobby_phones row.
+    The active host (origin) must still pass."""
+    tag_uid = pair_tag(client, api_key_header, owner_a_token, fresh_table["table_number"])
+    venue_slug, table_number = fresh_table["venue_slug"], fresh_table["table_number"]
+    host_phone, second_phone = _fresh_phone(), _fresh_phone()
+
+    body = _tap_with_phone(client, api_key_header, venue_slug, table_number, tag_uid, 1, host_phone)
+    _tap_with_phone(client, api_key_header, venue_slug, table_number, tag_uid, 2, second_phone)
+    lobby_id = body["table_state"]["lobby_id"]
+    table_id = body["table_id"]
+
+    _claim_host(client, api_key_header, lobby_id, host_phone)
+    start = _start(client, api_key_header, lobby_id, host_phone)
+    assert start.status_code == 200, start.text
+    session_id = start.json()["session_id"]
+
+    # Second phone (non-host) leaves the session.
+    leave = client.post(
+        f"/api/patron/sessions/{session_id}/leave",
+        headers=api_key_header,
+        json={"phone_id": second_phone},
+    )
+    assert leave.status_code == 200, leave.text
+    assert leave.json().get("left") is True
+
+    # Left phone must now be rejected by channel-auth (Item 1 fix).
+    resp_left = client.post(
+        "/api/patron/channel-auth",
+        headers=api_key_header,
+        json={"phone_id": second_phone, "table_id": table_id},
+    )
+    assert resp_left.status_code == 403, (
+        f"Left phone must be rejected; got {resp_left.status_code}: {resp_left.text}"
+    )
+
+    # Active host must still pass.
+    resp_host = client.post(
+        "/api/patron/channel-auth",
+        headers=api_key_header,
+        json={"phone_id": host_phone, "table_id": table_id},
+    )
+    assert resp_host.status_code == 200, (
+        f"Active host must pass channel-auth; got {resp_host.status_code}: {resp_host.text}"
+    )
+
+
+def test_channel_auth_allows_rejoined_phone(client, api_key_header, owner_a_token, fresh_table):
+    """Item 1: A phone that left and then rejoined (left_early reset to FALSE)
+    must pass /channel-auth again."""
+    tag_uid = pair_tag(client, api_key_header, owner_a_token, fresh_table["table_number"])
+    venue_slug, table_number = fresh_table["venue_slug"], fresh_table["table_number"]
+    host_phone, second_phone = _fresh_phone(), _fresh_phone()
+
+    body = _tap_with_phone(client, api_key_header, venue_slug, table_number, tag_uid, 1, host_phone)
+    _tap_with_phone(client, api_key_header, venue_slug, table_number, tag_uid, 2, second_phone)
+    lobby_id = body["table_state"]["lobby_id"]
+    table_id = body["table_id"]
+
+    _claim_host(client, api_key_header, lobby_id, host_phone)
+    start = _start(client, api_key_header, lobby_id, host_phone)
+    assert start.status_code == 200, start.text
+    session_id = start.json()["session_id"]
+
+    # Second phone leaves.
+    leave = client.post(
+        f"/api/patron/sessions/{session_id}/leave",
+        headers=api_key_header,
+        json={"phone_id": second_phone},
+    )
+    assert leave.status_code == 200, leave.text
+
+    # Second phone rejoins.
+    rejoin = client.post(
+        f"/api/patron/sessions/{session_id}/rejoin",
+        headers=api_key_header,
+        json={"phone_id": second_phone},
+    )
+    assert rejoin.status_code == 200, rejoin.text
+
+    # Rejoined phone must now pass channel-auth.
+    resp = client.post(
+        "/api/patron/channel-auth",
+        headers=api_key_header,
+        json={"phone_id": second_phone, "table_id": table_id},
+    )
+    assert resp.status_code == 200, (
+        f"Rejoined phone must pass channel-auth; got {resp.status_code}: {resp.text}"
+    )

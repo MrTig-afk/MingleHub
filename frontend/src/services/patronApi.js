@@ -24,11 +24,13 @@ export const fetchTap = ({ venueSlug, tableNumber, tagUid, counter, sig, phoneId
   })
 }
 
-export const pollLobby = (lobbyId) =>
-  fetch(`${BASE}/api/patron/lobby/${lobbyId}`, { headers: h }).then(async (r) => {
+export const pollLobby = (lobbyId, phoneId) => {
+  const params = phoneId ? `?phone_id=${encodeURIComponent(phoneId)}` : ''
+  return fetch(`${BASE}/api/patron/lobby/${lobbyId}${params}`, { headers: h }).then(async (r) => {
     if (!r.ok) throw new Error((await r.json()).detail || r.status)
     return r.json()
   })
+}
 
 export const claimHost = (lobbyId, phoneId) =>
   fetch(`${BASE}/api/patron/lobby/${lobbyId}/claim-host`, {

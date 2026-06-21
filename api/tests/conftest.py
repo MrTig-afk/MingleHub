@@ -203,6 +203,7 @@ def _teardown_table(table_id):
             await conn.execute("DELETE FROM table_lobbies WHERE table_id = $1", table_id)
             await conn.execute("DELETE FROM game_sessions WHERE table_id = $1", table_id)
             await conn.execute("DELETE FROM nfc_tags WHERE table_id = $1", table_id)
+            await conn.execute("DELETE FROM table_tap_log WHERE table_id = $1", table_id)
             await conn.execute("DELETE FROM tables WHERE id = $1", table_id)
         finally:
             await conn.close()

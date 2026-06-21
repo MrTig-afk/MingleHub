@@ -176,9 +176,9 @@ export default function PatronLanding() {
   // phone at the table — whether it was in the lobby before start ('started')
   // or joined a session already in progress ('joined') — just watches.
   // `joinedInfo` is shaped differently per path: the lobby-poll object
-  // (host_phone_id/converted_session_id) for 'started', or the join
+  // (is_host/converted_session_id) for 'started', or the join
   // response (name/session_id) for 'joined' — never both, so this is safe.
-  if (status === 'started' && joinedInfo.host_phone_id === initialTap.phoneId) {
+  if (status === 'started' && joinedInfo.is_host) {
     return (
       <RoundOrigin
         venueName={venue.venue_name}

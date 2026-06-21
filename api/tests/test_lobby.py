@@ -206,10 +206,14 @@ def test_join_existing_session_adds_a_player(client, api_key_header, owner_a_tok
     start = _start(client, api_key_header, lobby_id, host_phone)
     session_id = start.json()["session_id"]
 
+    # BOLA fix: joining phone must tap the table first to prove physical presence.
+    joining_phone = _fresh_phone()
+    _tap_with_phone(client, api_key_header, venue_slug, table_number, tag_uid, 3, joining_phone)
+
     join = client.post(
         f"/api/patron/sessions/{session_id}/join",
         headers=api_key_header,
-        json={"phone_id": _fresh_phone(), "name": "Late Arrival"},
+        json={"phone_id": joining_phone, "name": "Late Arrival"},
     )
     assert join.status_code == 200
     assert join.json()["name"] == "Late Arrival"
@@ -234,10 +238,14 @@ def test_join_rejects_ended_session(client, api_key_header, owner_a_token, fresh
             await conn.close()
     asyncio.run(_end())
 
+    # BOLA fix: the joining phone must tap first so the presence check passes.
+    # The ended-session 404 is enforced by join_existing_session (LookupError).
+    joining_phone = _fresh_phone()
+    _tap_with_phone(client, api_key_header, venue_slug, table_number, tag_uid, 3, joining_phone)
     join = client.post(
         f"/api/patron/sessions/{session_id}/join",
         headers=api_key_header,
-        json={"phone_id": _fresh_phone()},
+        json={"phone_id": joining_phone},
     )
     assert join.status_code == 404
 
@@ -643,14 +651,32 @@ def test_poll_lobby_returns_phones_with_names(client, api_key_header, owner_a_to
     _set_name(client, api_key_header, lobby_id, phone_a, "Kaushik")
     _set_name(client, api_key_header, lobby_id, phone_b, "Sarah")
 
-    poll = client.get(f"/api/patron/lobby/{lobby_id}", headers=api_key_header)
+    # Poll with caller identity so is_self is populated (Item 3 redaction shape).
+    poll = client.get(
+        f"/api/patron/lobby/{lobby_id}",
+        headers=api_key_header,
+        params={"phone_id": phone_a},
+    )
     assert poll.status_code == 200
     data = poll.json()
     assert "phones" in data
     assert len(data["phones"]) == 2
-    phone_ids = {p["phone_id"] for p in data["phones"]}
-    assert phone_a in phone_ids
-    assert phone_b in phone_ids
-    name_map = {p["phone_id"]: p["name"] for p in data["phones"]}
-    assert name_map[phone_a] == "Kaushik"
-    assert name_map[phone_b] == "Sarah"
+
+    # No raw phone_id must appear in any phone entry.
+    for p in data["phones"]:
+        assert "phone_id" not in p, f"phone_id leaked in phone entry: {p}"
+        assert "slot_id" in p
+        assert "is_self" in p
+
+    # No host_phone_id in root response.
+    assert "host_phone_id" not in data
+
+    # Exactly one entry has is_self=True (phone_a is the caller).
+    self_entries = [p for p in data["phones"] if p["is_self"]]
+    assert len(self_entries) == 1
+    assert self_entries[0]["name"] == "Kaushik"
+
+    # Both names are present (order is insertion order — slot_id 0 = phone_a).
+    names = {p["name"] for p in data["phones"]}
+    assert "Kaushik" in names
+    assert "Sarah" in names

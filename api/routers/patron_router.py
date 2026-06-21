@@ -1,5 +1,6 @@
 import re
 import traceback
+import uuid
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -98,6 +99,12 @@ async def tap(
             # Lobby/session resolution runs for both paths when phone_id is provided.
             table_state = None
             if phone_id:
+                # Record tap as proof of physical presence — used by POST
+                # /sessions/{id}/join to enforce the BOLA presence check.
+                await conn.execute(
+                    "INSERT INTO table_tap_log (id, table_id, phone_id) VALUES ($1, $2, $3)",
+                    str(uuid.uuid4()), str(table["id"]), phone_id,
+                )
                 table_state = await lobby_service.resolve_table_state(
                     conn, str(venue["id"]), str(table["id"]), table_number, phone_id,
                 )
@@ -161,13 +168,19 @@ class AnswerRequest(PhoneIdBody):
 
 @router.get("/lobby/{lobby_id}")
 @limiter.limit("60/minute")
-async def poll_lobby(request: Request, lobby_id: str):
+async def poll_lobby(
+    request: Request,
+    lobby_id: str,
+    phone_id: Optional[str] = Query(None, max_length=64),
+):
     """Polled by every phone in the lobby (no realtime infra yet) to learn
     when a host is chosen and when the host starts the game."""
     try:
         pool = await get_pool()
         async with pool.acquire() as conn:
-            state = await lobby_service.get_lobby_state(conn, lobby_id)
+            state = await lobby_service.get_lobby_state(
+                conn, lobby_id, caller_phone_id=phone_id
+            )
     except Exception:
         await notify_error("GET /patron/lobby/{id} failed 🚨", traceback.format_exc()[:500])
         raise HTTPException(status_code=500, detail="Internal error")
@@ -263,6 +276,7 @@ async def channel_auth(request: Request, body: ChannelAuthRequest):
         pool = await get_pool()
         async with pool.acquire() as conn:
             # BOLA check: phone must be in an open lobby OR active session at this table.
+            # Branch 1 — pre-game open lobby. No game_players rows exist yet.
             is_member = await conn.fetchval(
                 """
                 SELECT EXISTS (
@@ -274,23 +288,31 @@ async def channel_auth(request: Request, body: ChannelAuthRequest):
                 body.table_id, body.phone_id,
             )
             if not is_member:
+                # Branch 2 — session origin. Belt-and-suspenders: verify not left early.
                 is_member = await conn.fetchval(
                     """
                     SELECT EXISTS (
-                        SELECT 1 FROM game_sessions
-                        WHERE table_id = $1 AND ended_at IS NULL AND origin_phone_id = $2
+                        SELECT 1 FROM game_sessions gs
+                        JOIN game_players gp ON gp.session_id = gs.id AND gp.phone_id = $2
+                        WHERE gs.table_id = $1 AND gs.ended_at IS NULL
+                          AND gs.origin_phone_id = $2
+                          AND gp.left_early = FALSE
                     )
                     """,
                     body.table_id, body.phone_id,
                 )
             if not is_member:
+                # Branch 3 — converted lobby member. Critical fix: reject left phones.
                 is_member = await conn.fetchval(
                     """
                     SELECT EXISTS (
                         SELECT 1 FROM game_sessions gs
                         JOIN table_lobbies tl ON tl.converted_session_id = gs.id
                         JOIN table_lobby_phones tlp ON tlp.lobby_id = tl.id
-                        WHERE gs.table_id = $1 AND gs.ended_at IS NULL AND tlp.phone_id = $2
+                        JOIN game_players gp ON gp.session_id = gs.id AND gp.phone_id = tlp.phone_id
+                        WHERE gs.table_id = $1 AND gs.ended_at IS NULL
+                          AND tlp.phone_id = $2
+                          AND gp.left_early = FALSE
                     )
                     """,
                     body.table_id, body.phone_id,
@@ -342,8 +364,35 @@ async def join_session(request: Request, session_id: str, body: JoinSessionReque
     try:
         pool = await get_pool()
         async with pool.acquire() as conn:
+            # BOLA: phone must have tapped the table this session belongs to.
+            # Re-tap idempotency: an existing player already proved presence,
+            # so the game_players check bypasses the tap-log requirement.
+            existing_player = False
+            if body.phone_id:
+                existing_player = await conn.fetchval(
+                    "SELECT EXISTS (SELECT 1 FROM game_players "
+                    "WHERE session_id = $1 AND phone_id = $2)",
+                    session_id, body.phone_id,
+                )
+            if not existing_player:
+                has_presence = await conn.fetchval(
+                    """
+                    SELECT EXISTS (
+                        SELECT 1 FROM table_tap_log ttl
+                        JOIN game_sessions gs ON gs.table_id = ttl.table_id
+                        WHERE gs.id = $1 AND ttl.phone_id = $2
+                    )
+                    """,
+                    session_id, body.phone_id,
+                )
+                if not has_presence:
+                    raise HTTPException(
+                        status_code=403, detail="Tap the table tag first"
+                    )
             try:
-                result = await lobby_service.join_existing_session(conn, session_id, body.name, body.phone_id)
+                result = await lobby_service.join_existing_session(
+                    conn, session_id, body.name, body.phone_id
+                )
             except LookupError:
                 raise HTTPException(status_code=404, detail="Not found")
             except ValueError:
@@ -351,7 +400,10 @@ async def join_session(request: Request, session_id: str, body: JoinSessionReque
     except HTTPException:
         raise
     except Exception:
-        await notify_error("POST /patron/sessions/join failed 🚨", traceback.format_exc()[:500])
+        await notify_error(
+            "POST /patron/sessions/join failed",
+            traceback.format_exc()[:500],
+        )
         raise HTTPException(status_code=500, detail="Internal error")
     return result
 

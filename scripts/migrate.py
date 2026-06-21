@@ -425,6 +425,26 @@ async def migrate():
         """)
         print("OK leads table ready")
 
+        # Lightweight append-only tap log: every verified NFC tap inserts a row.
+        # Used by POST /sessions/{id}/join as proof of physical presence (BOLA
+        # hardening — a phone that never tapped the table cannot join a session).
+        # No UNIQUE constraint — a phone can tap multiple times, all recorded.
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS table_tap_log (
+                id         UUID PRIMARY KEY,
+                table_id   UUID NOT NULL REFERENCES tables(id),
+                phone_id   TEXT NOT NULL,
+                tapped_at  TIMESTAMP DEFAULT NOW()
+            )
+        """)
+        print("OK table_tap_log table ready")
+
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_tap_log_table_phone
+            ON table_tap_log (table_id, phone_id)
+        """)
+        print("OK idx_tap_log_table_phone index ready")
+
         from scripts.seed_bar_cards import seed as seed_bar_cards  # noqa: E402
         await seed_bar_cards(conn)
         print("OK bar_cards seeded")

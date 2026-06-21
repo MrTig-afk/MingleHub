@@ -300,7 +300,7 @@ async def _join_lobby_phone(conn, lobby_id, phone_id: str, name: str | None = No
     )
 
 
-async def get_lobby_state(conn, lobby_id: str) -> dict | None:
+async def get_lobby_state(conn, lobby_id: str, caller_phone_id: str | None = None) -> dict | None:
     lobby = await conn.fetchrow(
         """
         SELECT l.id, l.status, l.host_phone_id, l.converted_session_id, l.created_at, t.table_number
@@ -315,13 +315,38 @@ async def get_lobby_state(conn, lobby_id: str) -> dict | None:
         "SELECT phone_id, name FROM table_lobby_phones WHERE lobby_id = $1 ORDER BY joined_at",
         lobby_id,
     )
+    # Resolve host display name without leaking other phones' raw phone_ids.
+    host_name = None
+    if lobby["host_phone_id"]:
+        for r in phone_rows:
+            if r["phone_id"] == lobby["host_phone_id"]:
+                host_name = r["name"]
+                break
     return {
         "lobby_id": str(lobby["id"]),
         "status": lobby["status"],
-        "host_phone_id": lobby["host_phone_id"],
-        "converted_session_id": str(lobby["converted_session_id"]) if lobby["converted_session_id"] else None,
+        "is_host": (
+            caller_phone_id is not None
+            and lobby["host_phone_id"] == caller_phone_id
+        ),
+        "host_name": host_name,
+        "converted_session_id": (
+            str(lobby["converted_session_id"])
+            if lobby["converted_session_id"]
+            else None
+        ),
         "phone_count": len(phone_rows),
-        "phones": [{"phone_id": r["phone_id"], "name": r["name"]} for r in phone_rows],
+        "phones": [
+            {
+                "slot_id": i,
+                "name": r["name"],
+                "is_self": (
+                    caller_phone_id is not None
+                    and r["phone_id"] == caller_phone_id
+                ),
+            }
+            for i, r in enumerate(phone_rows)
+        ],
         "table_number": lobby["table_number"],
         "created_at": lobby["created_at"].isoformat(),
     }
@@ -357,7 +382,7 @@ async def set_lobby_phone_name(conn, lobby_id: str, phone_id: str, name: str) ->
             "lobby_update",
             {"lobby_id": lobby_id, "name_updated": True},
         )
-    return {"phone_id": row["phone_id"], "name": row["name"]}
+    return {"name": row["name"]}
 
 
 async def is_lobby_member(conn, lobby_id: str, phone_id: str) -> bool:

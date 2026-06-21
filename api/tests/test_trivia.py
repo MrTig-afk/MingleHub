@@ -93,6 +93,7 @@ def _setup_session(client, api_key_header, owner_a_token, table_info, num_phones
         "table_id": table_id,
         "origin": phones[0],
         "phones": phones,
+        "tag_uid": tag_uid,
     }
 
 
@@ -321,7 +322,13 @@ def test_member_joining_after_start_cannot_answer(client, api_key_header, owner_
     rid = _start(client, api_key_header, s["session_id"], s["origin"]).json()["trivia_round_id"]
     _begin(client, api_key_header, rid, s["origin"])
 
+    # The late phone must tap the table first (join-presence BOLA); counter 3 is
+    # unused (the 2 setup phones used counters 1 and 2).
     late_phone = _fresh_phone()
+    _tap(
+        client, api_key_header, fresh_table["venue_slug"], fresh_table["table_number"],
+        s["tag_uid"], 3, late_phone,
+    )
     joined = client.post(
         f"/api/patron/sessions/{s['session_id']}/join",
         headers=api_key_header, json={"phone_id": late_phone, "name": "Late"},

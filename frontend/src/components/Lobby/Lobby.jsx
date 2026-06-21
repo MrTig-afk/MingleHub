@@ -27,12 +27,12 @@ export default function Lobby({ venueName, lobbyId, phoneId, tableId, adultsOnly
     let cancelled = false
     const tick = async () => {
       try {
-        const result = await pollLobby(lobbyId)
+        const result = await pollLobby(lobbyId, phoneId)
         if (cancelled) return
         setState(result)
         // Re-tap / page reload: detect own name already stored in lobby.
         if (!hasSetName && result.phones) {
-          const mine = result.phones.find((p) => p.phone_id === phoneId)
+          const mine = result.phones.find((p) => p.is_self)
           if (mine?.name) setHasSetName(true)
         }
         if (result.status === 'converted' && !startedRef.current) {
@@ -62,12 +62,10 @@ export default function Lobby({ venueName, lobbyId, phoneId, tableId, adultsOnly
     }
   })
 
-  const isHost = state?.host_phone_id === phoneId
-  const noHostYet = state && !state.host_phone_id
+  const isHost = state?.is_host
+  const noHostYet = state && state.host_name === null
   const phones = state?.phones ?? []
-  const hostName = state?.host_phone_id
-    ? phones.find(p => p.phone_id === state.host_phone_id)?.name || 'the host'
-    : null
+  const hostName = state?.host_name || null
 
   const handleSetName = async () => {
     const trimmed = myName.trim()
@@ -108,7 +106,7 @@ export default function Lobby({ venueName, lobbyId, phoneId, tableId, adultsOnly
       if (!startedRef.current) {
         startedRef.current = true
         onGameStarted({
-          host_phone_id: phoneId,
+          is_host: true,
           converted_session_id: startResult.session_id,
           adults_only: startResult.adults_only,
           player_count: startResult.player_count,
@@ -168,7 +166,7 @@ export default function Lobby({ venueName, lobbyId, phoneId, tableId, adultsOnly
             <p style={{ fontSize: '13px', color: 'var(--on-surface-dim)', marginBottom: '8px' }}>Roster:</p>
             <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: '6px' }}>
               {phones.map((p, i) => (
-                <li key={p.phone_id} style={{ fontFamily: 'var(--font-mono)', fontSize: '14px' }}>
+                <li key={p.slot_id} style={{ fontFamily: 'var(--font-mono)', fontSize: '14px' }}>
                   {p.name || `Unnamed (Player ${i + 1})`}
                 </li>
               ))}
@@ -221,9 +219,9 @@ export default function Lobby({ venueName, lobbyId, phoneId, tableId, adultsOnly
                 </p>
                 <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: '4px', alignItems: 'center' }}>
                   {phones.map((p, i) => (
-                    <li key={p.phone_id} style={{ fontFamily: 'var(--font-mono)', fontSize: '14px' }}>
+                    <li key={p.slot_id} style={{ fontFamily: 'var(--font-mono)', fontSize: '14px' }}>
                       {p.name || `Unnamed (Player ${i + 1})`}
-                      {p.phone_id === phoneId ? ' (you)' : ''}
+                      {p.is_self ? ' (you)' : ''}
                     </li>
                   ))}
                 </ul>
