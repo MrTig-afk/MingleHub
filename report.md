@@ -131,5 +131,11 @@ Sign in at the URLs below with these. **Password for all the `+` accounts: `Venu
 
 ---
 
-## 8. CI status
-_Updated after the full-suite run + push completes — see the final note appended below._
+## 8. CI status & final state
+- **CI: ✅ GREEN** — commit `8ce0e73` on `feature/onboarding`, backend + frontend both pass.
+- **Local full suite:** **317 passed, 0 failed.**
+- **State:** clean — Fifty Five Bar + The Last Chance (2 tables each, real addresses), the 4 linked Clerk accounts above, **0 active games**.
+- **Servers were up when I finished** (`:8000` backend, `:5174` Vite). If either is down when you wake, restart from the repo root (you can use `! <cmd>` in this session):
+  - **Vite:** `cd frontend && npx vite --host 0.0.0.0 --port 5174`
+  - **Backend:** `set -a; source api/.env; set +a; DEV_MODE=true ./venv/Scripts/python.exe -m uvicorn api.index:app --host 0.0.0.0 --port 8000 --reload --reload-dir api --ssl-keyfile 192.168.1.108-key.pem --ssl-certfile 192.168.1.108.pem`
+- **Reset the env** anytime (clears games, keeps venues/accounts): `DEV_MODE=true PYTHONPATH=. ./venv/Scripts/python.exe scripts/dev_reset.py`
