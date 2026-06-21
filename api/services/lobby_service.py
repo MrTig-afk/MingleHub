@@ -217,7 +217,9 @@ async def resolve_table_state(
         "phase": "lobby",
         "lobby_id": str(lobby["id"]),
         "phone_count": phone_count,
-        "host_phone_id": lobby["host_phone_id"],
+        # host_phone_id intentionally NOT returned (BOLA redaction): the lobby's
+        # host is conveyed via get_lobby_state's is_host/host_name. Returning the
+        # raw id here would leak it to every joining phone (spoofing vector).
         "created_at": lobby["created_at"].isoformat(),
     }
 
@@ -241,7 +243,7 @@ async def start_new_group(conn, venue_id: str, table_id: str, phone_id: str) -> 
     return {
         "lobby_id": str(lobby["id"]),
         "phone_count": phone_count,
-        "host_phone_id": lobby["host_phone_id"],
+        # host_phone_id intentionally NOT returned (BOLA redaction) — see resolve_table_state.
         "created_at": lobby["created_at"].isoformat(),
     }
 
@@ -420,10 +422,11 @@ async def claim_host(conn, lobby_id: str, phone_id: str) -> dict:
                 "lobby_update",
                 {"lobby_id": lobby_id, "host_phone_id": phone_id},
             )
-        return {"you_are_host": True, "host_phone_id": phone_id}
+        return {"you_are_host": True}
 
     current = await conn.fetchval("SELECT host_phone_id FROM table_lobbies WHERE id = $1", lobby_id)
-    return {"you_are_host": current == phone_id, "host_phone_id": current}
+    # Return only the boolean — never the current host's raw phone_id (BOLA redaction).
+    return {"you_are_host": current == phone_id}
 
 
 async def next_group_label(conn, table_id: str) -> str:

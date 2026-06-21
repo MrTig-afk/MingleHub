@@ -313,9 +313,11 @@ async def migrate_host(conn, session_id: str, phone_id: str) -> dict:
             "old_host_name": old_host_name,
         },
     )
+    # The leave RESPONSE goes to the departing phone, which doesn't need the new
+    # host's raw id — omit it (BOLA redaction). The new host learns it's the host
+    # via the host_changed broadcast above (compared against its own phone_id).
     return {
         "migrated": True,
-        "new_host_phone_id": new_phone_id,
         "new_host_name": new_host_name,
         "old_host_name": old_host_name,
     }

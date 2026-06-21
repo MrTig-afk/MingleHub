@@ -207,7 +207,7 @@ def test_host_leave_migrates_to_earliest_joined(
     """3-phone session: host (phones[0]=Alice) calls leave.
     The new host must be phones[1]=Bob (earliest-joined non-host active player).
     Old host is left_early; others remain active.
-    Response: migrated=True, new_host_phone_id=Bob."""
+    Response: migrated=True, new_host_name=Bob (raw new-host id redacted)."""
     s = _setup_session(
         client, api_key_header, owner_a_token, fresh_table, num_phones=3
     )
@@ -219,7 +219,8 @@ def test_host_leave_migrates_to_earliest_joined(
     data = resp.json()
 
     assert data.get("migrated") is True
-    assert data.get("new_host_phone_id") == phone_b
+    assert "new_host_phone_id" not in data  # BOLA: raw new-host id redacted from response
+    assert data.get("new_host_name") == "Player 2"  # Bob, by name
 
     # DB: origin reassigned to earliest-joined (Bob)
     assert _get_origin(session_id) == phone_b
@@ -249,8 +250,8 @@ def test_host_leave_new_host_is_earliest_joined(
     data = resp.json()
 
     # Bob (index 1) is earliest-joined non-host; Carol (index 2) is later.
-    assert data["new_host_phone_id"] == phone_b
-    assert data["new_host_phone_id"] != phone_c
+    # Correctness via DB origin; response carries only the redacted name.
+    assert "new_host_phone_id" not in data  # BOLA: redacted
     assert _get_origin(session_id) == phone_b
 
 
@@ -267,7 +268,7 @@ def test_host_leave_with_one_remaining(
     data = resp.json()
 
     assert data.get("migrated") is True
-    assert data.get("new_host_phone_id") == phone_b
+    assert "new_host_phone_id" not in data  # BOLA: redacted
     assert _get_origin(session_id) == phone_b
 
 
@@ -495,7 +496,7 @@ def test_host_leave_migrates_db_state_correct(
     first = _leave(client, api_key_header, session_id, phone_a)
     assert first.status_code == 200, first.text
     assert first.json().get("migrated") is True
-    assert first.json().get("new_host_phone_id") == phone_b
+    assert "new_host_phone_id" not in first.json()  # BOLA: redacted
 
     # DB invariants after migration
     assert _get_origin(session_id) == phone_b

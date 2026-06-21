@@ -392,8 +392,8 @@ def test_host_leaves_mid_trivia_migration_and_round_stays_in_progress(
     assert leave_data.get("migrated") is True, (
         f"Expected migrated=True in leave response, got: {leave_data}"
     )
-    assert leave_data.get("new_host_phone_id") == phone_b, (
-        f"Expected new host to be phones[1]={phone_b}, got {leave_data.get('new_host_phone_id')}"
+    assert "new_host_phone_id" not in leave_data, (  # BOLA: raw new-host id redacted
+        f"new-host id must be redacted from the response, got: {leave_data}"
     )
 
     # (b) DB: origin reassigned to phones[1]
@@ -429,8 +429,8 @@ def test_host_leaves_mid_trivia_leave_response_shape(
     client, api_key_header, owner_a_token, fresh_table
 ):
     """The leave response from a host leaving mid-Trivia must carry the
-    migrated/new_host_phone_id fields (not just left=True). This is the
-    shape the frontend uses to detect promotion."""
+    migrated/new_host_name fields (not just left=True), with the raw new-host id
+    redacted. The frontend detects promotion via the host_changed broadcast."""
     s = _setup_session(client, api_key_header, owner_a_token, fresh_table, num_phones=3)
     session_id = s["session_id"]
     phone_host, phone_b, _phone_c = s["phones"]
@@ -451,9 +451,10 @@ def test_host_leaves_mid_trivia_leave_response_shape(
 
     # Must carry migration keys, not the plain non-host leave shape
     assert "migrated" in data, f"Expected 'migrated' key in response: {data}"
-    assert "new_host_phone_id" in data, f"Expected 'new_host_phone_id' in response: {data}"
     assert data["migrated"] is True
-    assert data["new_host_phone_id"] == phone_b
+    assert "new_host_name" in data, f"Expected 'new_host_name' in response: {data}"
+    assert "new_host_phone_id" not in data, f"raw new-host id must be redacted: {data}"  # BOLA
+    assert _get_origin(session_id) == phone_b  # correctness via DB
     # Must NOT carry 'left' key (that's the non-host path)
     assert "left" not in data, (
         f"Host migration must not return 'left'; response: {data}"

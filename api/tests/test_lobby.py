@@ -76,7 +76,7 @@ def test_first_tap_with_no_session_creates_a_lobby(client, api_key_header, owner
     state = body["table_state"]
     assert state["phase"] == "lobby"
     assert state["phone_count"] == 1
-    assert state["host_phone_id"] is None
+    assert "host_phone_id" not in state  # BOLA: raw host id redacted from the lobby response
 
 
 def test_second_phone_tapping_joins_the_same_lobby(client, api_key_header, owner_a_token, fresh_table):
@@ -111,8 +111,8 @@ def test_claim_host_first_wins_second_is_told_who_won(client, api_key_header, ow
     _tap_with_phone(client, api_key_header, venue_slug, table_number, tag_uid, 2, phone_b)
     lobby_id = body["table_state"]["lobby_id"]
 
-    assert _claim_host(client, api_key_header, lobby_id, phone_a) == {"you_are_host": True, "host_phone_id": phone_a}
-    assert _claim_host(client, api_key_header, lobby_id, phone_b) == {"you_are_host": False, "host_phone_id": phone_a}
+    assert _claim_host(client, api_key_header, lobby_id, phone_a) == {"you_are_host": True}
+    assert _claim_host(client, api_key_header, lobby_id, phone_b) == {"you_are_host": False}
 
 
 def test_claim_host_rejects_phone_not_in_lobby(client, api_key_header, owner_a_token, fresh_table):
