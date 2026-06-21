@@ -186,7 +186,7 @@ function DashboardInner({ token, onLogout, renderUnauth }) {
 
   if (authState === 'loading') return <LoadingShimmer />
   if (authState === 'unauth') return renderUnauth()
-  if (authState === 'setup') return <VenueSetup token={token} onDone={checkAuth} />
+  if (authState === 'setup') return <VenueSetup token={token} onDone={checkAuth} navigate={navigate} />
 
   if (authState === 'admin_wrong_surface') {
     return (

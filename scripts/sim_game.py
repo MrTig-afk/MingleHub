@@ -15,6 +15,7 @@ Covered scenarios (see SCENARIOS at the bottom):
 Run:  venv/Scripts/python.exe scripts/sim_game.py [scenario|all]
 Needs the dev server on https://192.168.1.108:8000 with DEV_MODE=true.
 """
+import os
 import sys
 import uuid
 import requests
@@ -24,7 +25,7 @@ urllib3.disable_warnings()
 
 BASE = "https://192.168.1.108:8000"
 KEY = "dev-key"
-VENUE = "fifty-five-bar"
+VENUE = os.getenv("SIM_VENUE", "fifty-five-bar")
 
 S = requests.Session()
 S.verify = False
@@ -367,10 +368,11 @@ def run(which, table=1):
 
 if __name__ == "__main__":
     arg = sys.argv[1] if len(sys.argv) > 1 else "all"
+    table = int(sys.argv[2]) if len(sys.argv) > 2 else 1
     if arg == "probe":
         probe_shapes()
     elif arg in SCENARIOS or arg == "all":
-        sys.exit(run(arg))
+        sys.exit(run(arg, table))
     else:
         print(f"unknown: {arg}. options: probe, all, {', '.join(SCENARIOS)}")
         sys.exit(2)

@@ -9,7 +9,8 @@ sys.path.insert(0, ROOT)
 load_dotenv(os.path.join(ROOT, 'api', '.env'))
 
 from api.dev_fixtures import (  # noqa: E402
-    VENUE_A_ID, VENUE_B_ID, VENUE_A_TABLE_ID, VENUE_A_TABLE_2_ID, VENUE_B_TABLE_ID,
+    VENUE_A_ID, VENUE_B_ID, VENUE_A_TABLE_ID, VENUE_A_TABLE_2_ID,
+    VENUE_B_TABLE_ID, VENUE_B_TABLE_2_ID,
     OWNER_A_ID, STAFF_A_ID, OWNER_B_ID, ADMIN_ID,
     OWNER_A_CLERK_ID, STAFF_A_CLERK_ID, OWNER_B_CLERK_ID, ADMIN_CLERK_ID,
 )
@@ -27,6 +28,7 @@ TABLES = [
     (VENUE_A_TABLE_ID, VENUE_A_ID, 1),
     (VENUE_A_TABLE_2_ID, VENUE_A_ID, 2),
     (VENUE_B_TABLE_ID, VENUE_B_ID, 1),
+    (VENUE_B_TABLE_2_ID, VENUE_B_ID, 2),
 ]
 
 # (id, clerk_user_id, venue_id, role)

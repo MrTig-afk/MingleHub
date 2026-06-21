@@ -62,12 +62,13 @@ function Dropdown({ items, onPick }) {
 // name and address fields use a keyless (Photon/OSM, AU-biased) autocomplete: picking a
 // named place from the NAME field also auto-fills the address; the ADDRESS field is the
 // fallback for venues not in OSM. Then setup-venue creates the venue + tables.
-export default function VenueSetup({ token, onDone }) {
+export default function VenueSetup({ token, onDone, navigate }) {
   const [name, setName] = useState('')
   const [venueType, setVenueType] = useState('bar')
   const [tableCount, setTableCount] = useState(4)
   const [allowAdult, setAllowAdult] = useState(false)
   const [address, setAddress] = useState('')
+  const [created, setCreated] = useState(null) // setup-venue response -> success screen
   const [coords, setCoords] = useState({ latitude: null, longitude: null, place_id: null })
   const [nameSug, setNameSug] = useState([])
   const [addrSug, setAddrSug] = useState([])
@@ -128,7 +129,7 @@ export default function VenueSetup({ token, onDone }) {
     }
     setSubmitting(true)
     try {
-      await setupVenue(token, {
+      const result = await setupVenue(token, {
         name: name.trim(),
         venue_type: venueType,
         table_count: count,
@@ -138,11 +139,41 @@ export default function VenueSetup({ token, onDone }) {
         longitude: coords.longitude,
         place_id: coords.place_id,
       })
-      onDone()
+      setCreated(result) // -> success screen (pair-tags prompt)
     } catch (e) {
       setError(e.message || 'Could not set up venue.')
       setSubmitting(false)
     }
+  }
+
+  if (created) {
+    const goPair = () => { if (navigate) navigate('/dashboard/pair-tags'); onDone() }
+    return (
+      <div style={fullScreen}>
+        <div style={{ ...cardStyle, maxWidth: '440px', width: '100%', textAlign: 'center' }}>
+          <div style={{ fontSize: '40px', lineHeight: 1 }}>🎉</div>
+          <h1 style={{ fontFamily: 'var(--font-headline)', fontSize: '22px', margin: '10px 0 4px' }}>
+            {name.trim()} is set up
+          </h1>
+          <p style={{ color: 'var(--on-surface-dim)', fontSize: '14px', margin: '0 0 22px' }}>
+            {created.table_count} table{created.table_count > 1 ? 's' : ''} created. Next, pair
+            your NFC tags so patrons can tap and play.
+          </p>
+          <button onClick={goPair} style={{ ...buttonStyle, width: '100%' }}>
+            Pair NFC tags
+          </button>
+          <button
+            onClick={onDone}
+            style={{
+              ...buttonStyle, width: '100%', marginTop: '10px',
+              background: 'transparent', color: 'var(--on-surface-dim)',
+            }}
+          >
+            Go to dashboard
+          </button>
+        </div>
+      </div>
+    )
   }
 
   return (
