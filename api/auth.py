@@ -17,12 +17,37 @@ import time
 from typing import Optional
 
 from fastapi import Depends, Header, HTTPException
+import jwt
+from jwt import PyJWKClient
 from pydantic import BaseModel
 
 from api.db import get_pool
 
 SESSION_SECRET = os.environ["SESSION_SECRET"]
 TOKEN_TTL_SECONDS = 60 * 60 * 12  # 12 hours — dev convenience only
+
+# Clerk mode: set CLERK_JWKS_URL (+ CLERK_ISSUER) to verify real Clerk RS256 JWTs.
+# Unset -> falls back to the dev-login HMAC token, so dev/CI are unaffected and prod
+# "just works" once these env vars exist (the swap this module was designed for).
+CLERK_JWKS_URL = os.getenv("CLERK_JWKS_URL")
+CLERK_ISSUER = os.getenv("CLERK_ISSUER")
+_jwk_client = None
+
+
+def _get_jwk_client():
+    global _jwk_client
+    if _jwk_client is None and CLERK_JWKS_URL:
+        _jwk_client = PyJWKClient(CLERK_JWKS_URL)
+    return _jwk_client
+
+
+def _verify_clerk_jwt(token: str, signing_key) -> str:
+    """Verify a Clerk RS256 JWT against signing_key, return its `sub` (Clerk user id)."""
+    claims = jwt.decode(
+        token, signing_key, algorithms=["RS256"],
+        issuer=CLERK_ISSUER, options={"require": ["exp", "sub"], "verify_aud": False},
+    )
+    return claims["sub"]
 
 
 class CurrentUser(BaseModel):
@@ -40,7 +65,15 @@ def issue_dev_token(clerk_user_id: str) -> str:
 
 
 def _verify_token(token: str) -> str:
-    """Returns clerk_user_id if the token is valid and unexpired, else raises 401."""
+    """Returns clerk_user_id if the token is valid and unexpired, else raises 401.
+    Clerk RS256 JWT (via JWKS) when CLERK_JWKS_URL is set; dev HMAC token otherwise."""
+    client = _get_jwk_client()
+    if client is not None:
+        try:
+            key = client.get_signing_key_from_jwt(token).key
+            return _verify_clerk_jwt(token, key)
+        except Exception:
+            raise HTTPException(status_code=401, detail="Invalid token")
     try:
         payload, expires_at, signature = base64.urlsafe_b64decode(token.encode()).decode().rsplit(":", 2)
     except (ValueError, UnicodeDecodeError):

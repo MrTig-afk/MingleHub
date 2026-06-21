@@ -105,3 +105,30 @@ def test_dev_login_rejects_wrong_api_key(client):
         json={"clerk_user_id": OWNER_A_CLERK_ID},
     )
     assert resp.status_code == 401
+
+
+def test_verify_clerk_jwt_validates_signature_issuer_and_expiry(monkeypatch):
+    """Clerk-mode _verify_clerk_jwt: accepts a well-formed RS256 JWT and returns its
+    sub; rejects wrong-issuer and expired tokens. Uses a self-generated keypair, so no
+    live Clerk instance is needed — this covers the prod verification path in CI."""
+    import time
+    import pytest
+    import jwt
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from api import auth
+
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    pub = key.public_key()
+    monkeypatch.setattr(auth, "CLERK_ISSUER", "https://test.clerk")
+    now = int(time.time())
+
+    good = jwt.encode({"sub": "user_abc", "iss": "https://test.clerk", "exp": now + 300}, key, algorithm="RS256")
+    assert auth._verify_clerk_jwt(good, pub) == "user_abc"
+
+    wrong_iss = jwt.encode({"sub": "u", "iss": "https://evil", "exp": now + 300}, key, algorithm="RS256")
+    with pytest.raises(jwt.InvalidIssuerError):
+        auth._verify_clerk_jwt(wrong_iss, pub)
+
+    expired = jwt.encode({"sub": "u", "iss": "https://test.clerk", "exp": now - 10}, key, algorithm="RS256")
+    with pytest.raises(jwt.ExpiredSignatureError):
+        auth._verify_clerk_jwt(expired, pub)

@@ -10,3 +10,4 @@ stripe
 pytest
 cryptography
 flake8
+PyJWT
