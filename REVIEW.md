@@ -71,17 +71,18 @@ New pytest coverage for today's backend changes (4 tests, all pass):
 **Full suite regression run: 308 passed, 0 failed** (14m37s, uvicorn stopped so Neon
 wasn't contended). No regressions from today's changes.
 
-### Playwright e2e — `frontend/e2e/patron-flows.spec.js`
+### Playwright e2e — `.pipeline/pwtest/patron-flows.spec.js`
 Covers the **frontend-only** behaviors pytest/the simulator can't reach (host-gate,
 drop-to-1 UI, New game button). Setup uses the backend API to jump straight to the
-target game state, then drives the real UI in a headless browser.
+target game state, then drives the real UI in a headless browser. Lives in the
+project's existing **pwtest** Playwright project (CommonJS) — NOT in `frontend/`, so
+it doesn't bloat the frontend CI install (which has no Playwright step).
 - `host-gates the Roulette round` — Start button shows, round doesn't auto-fire
 - `drop-to-1 shows Waiting + countdown + End game now`
 - `Recap "New game" button bypasses the recap-lock into a fresh lobby`
 
-Run: `cd frontend && npm run test:e2e` (needs Vite on :5174 + backend on :8000 up).
-**Result: 3/3 pass.** `@playwright/test` added as a devDependency (Chromium already
-cached; no browser download).
+Run: `cd .pipeline/pwtest && npx playwright test patron-flows.spec.js` (needs Vite on
+:5174 + backend on :8000 up). **Result: 3/3 pass.**
 
 ---
 

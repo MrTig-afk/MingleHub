@@ -55,17 +55,17 @@ def tap(phone, table, new_game=False):
 
 def claim_host(lobby, phone): return _req("POST", f"/lobby/{lobby}/claim-host", json={"phone_id": phone})
 def set_name(lobby, phone, name): return _req("POST", f"/lobby/{lobby}/set-name", json={"phone_id": phone, "name": name})
-def start(lobby, phone): return _req("POST", f"/lobby/{lobby}/start", json={"phone_id": phone, "adults_only": False, "group_label": None})
+def start(lobby, phone): return _req("POST", f"/lobby/{lobby}/start", json={"phone_id": phone, "adults_only": False, "group_label": None})  # noqa: E501
 def hot_seat(sess, phone): return _req("POST", f"/sessions/{sess}/select-hot-seat", json={"phone_id": phone})
-def draw(sess, phone, player_id): return _req("POST", f"/sessions/{sess}/draw-card", json={"phone_id": phone, "player_id": player_id})
+def draw(sess, phone, player_id): return _req("POST", f"/sessions/{sess}/draw-card", json={"phone_id": phone, "player_id": player_id})  # noqa: E501
 def complete(rid, phone): return _req("POST", f"/rounds/{rid}/complete", json={"phone_id": phone})
 def roulette_start(sess, phone): return _req("POST", f"/sessions/{sess}/roulette/start", json={"phone_id": phone})
-def vote(rid, phone, target): return _req("POST", f"/rounds/{rid}/vote-loser", json={"phone_id": phone, "voted_player_id": target})
+def vote(rid, phone, target): return _req("POST", f"/rounds/{rid}/vote-loser", json={"phone_id": phone, "voted_player_id": target})  # noqa: E501
 def roulette_reveal(rid, phone): return _req("POST", f"/rounds/{rid}/roulette/reveal", json={"phone_id": phone})
 def trivia_start(sess, phone): return _req("POST", f"/sessions/{sess}/trivia/start", json={"phone_id": phone})
 def trivia_join(rid, phone): return _req("POST", f"/trivia/{rid}/join", json={"phone_id": phone})
 def trivia_begin(rid, phone): return _req("POST", f"/trivia/{rid}/begin", json={"phone_id": phone})
-def trivia_answer(rid, phone, qi, opt): return _req("POST", f"/trivia/{rid}/answer", json={"phone_id": phone, "question_index": qi, "selected_option": opt, "time_to_answer_ms": 1000})
+def trivia_answer(rid, phone, qi, opt): return _req("POST", f"/trivia/{rid}/answer", json={"phone_id": phone, "question_index": qi, "selected_option": opt, "time_to_answer_ms": 1000})  # noqa: E501
 def trivia_finish(rid, phone): return _req("POST", f"/trivia/{rid}/finish", json={"phone_id": phone})
 def leave(sess, phone): return _req("POST", f"/sessions/{sess}/leave", json={"phone_id": phone})
 def rejoin(sess, phone): return _req("POST", f"/sessions/{sess}/rejoin", json={"phone_id": phone})
@@ -140,7 +140,8 @@ def probe_shapes(table=1):
     hs = hot_seat(sess, phones[0])
     print("hot_seat ->", hs)
     d = draw(sess, phones[0], hs["player_id"])
-    print("draw ->", {k: (v if k != 'card' else '<card>') for k, v in d.items()}, "| card keys:", list(d.get("card", {}).keys()) if isinstance(d.get("card"), dict) else type(d.get("card")))
+    card_keys = list(d.get("card", {}).keys()) if isinstance(d.get("card"), dict) else type(d.get("card"))
+    print("draw ->", {k: (v if k != 'card' else '<card>') for k, v in d.items()}, "| card keys:", card_keys)
     print("complete ->", complete(d["round_id"], phones[0]))
     print("== roulette: start -> (vote shape?) ==")
     rs = roulette_start(sess, phones[0])
@@ -285,6 +286,7 @@ def scenario_trivia_afk(table, tok):
     sess, _ = open_lobby_session(table, phones, tok)
     play_chooser(sess, host)
     play_roulette(sess, host, phones)
+    before = {r["name"]: r["score"] for r in leaderboard(sess)["leaderboard"]}
     ts = trivia_start(sess, host)
     rid = ts["trivia_round_id"]
     trivia_join(rid, afk)
@@ -297,7 +299,8 @@ def scenario_trivia_afk(table, tok):
     except SimError:
         pass
     lb = {r["name"]: r for r in leaderboard(sess)["leaderboard"]}
-    expect(lb.get("P2", {}).get("score", -1) == 0, "AFK player (P2) scored 0 in trivia")
+    expect(lb.get("P2", {}).get("score", -1) == before.get("P2", -2),
+           "AFK player (P2) gained 0 trivia points")
     expect(current_round(sess)["ended"] is False, "AFK trivia round finalizes without ending the game")
 
 

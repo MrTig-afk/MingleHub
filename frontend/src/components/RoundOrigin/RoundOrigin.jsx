@@ -150,7 +150,13 @@ export default function RoundOrigin({
       if (left <= 0 && !done) {
         done = true
         clearInterval(id)
-        endGame(sessionId, phoneId).catch(() => {}).finally(() => setGameEnded(true))
+        // Only show Recap if the end actually took. If this phone is no longer the
+        // origin (a migration landed in the same instant), endGame 403s — stay put
+        // and let the migration/leave path render, don't fake a recap. "Already
+        // ended" still counts as ended.
+        endGame(sessionId, phoneId)
+          .then(() => setGameEnded(true))
+          .catch((e) => { if (/already.?ended/i.test(e.message)) setGameEnded(true) })
       }
     }
     // First tick off the synchronous effect body (avoids set-state-in-effect),

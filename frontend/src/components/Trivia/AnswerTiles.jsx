@@ -3,7 +3,7 @@
 // answered) a per-phone reveal: your pick, whether it was right, and the correct
 // option. The correct option is only ever known AFTER answering (the server
 // withholds it until then), so `reveal` is null until the answer comes back.
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 
 const LETTERS = ['A', 'B', 'C', 'D']
 
@@ -53,6 +53,13 @@ export default function AnswerTiles({ question, reveal, onAnswer, disabled, phon
     return () => clearInterval(id)
   }, [question?.index, question?.duration_seconds])
 
+  // Per-phone display order, stable per question and memoized so it isn't rehashed
+  // on every render. Badges stay A-D by position; each tile submits its true letter.
+  const order = useMemo(
+    () => shuffledOrder(`${phoneId || ''}:${question?.index}`),
+    [phoneId, question?.index],
+  )
+
   const handlePick = async (letter) => {
     if (disabled || reveal || submitting) return
     setSubmitting(letter)
@@ -66,8 +73,6 @@ export default function AnswerTiles({ question, reveal, onAnswer, disabled, phon
   if (!question) return null
   const answered = Boolean(reveal)
   const expired = secondsLeft <= 0
-  // Per-phone display order, stable per question. Badges remain A-D by position.
-  const order = shuffledOrder(`${phoneId || ''}:${question.index}`)
 
   return (
     <div style={wrapStyle}>

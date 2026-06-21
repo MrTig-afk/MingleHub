@@ -124,3 +124,37 @@ def test_overview_active_sessions_include_table_id(client, api_key_header, owner
     assert mine, "our active session should appear in overview"
     assert mine[0]["table_id"] == s["table_id"]
     uuid.UUID(mine[0]["table_id"])  # valid uuid string
+
+
+def _set_last_activity(session_id, minutes_ago):
+    async def _q():
+        conn = await asyncpg.connect(os.environ["DATABASE_URL"])
+        try:
+            await conn.execute(
+                "UPDATE game_sessions SET last_activity_at = NOW() - $1 * INTERVAL '1 minute'"
+                " WHERE id = $2",
+                minutes_ago, uuid.UUID(session_id),
+            )
+        finally:
+            await conn.close()
+    asyncio.run(_q())
+
+
+def test_plain_tap_on_lazy_expired_shows_recap(client, api_key_header, owner_a_token, fresh_table):
+    """Control (L2): without new_game, a tap on an idle-expired session lazily ends it
+    and shows recap."""
+    s = _setup_session(client, api_key_header, owner_a_token, fresh_table)
+    _set_last_activity(s["session_id"], 23)  # past the 22-min expiry
+    body = _tap(client, api_key_header, fresh_table["venue_slug"], fresh_table["table_number"],
+                s["tag_uid"], s["next_counter"], s["origin"])
+    assert body["table_state"]["phase"] == "recap", body["table_state"]
+
+
+def test_new_game_bypasses_lazy_expiry_recap(client, api_key_header, owner_a_token, fresh_table):
+    """L2 fix: force_new also skips the lazy-expiry recap from the resume check, so a
+    New-game tap that coincides with idle-expiry still yields a fresh lobby."""
+    s = _setup_session(client, api_key_header, owner_a_token, fresh_table)
+    _set_last_activity(s["session_id"], 23)
+    body = _tap(client, api_key_header, fresh_table["venue_slug"], fresh_table["table_number"],
+                s["tag_uid"], s["next_counter"], s["origin"], new_game=True)
+    assert body["table_state"]["phase"] == "lobby", body["table_state"]

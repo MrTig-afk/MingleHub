@@ -150,7 +150,11 @@ async def resolve_table_state(
     # phone never sees the chooser for its own session. Idle sessions are
     # lazily ended here and return recap phase instead of resume.
     resume = await _check_phone_session_resume(conn, table_id, phone_id)
-    if resume:
+    # force_new ("New game") must also skip a lazy-expiry recap surfaced here, not
+    # just the recap-lock below — otherwise a New-game tap that coincides with this
+    # phone's own session idle-expiring would land on recap instead of a fresh
+    # lobby. An active 'resume' is still honored (never abandon a live game).
+    if resume and not (force_new and resume.get("phase") == "recap"):
         return resume
 
     # Recap for recently-ended session: if this phone belonged to a session
