@@ -4,6 +4,7 @@ import { Analytics } from '@vercel/analytics/react'
 import Splash from './components/Splash/Splash.jsx'
 import PatronLanding from './components/PatronLanding/PatronLanding.jsx'
 import DashboardRoot from './components/Dashboard/DashboardRoot.jsx'
+import AdminRoot from './components/Admin/AdminRoot.jsx'
 import './styles/main.css'
 
 // Always keep the phone on fresh code (dev AND prod). The PWA is self-destroying
@@ -31,17 +32,7 @@ let page
 if (path.startsWith('/dashboard')) {
   page = <DashboardRoot />
 } else if (path.startsWith('/admin')) {
-  page = <div style={{
-    minHeight: '100dvh',
-    background: 'var(--bg-floor)',
-    color: 'var(--on-surface)',
-    fontFamily: 'var(--font-body)',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: '24px',
-    textAlign: 'center',
-  }}>Admin dashboard -- coming soon</div>
+  page = <AdminRoot />
 } else if (isPatronRoute) {
   page = <PatronLanding />
 } else {
