@@ -17,6 +17,7 @@ import time
 from typing import Optional
 
 from fastapi import Depends, Header, HTTPException
+import httpx
 import jwt
 from jwt import PyJWKClient
 from pydantic import BaseModel
@@ -31,6 +32,10 @@ TOKEN_TTL_SECONDS = 60 * 60 * 12  # 12 hours — dev convenience only
 # "just works" once these env vars exist (the swap this module was designed for).
 CLERK_JWKS_URL = os.getenv("CLERK_JWKS_URL")
 CLERK_ISSUER = os.getenv("CLERK_ISSUER")
+CLERK_SECRET_KEY = os.getenv("CLERK_SECRET_KEY")
+# Auto-provisioning allowlist: a first-login user whose email is here becomes an
+# 'admin'; everyone else becomes a 'venue_owner' (no venue yet -> setup wizard).
+ADMIN_EMAILS = {e.strip().lower() for e in os.getenv("ADMIN_EMAILS", "").split(",") if e.strip()}
 _jwk_client = None
 
 
@@ -91,6 +96,50 @@ def _verify_token(token: str) -> str:
     return payload
 
 
+async def _fetch_clerk_email(clerk_user_id: str) -> Optional[str]:
+    """Primary email of a Clerk user via the Backend API (needs the secret key)."""
+    if not CLERK_SECRET_KEY:
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.get(
+                f"https://api.clerk.com/v1/users/{clerk_user_id}",
+                headers={"Authorization": f"Bearer {CLERK_SECRET_KEY}"},
+            )
+        if r.status_code != 200:
+            return None
+        data = r.json()
+        primary = data.get("primary_email_address_id")
+        emails = data.get("email_addresses", [])
+        for e in emails:
+            if e.get("id") == primary:
+                return e.get("email_address")
+        return emails[0].get("email_address") if emails else None
+    except Exception:
+        return None
+
+
+async def _provision_user(conn, clerk_user_id: str) -> Optional[dict]:
+    """First-login auto-provision: create the users row. 'admin' if the email is in
+    ADMIN_EMAILS, else 'venue_owner' with no venue (-> the venue-setup wizard)."""
+    email = await _fetch_clerk_email(clerk_user_id)
+    if not email:
+        # Couldn't resolve a real Clerk user (e.g. a dev/unknown id, or Clerk
+        # unreachable) -> don't provision; the caller returns 401.
+        return None
+    role = "admin" if email.lower() in ADMIN_EMAILS else "venue_owner"
+    await conn.execute(
+        "INSERT INTO users (id, clerk_user_id, role, venue_id) "
+        "VALUES (gen_random_uuid(), $1, $2, NULL) "
+        "ON CONFLICT (clerk_user_id) DO NOTHING",
+        clerk_user_id, role,
+    )
+    return await conn.fetchrow(
+        "SELECT id, clerk_user_id, venue_id, role FROM users WHERE clerk_user_id = $1",
+        clerk_user_id,
+    )
+
+
 async def get_current_user(authorization: str = Header(...)) -> CurrentUser:
     if not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Missing bearer token")
@@ -102,11 +151,11 @@ async def get_current_user(authorization: str = Header(...)) -> CurrentUser:
             "SELECT id, clerk_user_id, venue_id, role FROM users WHERE clerk_user_id = $1",
             clerk_user_id,
         )
+        # First login under Clerk -> auto-provision (admin if allowlisted, else a
+        # venue_owner with no venue; the dashboard then shows the setup wizard).
+        if not row and _get_jwk_client() is not None:
+            row = await _provision_user(conn, clerk_user_id)
     if not row:
-        # Dev aid: surface the Clerk user id of an authenticated-but-unprovisioned
-        # account so it can be seeded into `users` during onboarding/testing.
-        if os.getenv("DEV_MODE") == "true":
-            print(f"[clerk] authenticated but not provisioned: clerk_user_id={clerk_user_id}", flush=True)
         raise HTTPException(status_code=401, detail="User not found")
 
     return CurrentUser(

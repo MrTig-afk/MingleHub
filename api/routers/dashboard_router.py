@@ -1,4 +1,5 @@
 import os
+import re
 import secrets
 import traceback
 import uuid
@@ -6,6 +7,7 @@ from collections import defaultdict
 from datetime import timedelta
 from typing import Literal, Optional
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -1037,3 +1039,115 @@ async def dev_reset_table(
         raise HTTPException(status_code=500, detail="Internal error")
 
     return {"table_number": body.table_number, "sessions_ended": len(ended)}
+
+
+def _slugify(name: str) -> str:
+    s = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+    return s or "venue"
+
+
+class SetupVenueRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(min_length=1, max_length=120)
+    venue_type: Literal["cafe", "pub", "bar", "brewery", "other"]
+    table_count: int = Field(ge=1, le=50)
+    allow_adult: bool = False
+    address: Optional[str] = Field(default=None, max_length=400)
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    place_id: Optional[str] = Field(default=None, max_length=200)
+
+
+@router.post("/setup-venue")
+@limiter.limit("10/minute")
+async def setup_venue(
+    request: Request,
+    body: SetupVenueRequest,
+    current_user: CurrentUser = Depends(require_role("venue_owner")),
+):
+    """First-run setup for a newly-provisioned owner with no venue yet: creates the
+    venue + its tables (numbered 1..N) and links them to the owner. One transaction."""
+    if current_user.venue_id is not None:
+        raise HTTPException(status_code=409, detail="Venue already set up")
+    content_ceiling = "adults_allowed" if body.allow_adult else "standard"
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                base = _slugify(body.name)
+                slug = base
+                i = 2
+                while await conn.fetchval("SELECT 1 FROM venues WHERE slug = $1", slug):
+                    slug = f"{base}-{i}"
+                    i += 1
+                venue_id = await conn.fetchval(
+                    """
+                    INSERT INTO venues (id, name, slug, venue_type, address, latitude, longitude, place_id)
+                    VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7)
+                    RETURNING id
+                    """,
+                    body.name, slug, body.venue_type,
+                    body.address, body.latitude, body.longitude, body.place_id,
+                )
+                for n in range(1, body.table_count + 1):
+                    await conn.execute(
+                        "INSERT INTO tables (id, venue_id, table_number, content_ceiling) "
+                        "VALUES (gen_random_uuid(), $1, $2, $3)",
+                        venue_id, n, content_ceiling,
+                    )
+                await conn.execute(
+                    "UPDATE users SET venue_id = $1 WHERE id = $2",
+                    venue_id, uuid.UUID(current_user.id),
+                )
+        return {"venue_id": str(venue_id), "slug": slug, "table_count": body.table_count}
+    except HTTPException:
+        raise
+    except Exception:
+        await notify_error("POST /dashboard/setup-venue failed 🚨", traceback.format_exc()[:500])
+        raise HTTPException(status_code=500, detail="Internal error")
+
+
+def _photon_label(p: dict) -> str:
+    """Assemble a readable one-line address from Photon (OSM) properties."""
+    street = " ".join(x for x in [p.get("housenumber"), p.get("street")] if x)
+    parts = [p.get("name"), street, p.get("city"), p.get("state"), p.get("postcode"), p.get("country")]
+    out, seen = [], set()
+    for c in parts:
+        if c and c not in seen:
+            seen.add(c)
+            out.append(c)
+    return ", ".join(out)
+
+
+@router.get("/geo/autocomplete")
+@limiter.limit("30/minute")
+async def geo_autocomplete(
+    request: Request,
+    q: str = Query(..., min_length=3, max_length=120),
+    current_user: CurrentUser = Depends(require_role("venue_owner", "venue_staff", "admin")),
+):
+    """Keyless address autocomplete via Photon (OpenStreetMap). Proxied so we send a
+    proper User-Agent and rate-limit it; returns a formatted label + coords + osm id."""
+    try:
+        async with httpx.AsyncClient(
+            timeout=8, headers={"User-Agent": "MingleHub/1.0 (venue onboarding)"}
+        ) as client:
+            r = await client.get("https://photon.komoot.io/api/", params={"q": q, "limit": 6})
+        if r.status_code != 200:
+            return {"suggestions": []}
+        feats = r.json().get("features", [])
+    except Exception:
+        return {"suggestions": []}
+    out = []
+    for f in feats:
+        p = f.get("properties", {}) or {}
+        coords = (f.get("geometry") or {}).get("coordinates") or [None, None]
+        label = _photon_label(p)
+        if label:
+            out.append({
+                "label": label,
+                "place_id": str(p["osm_id"]) if p.get("osm_id") else None,
+                "longitude": coords[0],
+                "latitude": coords[1],
+            })
+    return {"suggestions": out}

@@ -77,8 +77,13 @@ async def migrate():
                 venue_id       UUID REFERENCES venues(id),
                 role           TEXT NOT NULL CHECK (role IN ('venue_owner', 'venue_staff', 'admin')),
                 created_at     TIMESTAMP DEFAULT NOW(),
-                -- admin accounts are platform-wide and never tied to a venue
-                CHECK ((role = 'admin') = (venue_id IS NULL))
+                -- admin = platform-wide (no venue); a venue_owner may have NO venue
+                -- yet (just signed up -> setup wizard); staff always belong to a venue
+                CHECK (
+                    (role = 'admin' AND venue_id IS NULL)
+                    OR (role = 'venue_owner')
+                    OR (role = 'venue_staff' AND venue_id IS NOT NULL)
+                )
             )
         """)
         print("OK users table ready")
@@ -469,6 +474,42 @@ async def migrate():
             WHERE retap_interval_minutes = 30
         """)
         print("OK venues.retap_interval_minutes default changed 30 -> 15")
+
+        # Onboarding: relax users_check so a venue_owner may have NO venue yet (just
+        # signed up via Clerk -> the venue-setup wizard fills it in). admin stays
+        # NULL-only; staff must belong to a venue.
+        await conn.execute("ALTER TABLE users DROP CONSTRAINT IF EXISTS users_check")
+        await conn.execute("""
+            ALTER TABLE users ADD CONSTRAINT users_check CHECK (
+                (role = 'admin' AND venue_id IS NULL)
+                OR (role = 'venue_owner')
+                OR (role = 'venue_staff' AND venue_id IS NOT NULL)
+            )
+        """)
+        print("OK users_check relaxed: venue_owner may have NULL venue (pending setup)")
+
+        # Onboarding: venue address (Mapbox autocomplete) — formatted string + coords.
+        await conn.execute("""
+            ALTER TABLE venues
+            ADD COLUMN IF NOT EXISTS address TEXT,
+            ADD COLUMN IF NOT EXISTS latitude NUMERIC,
+            ADD COLUMN IF NOT EXISTS longitude NUMERIC,
+            ADD COLUMN IF NOT EXISTS place_id TEXT
+        """)
+        print("OK venues address columns ready")
+
+        # Onboarding: relax users_check so a venue_owner may have NO venue yet (just
+        # signed up via Clerk -> the venue-setup wizard fills it in). admin stays
+        # NULL-only; staff must belong to a venue.
+        await conn.execute("ALTER TABLE users DROP CONSTRAINT IF EXISTS users_check")
+        await conn.execute("""
+            ALTER TABLE users ADD CONSTRAINT users_check CHECK (
+                (role = 'admin' AND venue_id IS NULL)
+                OR (role = 'venue_owner')
+                OR (role = 'venue_staff' AND venue_id IS NOT NULL)
+            )
+        """)
+        print("OK users_check relaxed: venue_owner may have NULL venue (pending setup)")
 
         schema = await conn.fetch("""
             SELECT column_name, data_type, is_nullable, column_default

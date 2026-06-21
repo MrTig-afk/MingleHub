@@ -10,6 +10,7 @@ import DashboardTableDetail from './DashboardTableDetail.jsx'
 import DashboardInsights from './DashboardInsights.jsx'
 import DashboardSettings from './DashboardSettings.jsx'
 import DashboardBilling from './DashboardBilling.jsx'
+import VenueSetup from './VenueSetup.jsx'
 import { cardStyle, buttonStyle } from './dashboardStyles'
 
 // Clerk activates when its publishable key is present; otherwise the dev-login flow
@@ -137,7 +138,7 @@ function DevAuthed() {
 // The dashboard itself, given an already-resolved bearer token.
 // ---------------------------------------------------------------------------
 function DashboardInner({ token, onLogout, renderUnauth }) {
-  const [authState, setAuthState] = useState('loading') // loading | ok | admin_wrong_surface | unauth | error
+  const [authState, setAuthState] = useState('loading') // loading | ok | setup | admin_wrong_surface | unauth | error
   const [user, setUser] = useState(null)
   const [venue, setVenue] = useState(null)
   const [error, setError] = useState(null)
@@ -153,8 +154,9 @@ function DashboardInner({ token, onLogout, renderUnauth }) {
         return
       }
       if (!me.venue_id) {
-        setError('Account not linked to a venue.')
-        setAuthState('error')
+        // A newly-provisioned owner with no venue yet -> the setup wizard.
+        setUser(me)
+        setAuthState('setup')
         return
       }
       const v = await fetchVenue(token)
@@ -184,6 +186,7 @@ function DashboardInner({ token, onLogout, renderUnauth }) {
 
   if (authState === 'loading') return <LoadingShimmer />
   if (authState === 'unauth') return renderUnauth()
+  if (authState === 'setup') return <VenueSetup token={token} onDone={checkAuth} />
 
   if (authState === 'admin_wrong_surface') {
     return (

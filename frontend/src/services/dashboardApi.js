@@ -99,3 +99,22 @@ export const fetchBilling = (token) =>
     if (!r.ok) throw new Error((await r.json()).detail || r.status)
     return r.json()
   })
+
+// First-run venue setup for a newly-provisioned owner with no venue yet.
+export const setupVenue = (token, body) =>
+  fetch(`${BASE}/api/dashboard/setup-venue`, {
+    method: 'POST',
+    headers: h(token),
+    body: JSON.stringify(body),
+  }).then(async (r) => {
+    if (!r.ok) throw new Error((await r.json()).detail || r.status)
+    return r.json()
+  })
+
+// Keyless address autocomplete (Photon/OSM, proxied by the backend).
+export const geoAutocomplete = (token, q) =>
+  fetch(`${BASE}/api/dashboard/geo/autocomplete?q=${encodeURIComponent(q)}`, { headers: h(token) })
+    .then(async (r) => {
+      if (!r.ok) return { suggestions: [] }
+      return r.json()
+    })

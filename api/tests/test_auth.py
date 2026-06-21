@@ -132,3 +132,36 @@ def test_verify_clerk_jwt_validates_signature_issuer_and_expiry(monkeypatch):
     expired = jwt.encode({"sub": "u", "iss": "https://test.clerk", "exp": now - 10}, key, algorithm="RS256")
     with pytest.raises(jwt.ExpiredSignatureError):
         auth._verify_clerk_jwt(expired, pub)
+
+
+def test_provision_user_role_by_allowlist(monkeypatch):
+    """First-login auto-provision: an allowlisted email -> admin row; anyone else ->
+    venue_owner with no venue (which the dashboard turns into the setup wizard)."""
+    import asyncio
+    import os
+    import uuid as _uuid
+    import asyncpg
+    from api import auth
+
+    monkeypatch.setattr(auth, "ADMIN_EMAILS", {"boss@example.com"})
+
+    async def _email(cid):
+        return "boss@example.com" if "admin" in cid else "rando@example.com"
+    monkeypatch.setattr(auth, "_fetch_clerk_email", _email)
+
+    admin_id = f"test-prov-admin-{_uuid.uuid4()}"
+    owner_id = f"test-prov-owner-{_uuid.uuid4()}"
+
+    async def run():
+        conn = await asyncpg.connect(os.environ["DATABASE_URL"])
+        try:
+            a = await auth._provision_user(conn, admin_id)
+            o = await auth._provision_user(conn, owner_id)
+            return dict(a), dict(o)
+        finally:
+            await conn.execute("DELETE FROM users WHERE clerk_user_id = ANY($1::text[])", [admin_id, owner_id])
+            await conn.close()
+
+    a, o = asyncio.run(run())
+    assert a["role"] == "admin" and a["venue_id"] is None
+    assert o["role"] == "venue_owner" and o["venue_id"] is None
