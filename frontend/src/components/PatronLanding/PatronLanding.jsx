@@ -3,6 +3,7 @@ import JoinOrNewChooser from '../JoinOrNewChooser/JoinOrNewChooser'
 import Lobby from '../Lobby/Lobby'
 import Recap from '../Recap/Recap'
 import RoundOrigin from '../RoundOrigin/RoundOrigin'
+import SwitchConfirm from '../SwitchConfirm/SwitchConfirm'
 import SessionParticipant from '../Trivia/SessionParticipant'
 import { fetchTap } from '../../services/patronApi'
 
@@ -100,6 +101,18 @@ export default function PatronLanding() {
     attempt(3)
     return () => { cancelled = true }
   }, [])
+
+  // Single active seat: this phone tapped a different table while still in a live
+  // game elsewhere — let it choose to switch (leave the old game) or keep playing.
+  if (status === 'switch_confirm') {
+    return (
+      <SwitchConfirm
+        thisTableNumber={initialTap.tableNumber}
+        other={tableState.other}
+        phoneId={initialTap.phoneId}
+      />
+    )
+  }
 
   if (status === 'lobby') {
     return (

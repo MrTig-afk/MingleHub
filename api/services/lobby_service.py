@@ -138,6 +138,36 @@ async def _check_phone_session_resume(conn, table_id: str, phone_id: str) -> dic
     return None
 
 
+async def _active_session_other_table(conn, phone_id: str, this_table_id: str) -> dict | None:
+    """If this phone is an active (not left_early) player in an unended session at a
+    table OTHER than the one just tapped, return that session's table info — used to
+    gate a table switch (a phone can't be in two live games at once)."""
+    row = await conn.fetchrow(
+        """
+        SELECT gs.id, t.table_number, v.slug AS venue_slug, v.name AS venue_name
+        FROM game_players gp
+        JOIN game_sessions gs ON gs.id = gp.session_id
+        JOIN tables t ON t.id = gs.table_id
+        JOIN venues v ON v.id = t.venue_id
+        WHERE gp.phone_id = $1
+          AND gp.left_early = FALSE
+          AND gs.ended_at IS NULL
+          AND gs.table_id != $2
+        ORDER BY gs.created_at DESC
+        LIMIT 1
+        """,
+        phone_id, this_table_id,
+    )
+    if not row:
+        return None
+    return {
+        "session_id": str(row["id"]),
+        "table_number": row["table_number"],
+        "venue_slug": row["venue_slug"],
+        "venue_name": row["venue_name"],
+    }
+
+
 async def resolve_table_state(
     conn, venue_id: str, table_id: str, table_number: int, phone_id: str, force_new: bool = False,
 ) -> dict:
@@ -156,6 +186,14 @@ async def resolve_table_state(
     # lobby. An active 'resume' is still honored (never abandon a live game).
     if resume and not (force_new and resume.get("phase") == "recap"):
         return resume
+
+    # Single active seat: if this phone is an active player in an unended session at
+    # a DIFFERENT table, don't silently let it join a second game. Surface a confirm
+    # gate; the frontend offers "switch" (leave the old game first) or "keep playing
+    # there". Runs after the same-table resume above (a re-tap of its own table).
+    other = await _active_session_other_table(conn, phone_id, table_id)
+    if other:
+        return {"phase": "switch_confirm", "this_table_number": table_number, "other": other}
 
     # Recap for recently-ended session: if this phone belonged to a session
     # at this table that ended within the idle window, show recap not lobby.

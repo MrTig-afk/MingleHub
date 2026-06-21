@@ -158,3 +158,35 @@ def test_new_game_bypasses_lazy_expiry_recap(client, api_key_header, owner_a_tok
     body = _tap(client, api_key_header, fresh_table["venue_slug"], fresh_table["table_number"],
                 s["tag_uid"], s["next_counter"], s["origin"], new_game=True)
     assert body["table_state"]["phase"] == "lobby", body["table_state"]
+
+
+def test_tap_other_table_while_active_shows_switch_confirm(
+    client, api_key_header, owner_a_token, fresh_table, adults_allowed_table
+):
+    """Single active seat: a phone active in a game at table A that taps table B gets
+    switch_confirm (not a silent second game), carrying the old table's info."""
+    s = _setup_session(client, api_key_header, owner_a_token, fresh_table)
+    host = s["origin"]
+    tag_b = pair_tag(client, api_key_header, owner_a_token, adults_allowed_table["table_number"])
+    body = _tap(client, api_key_header, adults_allowed_table["venue_slug"],
+                adults_allowed_table["table_number"], tag_b, 1, host)
+    st = body["table_state"]
+    assert st["phase"] == "switch_confirm", st
+    assert st["other"]["session_id"] == s["session_id"]
+    assert st["other"]["table_number"] == fresh_table["table_number"]
+    assert "phone_id" not in st["other"]  # the switch payload carries no raw phone id
+
+
+def test_switch_confirm_clears_after_leaving_old_game(
+    client, api_key_header, owner_a_token, fresh_table, adults_allowed_table
+):
+    """After leaving the old game, tapping the new table proceeds normally (lobby)."""
+    s = _setup_session(client, api_key_header, owner_a_token, fresh_table)
+    host = s["origin"]
+    leave = client.post(f"/api/patron/sessions/{s['session_id']}/leave",
+                        headers=api_key_header, json={"phone_id": host})
+    assert leave.status_code == 200, leave.text
+    tag_b = pair_tag(client, api_key_header, owner_a_token, adults_allowed_table["table_number"])
+    body = _tap(client, api_key_header, adults_allowed_table["venue_slug"],
+                adults_allowed_table["table_number"], tag_b, 1, host)
+    assert body["table_state"]["phase"] == "lobby", body["table_state"]
