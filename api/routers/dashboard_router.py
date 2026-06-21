@@ -7,6 +7,7 @@ from collections import defaultdict
 from datetime import timedelta
 from typing import Literal, Optional
 
+import asyncpg
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
@@ -43,7 +44,8 @@ async def venue(
         pool = await get_pool()
         async with pool.acquire() as conn:
             row = await conn.fetchrow(
-                "SELECT id, name, slug, venue_type FROM venues WHERE id = $1",
+                "SELECT id, name, slug, venue_type, address, latitude, longitude "
+                "FROM venues WHERE id = $1",
                 current_user.venue_id,
             )
     except Exception:
@@ -1046,6 +1048,36 @@ def _slugify(name: str) -> str:
     return s or "venue"
 
 
+_VENUE_INSERT = (
+    "INSERT INTO venues (id, name, slug, venue_type, address, latitude, longitude, place_id) "
+    "VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7) RETURNING id"
+)
+
+
+async def _insert_venue_unique_slug(conn, body):
+    """Insert the venue with a unique slug, collision-safe under concurrency: each
+    attempt runs in a savepoint, so a UNIQUE(slug) violation rolls back only that
+    attempt (not the outer transaction). Bounded, with a random-suffix fallback for a
+    very hot base slug."""
+    base = _slugify(body.name)
+
+    async def _try(slug):
+        return await conn.fetchval(
+            _VENUE_INSERT, body.name, slug, body.venue_type,
+            body.address, body.latitude, body.longitude, body.place_id,
+        )
+
+    for attempt in range(20):
+        slug = base if attempt == 0 else f"{base}-{attempt + 1}"
+        try:
+            async with conn.transaction():  # savepoint
+                return await _try(slug)
+        except asyncpg.UniqueViolationError:
+            continue
+    async with conn.transaction():
+        return await _try(f"{base}-{secrets.token_hex(3)}")
+
+
 class SetupVenueRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     name: str = Field(min_length=1, max_length=120)
@@ -1067,28 +1099,23 @@ async def setup_venue(
 ):
     """First-run setup for a newly-provisioned owner with no venue yet: creates the
     venue + its tables (numbered 1..N) and links them to the owner. One transaction."""
-    if current_user.venue_id is not None:
+    if current_user.venue_id is not None:  # fast-fail on the cached identity
         raise HTTPException(status_code=409, detail="Venue already set up")
     content_ceiling = "adults_allowed" if body.allow_adult else "standard"
+    uid = uuid.UUID(current_user.id)
     try:
         pool = await get_pool()
         async with pool.acquire() as conn:
             async with conn.transaction():
-                base = _slugify(body.name)
-                slug = base
-                i = 2
-                while await conn.fetchval("SELECT 1 FROM venues WHERE slug = $1", slug):
-                    slug = f"{base}-{i}"
-                    i += 1
-                venue_id = await conn.fetchval(
-                    """
-                    INSERT INTO venues (id, name, slug, venue_type, address, latitude, longitude, place_id)
-                    VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7)
-                    RETURNING id
-                    """,
-                    body.name, slug, body.venue_type,
-                    body.address, body.latitude, body.longitude, body.place_id,
-                )
+                # Lock the owner row + authoritative re-check INSIDE the tx, so a
+                # double-submit (or a stale token) cannot create a second orphan venue.
+                urow = await conn.fetchrow(
+                    "SELECT venue_id FROM users WHERE id = $1 FOR UPDATE", uid)
+                if urow is None:
+                    raise HTTPException(status_code=404, detail="User not found")
+                if urow["venue_id"] is not None:
+                    raise HTTPException(status_code=409, detail="Venue already set up")
+                venue_id = await _insert_venue_unique_slug(conn, body)
                 for n in range(1, body.table_count + 1):
                     await conn.execute(
                         "INSERT INTO tables (id, venue_id, table_number, content_ceiling) "
@@ -1096,9 +1123,8 @@ async def setup_venue(
                         venue_id, n, content_ceiling,
                     )
                 await conn.execute(
-                    "UPDATE users SET venue_id = $1 WHERE id = $2",
-                    venue_id, uuid.UUID(current_user.id),
-                )
+                    "UPDATE users SET venue_id = $1 WHERE id = $2", venue_id, uid)
+                slug = await conn.fetchval("SELECT slug FROM venues WHERE id = $1", venue_id)
         return {"venue_id": str(venue_id), "slug": slug, "table_count": body.table_count}
     except HTTPException:
         raise
@@ -1107,32 +1133,52 @@ async def setup_venue(
         raise HTTPException(status_code=500, detail="Internal error")
 
 
-def _photon_label(p: dict) -> str:
-    """Assemble a readable one-line address from Photon (OSM) properties."""
+# Bias autocomplete toward the current market (AU) so local results rank first;
+# without this Photon ranks globally ("55 Elizabeth St" -> Connecticut before Melbourne).
+_GEO_BIAS = {"lat": "-37.8136", "lon": "144.9631"}  # Melbourne CBD
+
+# Small bounded cache so repeated keystrokes / identical queries don't re-hit the free
+# public Photon endpoint (protects its politeness budget). Cleared wholesale when full.
+_GEO_CACHE = {}
+_GEO_CACHE_MAX = 512
+
+
+def _photon_parts(p: dict):
+    """Split Photon (OSM) properties into (name, address, label): name is the POI name
+    (empty for a plain address), address omits the name, label is for display."""
+    name = p.get("name") or ""
     street = " ".join(x for x in [p.get("housenumber"), p.get("street")] if x)
-    parts = [p.get("name"), street, p.get("city"), p.get("state"), p.get("postcode"), p.get("country")]
     out, seen = [], set()
-    for c in parts:
+    for c in [street, p.get("city"), p.get("state"), p.get("postcode"), p.get("country")]:
         if c and c not in seen:
             seen.add(c)
             out.append(c)
-    return ", ".join(out)
+    address = ", ".join(out)
+    label = f"{name}, {address}" if (name and address) else (name or address)
+    return name, address, label
 
 
 @router.get("/geo/autocomplete")
-@limiter.limit("30/minute")
+@limiter.limit("15/minute")
 async def geo_autocomplete(
     request: Request,
     q: str = Query(..., min_length=3, max_length=120),
     current_user: CurrentUser = Depends(require_role("venue_owner", "venue_staff", "admin")),
 ):
-    """Keyless address autocomplete via Photon (OpenStreetMap). Proxied so we send a
-    proper User-Agent and rate-limit it; returns a formatted label + coords + osm id."""
+    """Keyless address/venue autocomplete via Photon (OpenStreetMap), AU-biased. Searches
+    addresses AND named places, so typing a venue name can surface its address (when it's
+    in OSM). Proxied for User-Agent + rate-limit + cache; returns name/address split +
+    coords; fails soft to []."""
+    key = q.strip().lower()
+    if key in _GEO_CACHE:
+        return {"suggestions": _GEO_CACHE[key]}
     try:
         async with httpx.AsyncClient(
             timeout=8, headers={"User-Agent": "MingleHub/1.0 (venue onboarding)"}
         ) as client:
-            r = await client.get("https://photon.komoot.io/api/", params={"q": q, "limit": 6})
+            r = await client.get(
+                "https://photon.komoot.io/api/", params={"q": q, "limit": 6, **_GEO_BIAS}
+            )
         if r.status_code != 200:
             return {"suggestions": []}
         feats = r.json().get("features", [])
@@ -1142,12 +1188,17 @@ async def geo_autocomplete(
     for f in feats:
         p = f.get("properties", {}) or {}
         coords = (f.get("geometry") or {}).get("coordinates") or [None, None]
-        label = _photon_label(p)
+        name, address, label = _photon_parts(p)
         if label:
             out.append({
                 "label": label,
+                "name": name,
+                "address": address,
                 "place_id": str(p["osm_id"]) if p.get("osm_id") else None,
                 "longitude": coords[0],
                 "latitude": coords[1],
             })
+    if len(_GEO_CACHE) >= _GEO_CACHE_MAX:
+        _GEO_CACHE.clear()
+    _GEO_CACHE[key] = out
     return {"suggestions": out}

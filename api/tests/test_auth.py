@@ -45,7 +45,7 @@ def test_venue_owner_sees_only_their_own_venue(client, api_key_header):
     headers = {**api_key_header, **auth_header(token)}
     resp = client.get("/api/dashboard/venue", headers=headers)
     assert resp.status_code == 200
-    assert resp.json()["slug"] == "lions-den"
+    assert resp.json()["slug"] == "fifty-five-bar"
 
 
 def test_venue_isolation_across_owners(client, api_key_header):
@@ -58,8 +58,8 @@ def test_venue_isolation_across_owners(client, api_key_header):
     venue_a = client.get("/api/dashboard/venue", headers={**api_key_header, **auth_header(token_a)}).json()
     venue_b = client.get("/api/dashboard/venue", headers={**api_key_header, **auth_header(token_b)}).json()
 
-    assert venue_a["slug"] == "lions-den"
-    assert venue_b["slug"] == "brew-house"
+    assert venue_a["slug"] == "fifty-five-bar"
+    assert venue_b["slug"] == "the-last-chance"
     assert venue_a["id"] != venue_b["id"]
 
 
@@ -68,7 +68,7 @@ def test_venue_staff_can_access_own_dashboard_venue(client, api_key_header):
     headers = {**api_key_header, **auth_header(token)}
     resp = client.get("/api/dashboard/venue", headers=headers)
     assert resp.status_code == 200
-    assert resp.json()["slug"] == "lions-den"
+    assert resp.json()["slug"] == "fifty-five-bar"
 
 
 def test_admin_cannot_use_venue_dashboard_endpoint(client, api_key_header):

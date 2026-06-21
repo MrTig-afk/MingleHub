@@ -7,9 +7,9 @@ import { buttonStyle, selectStyle } from '../Dashboard/dashboardStyles'
 // by selecting dev_owner_a or dev_staff_a.
 const DEV_USERS = [
   { id: 'dev_admin',   label: 'Admin (no venue)' },
-  { id: 'dev_owner_a', label: "Owner A -- The Lion's Den" },
-  { id: 'dev_staff_a', label: "Staff A -- The Lion's Den" },
-  { id: 'dev_owner_b', label: 'Owner B -- The Brew House' },
+  { id: 'dev_owner_a', label: "Owner A -- Fifty Five Bar" },
+  { id: 'dev_staff_a', label: "Staff A -- Fifty Five Bar" },
+  { id: 'dev_owner_b', label: 'Owner B -- The Last Chance' },
 ]
 
 export default function AdminLogin({ onLoginSuccess }) {

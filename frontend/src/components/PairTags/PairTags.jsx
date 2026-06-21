@@ -5,8 +5,8 @@ import { simulateTap as simulateTagSignature } from '../../services/patronApi'
 // Must match the clerk_user_id values seeded by scripts/seed_platform.py.
 // Only venue_owner accounts — pairing is owner-only per gamespec.md.
 const DEV_OWNERS = [
-  { id: 'dev_owner_a', label: "Owner A — The Lion's Den" },
-  { id: 'dev_owner_b', label: 'Owner B — The Brew House' },
+  { id: 'dev_owner_a', label: "Owner A — Fifty Five Bar" },
+  { id: 'dev_owner_b', label: 'Owner B — The Last Chance' },
 ]
 
 const supportsWebNfc = typeof window !== 'undefined' && 'NDEFReader' in window

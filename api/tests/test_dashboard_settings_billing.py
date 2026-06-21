@@ -316,7 +316,7 @@ def test_settings_patch_whitelist_rejects_venue_id(client, api_key_header):
 
 
 def test_settings_patch_bola(client, api_key_header):
-    """BOLA: owner_b PATCH only affects brew-house; lions-den (venue A) unchanged."""
+    """BOLA: owner_b PATCH only affects the-last-chance; fifty-five-bar (venue A) unchanged."""
     original_a = _get_venue_settings(VENUE_A_ID)
     original_b = _get_venue_settings(VENUE_B_ID)
     try:

@@ -147,7 +147,7 @@ def _create_table(content_ceiling="standard"):
         finally:
             await conn.close()
     asyncio.run(_create())
-    return {"table_id": table_id, "table_number": table_number, "venue_slug": "lions-den"}
+    return {"table_id": table_id, "table_number": table_number, "venue_slug": "fifty-five-bar"}
 
 
 def _teardown_table(table_id):

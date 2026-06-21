@@ -237,11 +237,11 @@ def test_admin_overview_cross_venue(client, api_key_header, fresh_table):
 
         per_venue = body["per_venue"]
         names = [v["name"] for v in per_venue]
-        assert "The Lion's Den" in names, "Venue A missing from per_venue"
-        assert "The Brew House" in names, "Venue B missing from per_venue"
+        assert "Fifty Five Bar" in names, "Venue A missing from per_venue"
+        assert "The Last Chance" in names, "Venue B missing from per_venue"
 
-        venue_a_entry = next(v for v in per_venue if v["name"] == "The Lion's Den")
-        venue_b_entry = next(v for v in per_venue if v["name"] == "The Brew House")
+        venue_a_entry = next(v for v in per_venue if v["name"] == "Fifty Five Bar")
+        venue_b_entry = next(v for v in per_venue if v["name"] == "The Last Chance")
         assert venue_a_entry["active_sessions"] >= 1
         assert venue_b_entry["active_sessions"] >= 1
     finally:
@@ -285,7 +285,7 @@ def test_admin_overview_is_test_exclusion(client, api_key_header):
 
         # Venue B must not appear in per_venue
         slugs = [v["slug"] for v in body["per_venue"]]
-        assert "brew-house" not in slugs, "is_test venue must not appear in per_venue"
+        assert "the-last-chance" not in slugs, "is_test venue must not appear in per_venue"
 
         # total_venues must have decreased by at least 1
         assert body["platform"]["total_venues"] < baseline_total
@@ -302,7 +302,7 @@ def test_admin_overview_is_test_exclusion(client, api_key_header):
 # ---------------------------------------------------------------------------
 
 def test_admin_venues_admin_200(client, api_key_header):
-    """dev_admin -> 200 with venues list containing both lions-den and brew-house."""
+    """dev_admin -> 200 with venues list containing both fifty-five-bar and the-last-chance."""
     token = dev_login(client, api_key_header, ADMIN_CLERK_ID)
     resp = client.get(
         "/api/admin/venues", headers={**api_key_header, **auth_header(token)}
@@ -314,8 +314,8 @@ def test_admin_venues_admin_200(client, api_key_header):
     assert isinstance(venues, list)
 
     slugs = [v["slug"] for v in venues]
-    assert "lions-den" in slugs, "lions-den missing from /admin/venues"
-    assert "brew-house" in slugs, "brew-house missing from /admin/venues"
+    assert "fifty-five-bar" in slugs, "fifty-five-bar missing from /admin/venues"
+    assert "the-last-chance" in slugs, "the-last-chance missing from /admin/venues"
 
     for v in venues:
         assert isinstance(v["id"], str)
@@ -350,7 +350,7 @@ def test_admin_venues_staff_403(client, api_key_header):
 def test_admin_venues_includes_test_venues(client, api_key_header):
     """/admin/venues INCLUDES is_test venues (flagged with is_test=True).
 
-    Set venue B to is_test=TRUE, fetch /admin/venues, assert brew-house appears
+    Set venue B to is_test=TRUE, fetch /admin/venues, assert the-last-chance appears
     with is_test == True. Restore in finally.
     """
     _set_venue_is_test(VENUE_B_ID, False)  # clean start
@@ -365,8 +365,8 @@ def test_admin_venues_includes_test_venues(client, api_key_header):
         assert resp.status_code == 200
         venues = resp.json()["venues"]
 
-        brew_house = next((v for v in venues if v["slug"] == "brew-house"), None)
-        assert brew_house is not None, "brew-house must appear in /admin/venues even when is_test=True"
+        brew_house = next((v for v in venues if v["slug"] == "the-last-chance"), None)
+        assert brew_house is not None, "the-last-chance must appear in /admin/venues even when is_test=True"
         assert brew_house["is_test"] is True
     finally:
         _set_venue_is_test(VENUE_B_ID, False)

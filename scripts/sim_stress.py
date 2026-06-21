@@ -180,8 +180,8 @@ class Game:
 
 def stress_full():
     print("### STRESS: 3 tables x 5 players across 2 venues, concurrently")
-    tok_a = token("dev_owner_a")   # lions-den
-    tok_b = token("dev_owner_b")   # brew-house
+    tok_a = token("dev_owner_a")   # fifty-five-bar
+    tok_b = token("dev_owner_b")   # the-last-chance
     tok_admin = token("dev_admin")
 
     # Fresh tables
@@ -190,9 +190,9 @@ def stress_full():
     reset_table(tok_b, 1)
 
     games = {
-        "lions-den/1": Game("lions-den", 1, 5),
-        "lions-den/2": Game("lions-den", 2, 5),
-        "brew-house/1": Game("brew-house", 1, 5),
+        "fifty-five-bar/1": Game("fifty-five-bar", 1, 5),
+        "fifty-five-bar/2": Game("fifty-five-bar", 2, 5),
+        "the-last-chance/1": Game("the-last-chance", 1, 5),
     }
 
     # Play all 3 concurrently
@@ -210,31 +210,31 @@ def stress_full():
         names = sorted(r["name"] for r in g.leaderboard())
         record(names == sorted(g.names), f"{key}: leaderboard has exactly its own 5 players (no cross-talk)")
 
-    ld_ids = {games["lions-den/1"].session_id, games["lions-den/2"].session_id}
-    bh_id = games["brew-house/1"].session_id
+    ld_ids = {games["fifty-five-bar/1"].session_id, games["fifty-five-bar/2"].session_id}
+    bh_id = games["the-last-chance/1"].session_id
 
     # Dashboard BOLA isolation while all 3 are live
     a_over = dash(tok_a, "overview")
     a_ids = {s["session_id"] for s in a_over["active_sessions"]}
     record(a_ids == ld_ids,
-           f"owner_a sees exactly the 2 lions-den sessions, not brew-house (got {len(a_ids)})")
-    record(bh_id not in a_ids, "owner_a CANNOT see the brew-house session (BOLA)")
+           f"owner_a sees exactly the 2 fifty-five-bar sessions, not the-last-chance (got {len(a_ids)})")
+    record(bh_id not in a_ids, "owner_a CANNOT see the the-last-chance session (BOLA)")
     record(a_over["tonight"]["active_tables"] == 2,
            f"owner_a tonight.active_tables == 2 (got {a_over['tonight']['active_tables']})")
 
     b_over = dash(tok_b, "overview")
     b_ids = {s["session_id"] for s in b_over["active_sessions"]}
     record(b_ids == {bh_id},
-           f"owner_b sees exactly the brew-house session, not lions-den (got {len(b_ids)})")
-    record(not (ld_ids & b_ids), "owner_b CANNOT see any lions-den session (BOLA)")
+           f"owner_b sees exactly the the-last-chance session, not fifty-five-bar (got {len(b_ids)})")
+    record(not (ld_ids & b_ids), "owner_b CANNOT see any fifty-five-bar session (BOLA)")
 
     # Admin sees all venues, cross-venue
     adm = admin(tok_admin, "overview")
     now = adm["platform"]["active_sessions_now"]
     record(now >= 3, f"admin sees >=3 active sessions across venues (got {now})")
     pv = {v["slug"]: v["active_sessions"] for v in adm["per_venue"]}
-    record(pv.get("lions-den") == 2 and pv.get("brew-house") == 1,
-           f"admin per-venue breakdown: lions-den=2, brew-house=1 (got {pv})")
+    record(pv.get("fifty-five-bar") == 2 and pv.get("the-last-chance") == 1,
+           f"admin per-venue breakdown: fifty-five-bar=2, the-last-chance=1 (got {pv})")
 
     # Tables endpoint: each owner's tables show live counts, isolated
     a_tables = {t["table_number"]: t["active_session_count"] for t in dash(tok_a, "tables")}
@@ -254,7 +254,7 @@ def stress_edge():
     reset_table(tok_a, 1)
     reset_table(tok_a, 2)
     reset_table(tok_b, 1)
-    A, B, C = Game("lions-den", 1, 3), Game("lions-den", 2, 3), Game("brew-house", 1, 3)
+    A, B, C = Game("fifty-five-bar", 1, 3), Game("fifty-five-bar", 2, 3), Game("the-last-chance", 1, 3)
     with ThreadPoolExecutor(max_workers=3) as ex:
         list(ex.map(lambda g: g.start_and_chooser(), [A, B, C]))
     if any(g.error for g in (A, B, C)):

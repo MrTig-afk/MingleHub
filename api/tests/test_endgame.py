@@ -327,10 +327,10 @@ def test_recap_full_stats(client, api_key_header, owner_a_token, fresh_table):
     assert recap["total_score"] > 0
 
     # venue_name from seed data
-    assert recap["venue_name"] == "The Lion's Den"
+    assert recap["venue_name"] == "Fifty Five Bar"
 
     # share_text contains venue name and total_score
-    assert "The Lion's Den" in recap["share_text"]
+    assert "Fifty Five Bar" in recap["share_text"]
     assert str(recap["total_score"]) in recap["share_text"]
 
     # most_picked_player: chooser round selected Player 1

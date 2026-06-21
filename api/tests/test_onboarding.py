@@ -80,6 +80,28 @@ def test_setup_venue_creates_venue_tables_and_links_owner(client, api_key_header
         _cleanup(clerk_id)
 
 
+def test_setup_venue_slug_dedupe(client, api_key_header):
+    """Two owners creating identically-named venues get distinct slugs (the
+    collision-safe insert appends -2, -3, ...)."""
+    a = f"test-setup-{uuid.uuid4()}"
+    b = f"test-setup-{uuid.uuid4()}"
+    _seed_pending_owner(a)
+    _seed_pending_owner(b)
+    try:
+        ha = {**api_key_header, "Authorization": f"Bearer {dev_login(client, api_key_header, a)}"}
+        hb = {**api_key_header, "Authorization": f"Bearer {dev_login(client, api_key_header, b)}"}
+        body = {"name": "Collision Tavern", "venue_type": "bar", "table_count": 1}
+        ra = client.post("/api/dashboard/setup-venue", headers=ha, json=body)
+        rb = client.post("/api/dashboard/setup-venue", headers=hb, json=body)
+        assert ra.status_code == 200 and rb.status_code == 200, (ra.text, rb.text)
+        sa, sb = ra.json()["slug"], rb.json()["slug"]
+        assert sa == "collision-tavern"
+        assert sb == "collision-tavern-2"
+    finally:
+        _cleanup(a)
+        _cleanup(b)
+
+
 def test_setup_venue_rejects_bad_input(client, api_key_header):
     clerk_id = f"test-setup-{uuid.uuid4()}"
     _seed_pending_owner(clerk_id)

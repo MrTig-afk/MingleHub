@@ -27,7 +27,7 @@ urllib3.disable_warnings()
 
 BASE = "https://192.168.1.108:8000"
 KEY = "dev-key"
-VENUE = "lions-den"
+VENUE = "fifty-five-bar"
 TABLE = 1
 H = {"Content-Type": "application/json", "X-API-Key": KEY}
 

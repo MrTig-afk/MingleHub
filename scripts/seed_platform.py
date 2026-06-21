@@ -17,8 +17,10 @@ from api.dev_fixtures import (  # noqa: E402
 # Two separate venues so BOLA (venue isolation) tests have real cross-venue
 # data to prove isolation against — not just a single-tenant happy path.
 VENUES = [
-    (VENUE_A_ID, "The Lion's Den", "lions-den", "pub"),
-    (VENUE_B_ID, "The Brew House", "brew-house", "brewery"),
+    (VENUE_A_ID, "Fifty Five Bar", "fifty-five-bar", "bar",
+     "55 Elizabeth Street, Melbourne VIC 3000", -37.8169, 144.9648),
+    (VENUE_B_ID, "The Last Chance", "the-last-chance", "pub",
+     "238 Victoria Street, Melbourne VIC 3000", -37.8076, 144.9712),
 ]
 
 TABLES = [
@@ -43,14 +45,15 @@ async def seed(conn):
     manual `python scripts/seed_platform.py` CLI share one definition
     instead of two copies drifting apart.
     """
-    for id_, name, slug, venue_type in VENUES:
+    for id_, name, slug, venue_type, address, lat, lng in VENUES:
         await conn.execute(
             """
-            INSERT INTO venues (id, name, slug, venue_type)
-            VALUES ($1, $2, $3, $4)
-            ON CONFLICT (id) DO UPDATE SET name = $2, slug = $3, venue_type = $4
+            INSERT INTO venues (id, name, slug, venue_type, address, latitude, longitude)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            ON CONFLICT (id) DO UPDATE SET name = $2, slug = $3, venue_type = $4,
+                address = $5, latitude = $6, longitude = $7
             """,
-            id_, name, slug, venue_type,
+            id_, name, slug, venue_type, address, lat, lng,
         )
     print(f"OK {len(VENUES)} dev venues seeded")
 

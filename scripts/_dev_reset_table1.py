@@ -2,7 +2,7 @@ import asyncio
 
 from api.db import get_pool
 
-TABLE_ID = "5c252cf5-7a04-5465-865b-51c8cee4d83d"  # lions-den table 1
+TABLE_ID = "5c252cf5-7a04-5465-865b-51c8cee4d83d"  # fifty-five-bar table 1
 
 
 async def main():

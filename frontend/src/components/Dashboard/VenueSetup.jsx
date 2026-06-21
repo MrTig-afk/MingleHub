@@ -35,39 +35,88 @@ const labelStyle = {
   marginTop: '16px',
 }
 
-// First-run wizard shown to a newly-provisioned venue_owner who has no venue yet.
-// Captures the 5 fields + a keyless (Photon/OSM) address autocomplete, then creates
-// the venue + tables via setup-venue and calls onDone() to re-enter the dashboard.
+function Dropdown({ items, onPick }) {
+  return (
+    <div style={{
+      position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 10,
+      background: 'var(--bg-container)', border: '1px solid rgba(255,255,255,0.14)',
+      borderRadius: '8px', marginTop: '4px', maxHeight: '220px', overflowY: 'auto',
+    }}>
+      {items.map((s, i) => (
+        <div
+          key={i}
+          onMouseDown={() => onPick(s)}
+          style={{
+            padding: '10px 12px', cursor: 'pointer', fontSize: '14px',
+            borderBottom: i < items.length - 1 ? '1px solid var(--bg-floor)' : 'none',
+          }}
+        >
+          {s.label}
+        </div>
+      ))}
+    </div>
+  )
+}
+
+// First-run wizard for a newly-provisioned venue_owner with no venue yet. Both the
+// name and address fields use a keyless (Photon/OSM, AU-biased) autocomplete: picking a
+// named place from the NAME field also auto-fills the address; the ADDRESS field is the
+// fallback for venues not in OSM. Then setup-venue creates the venue + tables.
 export default function VenueSetup({ token, onDone }) {
   const [name, setName] = useState('')
   const [venueType, setVenueType] = useState('bar')
   const [tableCount, setTableCount] = useState(4)
   const [allowAdult, setAllowAdult] = useState(false)
-  const [query, setQuery] = useState('')
-  const [picked, setPicked] = useState(null) // { label, latitude, longitude, place_id }
-  const [suggestions, setSuggestions] = useState([])
-  const [showSug, setShowSug] = useState(false)
+  const [address, setAddress] = useState('')
+  const [coords, setCoords] = useState({ latitude: null, longitude: null, place_id: null })
+  const [nameSug, setNameSug] = useState([])
+  const [addrSug, setAddrSug] = useState([])
+  const [showName, setShowName] = useState(false)
+  const [showAddr, setShowAddr] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState(null)
-  const debounceRef = useRef(null)
+  const nameTimer = useRef(null)
+  const addrTimer = useRef(null)
 
-  const onAddressType = (val) => {
-    setQuery(val)
-    setPicked(null) // typing invalidates a prior selection's coords
-    clearTimeout(debounceRef.current)
-    if (val.trim().length < 3) { setSuggestions([]); setShowSug(false); return }
-    debounceRef.current = setTimeout(async () => {
+  const onNameType = (val) => {
+    setName(val)
+    setShowAddr(false)
+    clearTimeout(nameTimer.current)
+    if (val.trim().length < 3) { setNameSug([]); setShowName(false); return }
+    nameTimer.current = setTimeout(async () => {
       const res = await geoAutocomplete(token, val.trim())
-      setSuggestions(res.suggestions || [])
-      setShowSug(true)
+      // Only named places (POIs) are useful as venue-name matches.
+      setNameSug((res.suggestions || []).filter((s) => s.name))
+      setShowName(true)
     }, 300)
   }
 
-  const pick = (s) => {
-    setPicked(s)
-    setQuery(s.label)
-    setSuggestions([])
-    setShowSug(false)
+  const pickName = (s) => {
+    setName(s.name)
+    if (s.address) {
+      setAddress(s.address)
+      setCoords({ latitude: s.latitude, longitude: s.longitude, place_id: s.place_id })
+    }
+    setNameSug([]); setShowName(false)
+  }
+
+  const onAddrType = (val) => {
+    setAddress(val)
+    setCoords({ latitude: null, longitude: null, place_id: null }) // typing invalidates a prior pick
+    setShowName(false)
+    clearTimeout(addrTimer.current)
+    if (val.trim().length < 3) { setAddrSug([]); setShowAddr(false); return }
+    addrTimer.current = setTimeout(async () => {
+      const res = await geoAutocomplete(token, val.trim())
+      setAddrSug(res.suggestions || [])
+      setShowAddr(true)
+    }, 300)
+  }
+
+  const pickAddr = (s) => {
+    setAddress(s.address || s.label)
+    setCoords({ latitude: s.latitude, longitude: s.longitude, place_id: s.place_id })
+    setAddrSug([]); setShowAddr(false)
   }
 
   const submit = async () => {
@@ -84,10 +133,10 @@ export default function VenueSetup({ token, onDone }) {
         venue_type: venueType,
         table_count: count,
         allow_adult: allowAdult,
-        address: picked?.label || query.trim() || null,
-        latitude: picked?.latitude ?? null,
-        longitude: picked?.longitude ?? null,
-        place_id: picked?.place_id ?? null,
+        address: address.trim() || null,
+        latitude: coords.latitude,
+        longitude: coords.longitude,
+        place_id: coords.place_id,
       })
       onDone()
     } catch (e) {
@@ -107,13 +156,18 @@ export default function VenueSetup({ token, onDone }) {
         </p>
 
         <label style={labelStyle}>Venue name</label>
-        <input
-          style={inputStyle}
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder="The Lion's Den"
-          maxLength={120}
-        />
+        <div style={{ position: 'relative' }}>
+          <input
+            style={inputStyle}
+            value={name}
+            onChange={(e) => onNameType(e.target.value)}
+            onFocus={() => nameSug.length && setShowName(true)}
+            placeholder="Start typing your venue name…"
+            autoComplete="off"
+            maxLength={120}
+          />
+          {showName && nameSug.length > 0 && <Dropdown items={nameSug} onPick={pickName} />}
+        </div>
 
         <label style={labelStyle}>Venue type</label>
         <select style={inputStyle} value={venueType} onChange={(e) => setVenueType(e.target.value)}>
@@ -126,32 +180,13 @@ export default function VenueSetup({ token, onDone }) {
         <div style={{ position: 'relative' }}>
           <input
             style={inputStyle}
-            value={query}
-            onChange={(e) => onAddressType(e.target.value)}
-            onFocus={() => suggestions.length && setShowSug(true)}
-            placeholder="Start typing your address…"
+            value={address}
+            onChange={(e) => onAddrType(e.target.value)}
+            onFocus={() => addrSug.length && setShowAddr(true)}
+            placeholder="e.g. 55 Elizabeth St, Melbourne"
             autoComplete="off"
           />
-          {showSug && suggestions.length > 0 && (
-            <div style={{
-              position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 10,
-              background: 'var(--bg-container)', border: '1px solid rgba(255,255,255,0.14)',
-              borderRadius: '8px', marginTop: '4px', maxHeight: '220px', overflowY: 'auto',
-            }}>
-              {suggestions.map((s, i) => (
-                <div
-                  key={i}
-                  onMouseDown={() => pick(s)}
-                  style={{
-                    padding: '10px 12px', cursor: 'pointer', fontSize: '14px',
-                    borderBottom: i < suggestions.length - 1 ? '1px solid var(--bg-floor)' : 'none',
-                  }}
-                >
-                  {s.label}
-                </div>
-              ))}
-            </div>
-          )}
+          {showAddr && addrSug.length > 0 && <Dropdown items={addrSug} onPick={pickAddr} />}
         </div>
 
         <label style={labelStyle}>Number of tables</label>
