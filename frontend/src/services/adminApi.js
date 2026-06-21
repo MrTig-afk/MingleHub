@@ -28,3 +28,44 @@ export const fetchAdminVenues = (token) =>
     if (!r.ok) throw new Error((await r.json()).detail || r.status)
     return r.json()
   })
+
+export const fetchAdminVenueDetail = (token, venueId) =>
+  fetch(`${BASE}/api/admin/venues/${venueId}`, { headers: h(token) })
+    .then(async (r) => { if (!r.ok) throw new Error((await r.json()).detail || r.status); return r.json() })
+
+export const patchAdminVenue = (token, venueId, body) =>
+  fetch(`${BASE}/api/admin/venues/${venueId}`, {
+    method: 'PATCH',
+    headers: h(token),
+    body: JSON.stringify(body),
+  }).then(async (r) => { if (!r.ok) throw new Error((await r.json()).detail || r.status); return r.json() })
+
+export const fetchAdminVenueConfigHistory = (token, venueId) =>
+  fetch(`${BASE}/api/admin/venues/${venueId}/config-history`, { headers: h(token) })
+    .then(async (r) => { if (!r.ok) throw new Error((await r.json()).detail || r.status); return r.json() })
+
+export const fetchAdminSupport = (token, status = 'open') =>
+  fetch(`${BASE}/api/admin/support?status=${status}`, { headers: h(token) })
+    .then(async (r) => { if (!r.ok) throw new Error((await r.json()).detail || r.status); return r.json() })
+
+export const patchAdminSupportMessage = (token, messageId, body) =>
+  fetch(`${BASE}/api/admin/support/${messageId}`, {
+    method: 'PATCH',
+    headers: h(token),
+    body: JSON.stringify(body),
+  }).then(async (r) => { if (!r.ok) throw new Error((await r.json()).detail || r.status); return r.json() })
+
+export const fetchAdminLeads = (token) =>
+  fetch(`${BASE}/api/admin/leads`, { headers: h(token) })
+    .then(async (r) => { if (!r.ok) throw new Error((await r.json()).detail || r.status); return r.json() })
+
+export const createAdminLead = (token, body) =>
+  fetch(`${BASE}/api/admin/leads`, {
+    method: 'POST',
+    headers: h(token),
+    body: JSON.stringify(body),
+  }).then(async (r) => { if (!r.ok) throw new Error((await r.json()).detail || r.status); return r.json() })
+
+export const fetchAdminTeam = (token) =>
+  fetch(`${BASE}/api/admin/team`, { headers: h(token) })
+    .then(async (r) => { if (!r.ok) throw new Error((await r.json()).detail || r.status); return r.json() })

@@ -22,7 +22,7 @@ const smallChip = (extra) => ({
   ...extra,
 })
 
-export default function AdminVenues({ token }) {
+export default function AdminVenues({ token, navigate }) {
   const [data, setData] = useState(null)
   const [status, setStatus] = useState('loading') // loading | ready | error
   const [error, setError] = useState(null)
@@ -94,8 +94,11 @@ export default function AdminVenues({ token }) {
       </h2>
 
       {venues.map((venue) => (
-        // TODO (Slice 5): make rows clickable -> /admin/venues/{id}
-        <div key={venue.id} style={{ ...cardStyle, marginBottom: '12px' }}>
+        <div
+          key={venue.id}
+          onClick={() => navigate(`/admin/venues/${venue.id}`)}
+          style={{ ...cardStyle, marginBottom: '12px', cursor: 'pointer' }}
+        >
           {/* Top row: name + status/test chips */}
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
             <span style={{ fontWeight: 700 }}>{venue.name}</span>

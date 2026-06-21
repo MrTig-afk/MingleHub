@@ -4,6 +4,10 @@ import AdminLogin from './AdminLogin.jsx'
 import AdminShell from './AdminShell.jsx'
 import AdminHome from './AdminHome.jsx'
 import AdminVenues from './AdminVenues.jsx'
+import AdminVenueDetail from './AdminVenueDetail.jsx'
+import AdminSupport from './AdminSupport.jsx'
+import AdminTeam from './AdminTeam.jsx'
+import AdminLeads from './AdminLeads.jsx'
 import { cardStyle, buttonStyle } from '../Dashboard/dashboardStyles'
 
 // Pushes a new path and triggers popstate so AdminRoot re-reads location.
@@ -12,14 +16,6 @@ function navigate(path) {
   window.dispatchEvent(new PopStateEvent('popstate'))
 }
 
-function Placeholder({ label }) {
-  return (
-    <div style={{ padding: '48px 0', textAlign: 'center', color: 'var(--on-surface-dim)' }}>
-      <h2 style={{ fontFamily: 'var(--font-headline)', marginBottom: '8px' }}>{label}</h2>
-      <p>Coming in the next slice</p>
-    </div>
-  )
-}
 
 export default function AdminRoot() {
   // loading | logged_out | logged_in | error | venue_wrong_surface
@@ -171,19 +167,28 @@ export default function AdminRoot() {
     return null
   }
 
+  // Venue detail match MUST come before the exact /admin/venues check.
+  const venueDetailMatch = path.match(/^\/admin\/venues\/([a-f0-9-]+)$/i)
+
   let content
   if (path === '/admin') {
     content = <AdminHome token={token} />
+  } else if (venueDetailMatch) {
+    content = <AdminVenueDetail token={token} venueId={venueDetailMatch[1]} navigate={navigate} />
   } else if (path === '/admin/venues') {
-    content = <AdminVenues token={token} />
+    content = <AdminVenues token={token} navigate={navigate} />
   } else if (path === '/admin/support') {
-    content = <Placeholder label="Support" />
+    content = <AdminSupport token={token} />
   } else if (path === '/admin/team') {
-    content = <Placeholder label="Team" />
+    content = <AdminTeam token={token} />
   } else if (path === '/admin/leads') {
-    content = <Placeholder label="Leads" />
+    content = <AdminLeads token={token} />
   } else {
-    content = <Placeholder label="Not Found" />
+    content = (
+      <div style={{ padding: '48px 0', textAlign: 'center', color: 'var(--on-surface-dim)' }}>
+        <h2 style={{ fontFamily: 'var(--font-headline)', marginBottom: '8px' }}>Not Found</h2>
+      </div>
+    )
   }
 
   return (

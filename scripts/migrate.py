@@ -384,6 +384,47 @@ async def migrate():
         """)
         print("OK roulette_votes table ready")
 
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS venue_config_overrides (
+                id          UUID PRIMARY KEY,
+                venue_id    UUID NOT NULL REFERENCES venues(id),
+                field_name  TEXT NOT NULL,
+                old_value   TEXT,
+                new_value   TEXT,
+                reason      TEXT NOT NULL,
+                changed_by  UUID REFERENCES users(id),
+                created_at  TIMESTAMP DEFAULT NOW()
+            )
+        """)
+        print("OK venue_config_overrides table ready")
+
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS support_messages (
+                id          UUID PRIMARY KEY,
+                venue_id    UUID REFERENCES venues(id),
+                name        TEXT,
+                email       TEXT,
+                message     TEXT NOT NULL,
+                status      TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'resolved')),
+                created_at  TIMESTAMP DEFAULT NOW()
+            )
+        """)
+        print("OK support_messages table ready")
+
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS leads (
+                id          UUID PRIMARY KEY,
+                name        TEXT,
+                email       TEXT,
+                phone       TEXT,
+                venue_name  TEXT,
+                source      TEXT,
+                notes       TEXT,
+                created_at  TIMESTAMP DEFAULT NOW()
+            )
+        """)
+        print("OK leads table ready")
+
         from scripts.seed_bar_cards import seed as seed_bar_cards  # noqa: E402
         await seed_bar_cards(conn)
         print("OK bar_cards seeded")
