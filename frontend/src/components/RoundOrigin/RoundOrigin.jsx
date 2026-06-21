@@ -224,10 +224,16 @@ export default function RoundOrigin({
     if (!window.confirm('End the game for everyone?')) return
     try {
       await endGame(sessionId, phoneId)
-      setGameEnded(true)
     } catch (e) {
-      setError(e.message)
+      // If the session was already ended server-side (idle expiry, or a race),
+      // that's still "ended" from the host's view — go to recap, don't show a
+      // raw "session_already_ended" error.
+      if (!/already.?ended|not.?found/i.test(e.message)) {
+        setError(e.message)
+        return
+      }
     }
+    setGameEnded(true)
   }
 
   const handleHostLeave = async () => {

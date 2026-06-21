@@ -12,8 +12,13 @@ const shimmerCard = (height = 80) => ({
 
 export default function DashboardHome({ token, navigate }) {
   const { data, status, error, lastUpdatedAt, reload } = usePolling(
-    () => Promise.all([fetchOverview(token), fetchTables(token)])
-      .then(([overview, tables]) => ({ ...overview, tables })),
+    // Overview drives the page; the tables list is secondary, so a tables failure
+    // must NOT blank the whole Home (would happen with Promise.all). Degrade to
+    // "no idle rows" instead — live sessions from /overview still render.
+    () => fetchOverview(token).then(async (overview) => {
+      const tables = await fetchTables(token).catch(() => [])
+      return { ...overview, tables }
+    }),
     { intervalMs: 7000, tokenKey: 'mh_dashboard_token' }
   )
 
