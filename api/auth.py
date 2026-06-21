@@ -73,7 +73,10 @@ def _verify_token(token: str) -> str:
             key = client.get_signing_key_from_jwt(token).key
             return _verify_clerk_jwt(token, key)
         except Exception:
-            raise HTTPException(status_code=401, detail="Invalid token")
+            # In DEV_MODE, keep accepting dev-login HMAC tokens alongside Clerk (sim
+            # tools + the dashboard dev-login). In production, Clerk is the only path.
+            if os.getenv("DEV_MODE") != "true":
+                raise HTTPException(status_code=401, detail="Invalid token")
     try:
         payload, expires_at, signature = base64.urlsafe_b64decode(token.encode()).decode().rsplit(":", 2)
     except (ValueError, UnicodeDecodeError):
@@ -100,6 +103,10 @@ async def get_current_user(authorization: str = Header(...)) -> CurrentUser:
             clerk_user_id,
         )
     if not row:
+        # Dev aid: surface the Clerk user id of an authenticated-but-unprovisioned
+        # account so it can be seeded into `users` during onboarding/testing.
+        if os.getenv("DEV_MODE") == "true":
+            print(f"[clerk] authenticated but not provisioned: clerk_user_id={clerk_user_id}", flush=True)
         raise HTTPException(status_code=401, detail="User not found")
 
     return CurrentUser(

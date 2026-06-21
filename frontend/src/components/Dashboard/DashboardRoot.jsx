@@ -1,8 +1,7 @@
 import { useEffect, useState } from 'react'
+import { ClerkProvider, SignedIn, SignedOut, SignIn, useAuth, useClerk } from '@clerk/clerk-react'
 import { fetchMe, fetchVenue } from '../../services/dashboardApi'
 import PairTags from '../PairTags/PairTags.jsx'
-// TODO (future slice): refactor PairTags to accept the shell token as a prop
-// rather than managing its own login flow internally.
 import DashboardLogin from './DashboardLogin.jsx'
 import DashboardShell from './DashboardShell.jsx'
 import DashboardHome from './DashboardHome.jsx'
@@ -13,7 +12,11 @@ import DashboardSettings from './DashboardSettings.jsx'
 import DashboardBilling from './DashboardBilling.jsx'
 import { cardStyle, buttonStyle } from './dashboardStyles'
 
-// Pushes a new path and triggers popstate so DashboardRoot re-reads location.
+// Clerk activates when its publishable key is present; otherwise the dev-login flow
+// is used (so local tooling/tests keep working). The backend accepts both a Clerk
+// JWT and a dev token in DEV_MODE.
+const CLERK_KEY = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY
+
 function navigate(path) {
   window.history.pushState({}, '', path)
   window.dispatchEvent(new PopStateEvent('popstate'))
@@ -28,30 +31,124 @@ function Placeholder({ label }) {
   )
 }
 
+const fullScreen = {
+  minHeight: '100dvh',
+  background: 'var(--bg-floor)',
+  color: 'var(--on-surface)',
+  fontFamily: 'var(--font-body)',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  padding: '24px',
+}
+
+function LoadingShimmer() {
+  return (
+    <div style={{ ...fullScreen, flexDirection: 'column', gap: '12px' }}>
+      {[1, 2, 3].map((i) => (
+        <div key={i} style={{
+          width: '100%', maxWidth: '360px', height: '20px', borderRadius: '6px',
+          background: 'var(--bg-container)', animation: 'dev-shimmer 1.5s infinite',
+        }} />
+      ))}
+    </div>
+  )
+}
+
+function Centered({ children }) {
+  return <div style={fullScreen}>{children}</div>
+}
+
+// ---------------------------------------------------------------------------
+// Gate: Clerk if configured, else the dev-login flow.
+// ---------------------------------------------------------------------------
 export default function DashboardRoot() {
-  const [authState, setAuthState] = useState('loading') // loading | logged_out | logged_in | error | admin_wrong_surface
+  if (CLERK_KEY) {
+    return (
+      <ClerkProvider publishableKey={CLERK_KEY} afterSignOutUrl="/dashboard">
+        <SignedOut>
+          <Centered><SignIn routing="hash" /></Centered>
+        </SignedOut>
+        <SignedIn>
+          <ClerkAuthed />
+        </SignedIn>
+      </ClerkProvider>
+    )
+  }
+  return <DevAuthed />
+}
+
+// Clerk-authed: hold a refreshed Clerk JWT, then run the dashboard with it.
+function ClerkAuthed() {
+  const { getToken } = useAuth()
+  const { signOut } = useClerk()
+  const [token, setToken] = useState(null)
+
+  useEffect(() => {
+    let active = true
+    const refresh = async () => {
+      try { const t = await getToken(); if (active) setToken(t) } catch { /* keep last */ }
+    }
+    refresh()
+    const id = setInterval(refresh, 30000) // Clerk session tokens last ~60s
+    return () => { active = false; clearInterval(id) }
+  }, [getToken])
+
+  if (!token) return <LoadingShimmer />
+  return (
+    <DashboardInner
+      token={token}
+      onLogout={() => signOut({ redirectUrl: '/dashboard' })}
+      // A valid Clerk session whose user isn't provisioned in `users` yet.
+      renderUnauth={() => (
+        <Centered>
+          <div style={{ ...cardStyle, maxWidth: '480px', textAlign: 'center' }}>
+            <p style={{ marginBottom: '16px' }}>
+              You&rsquo;re signed in, but this account isn&rsquo;t linked to a venue yet.
+              Ask an admin to set it up.
+            </p>
+            <button onClick={() => signOut({ redirectUrl: '/dashboard' })} style={buttonStyle}>
+              Sign out
+            </button>
+          </div>
+        </Centered>
+      )}
+    />
+  )
+}
+
+// Dev-login authed: token from localStorage; unauth -> the dev-login form.
+function DevAuthed() {
+  const [token, setToken] = useState(() => localStorage.getItem('mh_dashboard_token'))
+  const login = () => setToken(localStorage.getItem('mh_dashboard_token'))
+  const onLogout = () => { localStorage.removeItem('mh_dashboard_token'); setToken(null); navigate('/dashboard/login') }
+
+  if (!token) return <DashboardLogin onLoginSuccess={login} />
+  return (
+    <DashboardInner
+      token={token}
+      onLogout={onLogout}
+      renderUnauth={() => { localStorage.removeItem('mh_dashboard_token'); return <DashboardLogin onLoginSuccess={login} /> }}
+    />
+  )
+}
+
+// ---------------------------------------------------------------------------
+// The dashboard itself, given an already-resolved bearer token.
+// ---------------------------------------------------------------------------
+function DashboardInner({ token, onLogout, renderUnauth }) {
+  const [authState, setAuthState] = useState('loading') // loading | ok | admin_wrong_surface | unauth | error
   const [user, setUser] = useState(null)
   const [venue, setVenue] = useState(null)
-  const [token, setToken] = useState(null)
   const [error, setError] = useState(null)
   const [path, setPath] = useState(window.location.pathname)
 
-  const updatePath = () => setPath(window.location.pathname)
-
-  // checkAuth: reads token from localStorage, validates /me, loads /venue.
-  // Called on mount and after a successful login.
   const checkAuth = async () => {
-    const stored = localStorage.getItem('mh_dashboard_token')
-    if (!stored) {
-      setAuthState('logged_out')
-      return
-    }
     setAuthState('loading')
     try {
-      const me = await fetchMe(stored)
+      const me = await fetchMe(token)
       if (me.role === 'admin') {
         setUser(me)
-        setToken(stored)
         setAuthState('admin_wrong_surface')
         return
       }
@@ -60,21 +157,16 @@ export default function DashboardRoot() {
         setAuthState('error')
         return
       }
-      const v = await fetchVenue(stored)
+      const v = await fetchVenue(token)
       setUser(me)
       setVenue(v)
-      setToken(stored)
-      // If we're on the login page after re-auth, redirect to home
-      if (window.location.pathname === '/dashboard/login') {
-        navigate('/dashboard')
-      }
-      setAuthState('logged_in')
+      if (window.location.pathname === '/dashboard/login') navigate('/dashboard')
+      setAuthState('ok')
     } catch (e) {
       const msg = e.message || ''
       const is401 = msg.includes('401') || msg.includes('token') || msg.includes('expired') || msg.includes('not found')
       if (is401) {
-        localStorage.removeItem('mh_dashboard_token')
-        setAuthState('logged_out')
+        setAuthState('unauth')
       } else {
         setError(msg)
         setAuthState('error')
@@ -83,105 +175,44 @@ export default function DashboardRoot() {
   }
 
   useEffect(() => {
+    const updatePath = () => setPath(window.location.pathname)
     window.addEventListener('popstate', updatePath)
-    // Deferred a tick so checkAuth()'s setState lands in a macrotask rather than
-    // synchronously in the effect body (react-hooks/set-state-in-effect).
     const id = setTimeout(checkAuth, 0)
-    return () => {
-      clearTimeout(id)
-      window.removeEventListener('popstate', updatePath)
-    }
-  }, [])
+    return () => { clearTimeout(id); window.removeEventListener('popstate', updatePath) }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token])
 
-  const handleLogout = () => {
-    localStorage.removeItem('mh_dashboard_token')
-    setUser(null)
-    setVenue(null)
-    setToken(null)
-    setAuthState('logged_out')
-    navigate('/dashboard/login')
-  }
-
-  // --- Auth state renderers ---
-
-  if (authState === 'loading') {
-    return (
-      <div style={{
-        minHeight: '100dvh',
-        background: 'var(--bg-floor)',
-        display: 'flex',
-        flexDirection: 'column',
-        justifyContent: 'center',
-        alignItems: 'center',
-        gap: '12px',
-        padding: '24px',
-      }}>
-        {[1, 2, 3].map((i) => (
-          <div key={i} style={{
-            width: '100%',
-            maxWidth: '360px',
-            height: '20px',
-            borderRadius: '6px',
-            background: 'var(--bg-container)',
-            animation: 'dev-shimmer 1.5s infinite',
-          }} />
-        ))}
-      </div>
-    )
-  }
-
-  if (authState === 'logged_out') {
-    return <DashboardLogin onLoginSuccess={checkAuth} />
-  }
+  if (authState === 'loading') return <LoadingShimmer />
+  if (authState === 'unauth') return renderUnauth()
 
   if (authState === 'admin_wrong_surface') {
     return (
-      <div style={{
-        minHeight: '100dvh',
-        background: 'var(--bg-floor)',
-        color: 'var(--on-surface)',
-        fontFamily: 'var(--font-body)',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        padding: '24px',
-      }}>
+      <Centered>
         <div style={{ ...cardStyle, maxWidth: '480px', textAlign: 'center' }}>
           <p style={{ marginBottom: '16px' }}>Admin accounts use /admin. This dashboard is for venue owners and staff.</p>
-          <button onClick={handleLogout} style={buttonStyle}>Log out / use a different account</button>
+          <button onClick={onLogout} style={buttonStyle}>Log out / use a different account</button>
         </div>
-      </div>
+      </Centered>
     )
   }
 
   if (authState === 'error') {
     return (
-      <div style={{
-        minHeight: '100dvh',
-        background: 'var(--bg-floor)',
-        color: 'var(--on-surface)',
-        fontFamily: 'var(--font-body)',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        padding: '24px',
-      }}>
+      <Centered>
         <div style={{ ...cardStyle, maxWidth: '480px', textAlign: 'center' }}>
           <p style={{ color: 'var(--tertiary)', fontFamily: 'var(--font-mono)', fontSize: '13px', marginBottom: '16px' }}>
             {error}
           </p>
           <button onClick={checkAuth} style={buttonStyle}>Retry</button>
-          <button onClick={handleLogout} style={{ ...buttonStyle, background: 'transparent', color: 'var(--on-surface-dim)', marginTop: '10px' }}>
+          <button onClick={onLogout} style={{ ...buttonStyle, background: 'transparent', color: 'var(--on-surface-dim)', marginTop: '10px' }}>
             Log out / use a different account
           </button>
         </div>
-      </div>
+      </Centered>
     )
   }
 
-  // authState === 'logged_in': render shell + sub-route switch
-
-  // Redirect /dashboard/login -> /dashboard
+  // authState === 'ok'
   if (path === '/dashboard/login') {
     navigate('/dashboard')
     return null
@@ -208,14 +239,7 @@ export default function DashboardRoot() {
   }
 
   return (
-    <DashboardShell
-      user={user}
-      venue={venue}
-      token={token}
-      onLogout={handleLogout}
-      navigate={navigate}
-      currentPath={path}
-    >
+    <DashboardShell user={user} venue={venue} token={token} onLogout={onLogout} navigate={navigate} currentPath={path}>
       {content}
     </DashboardShell>
   )
