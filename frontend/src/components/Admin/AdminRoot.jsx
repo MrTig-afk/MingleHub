@@ -189,7 +189,7 @@ function AdminInner({ token, onLogout, renderUnauth }) {
   const venueDetailMatch = path.match(/^\/admin\/venues\/([a-f0-9-]+)$/i)
   let content
   if (path === '/admin') {
-    content = <AdminHome token={token} />
+    content = <AdminHome token={token} navigate={navigate} />
   } else if (venueDetailMatch) {
     content = <AdminVenueDetail token={token} venueId={venueDetailMatch[1]} navigate={navigate} />
   } else if (path === '/admin/venues') {

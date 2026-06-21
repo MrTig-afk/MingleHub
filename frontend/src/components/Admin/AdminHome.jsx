@@ -10,7 +10,7 @@ const shimmerCard = (height = 80) => ({
   background: 'var(--bg-container)',
 })
 
-export default function AdminHome({ token }) {
+export default function AdminHome({ token, navigate }) {
   const { data, status, error, lastUpdatedAt, reload } = usePolling(
     () => fetchAdminOverview(token),
     { intervalMs: 7000, tokenKey: 'mh_admin_token' }
@@ -66,8 +66,6 @@ export default function AdminHome({ token }) {
     { value: platform.players_tonight,     label: 'players tonight' },
     { value: platform.rounds_tonight,      label: 'rounds tonight' },
   ]
-
-  const noActivity = sortedVenues.every((v) => v.active_sessions === 0 && v.sessions_tonight === 0)
 
   return (
     <div>
@@ -127,26 +125,25 @@ export default function AdminHome({ token }) {
         </p>
       )}
 
-      {perVenue.length > 0 && noActivity && (
-        <p style={{ color: 'var(--on-surface-dim)', textAlign: 'center', padding: '16px 0' }}>
-          No activity tonight
-        </p>
-      )}
-
-      {perVenue.length > 0 && !noActivity && sortedVenues.map((v) => (
-        <div key={v.venue_id} style={{ ...cardStyle, marginBottom: '12px' }}>
-          {/* Top row: name + active chip */}
+      {/* Always listed (idle or not) and clickable -> venue detail. */}
+      {sortedVenues.map((v) => (
+        <div
+          key={v.venue_id}
+          onClick={() => navigate(`/admin/venues/${v.venue_id}`)}
+          style={{ ...cardStyle, marginBottom: '12px', cursor: 'pointer' }}
+        >
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
-            <span style={{ fontWeight: 700 }}>{v.name}</span>
+            <span style={{ fontWeight: 700 }}>
+              {v.name}
+              <span style={{ color: 'var(--on-surface-dim)', fontWeight: 400, marginLeft: '6px' }}>&rsaquo;</span>
+            </span>
             {v.active_sessions > 0 && (
               <span style={chipStyle('active')}>{v.active_sessions} active</span>
             )}
           </div>
-          {/* Slug */}
           <div style={{ fontSize: '13px', color: 'var(--on-surface-dim)', marginBottom: '4px' }}>
             {v.slug}
           </div>
-          {/* Stats row */}
           <div style={{ fontSize: '13px', color: 'var(--on-surface-dim)', display: 'flex', gap: '12px' }}>
             <span>{v.sessions_tonight} sessions tonight</span>
             <span>{v.players_tonight} players tonight</span>
