@@ -40,8 +40,8 @@ export const patchAdminVenue = (token, venueId, body) =>
     body: JSON.stringify(body),
   }).then(async (r) => { if (!r.ok) throw new Error((await r.json()).detail || r.status); return r.json() })
 
-export const fetchAdminVenueConfigHistory = (token, venueId) =>
-  fetch(`${BASE}/api/admin/venues/${venueId}/config-history`, { headers: h(token) })
+export const fetchAdminVenueConfigHistory = (token, venueId, { limit = 50, offset = 0 } = {}) =>
+  fetch(`${BASE}/api/admin/venues/${venueId}/config-history?limit=${limit}&offset=${offset}`, { headers: h(token) })
     .then(async (r) => { if (!r.ok) throw new Error((await r.json()).detail || r.status); return r.json() })
 
 export const fetchAdminSupport = (token, status = 'open') =>

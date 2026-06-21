@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { fetchBilling } from '../../services/dashboardApi'
-import { buttonStyle, cardStyle, labelStyle } from './dashboardStyles'
+import { buttonStyle, cardStyle, formatMoney, labelStyle } from './dashboardStyles'
 
 const shimmerCard = (height = 80) => ({
   ...cardStyle,
@@ -76,32 +76,33 @@ export default function DashboardBilling({ token, user }) {
 
   return (
     <div>
-      {/* Estimate disclaimer badge */}
+      {/* Estimate disclaimer badge — stronger styling */}
       <div style={{
         ...cardStyle,
-        background: 'rgba(255, 215, 0, 0.15)',
-        borderColor: 'rgba(255, 215, 0, 0.3)',
+        background: 'rgba(255, 215, 0, 0.2)',
+        border: '2px solid rgba(255, 215, 0, 0.5)',
         textAlign: 'center',
         marginBottom: '16px',
+        padding: '12px 16px',
       }}>
-        <span style={{ color: '#FFD700', fontWeight: 700, fontSize: '13px' }}>
-          Estimate -- not a real charge
+        <span style={{ color: '#FFD700', fontWeight: 700, fontSize: '14px', letterSpacing: '0.5px' }}>
+          ESTIMATE -- NOT A REAL CHARGE
         </span>
       </div>
 
       {/* Billing model card */}
       <div style={{ ...cardStyle, marginBottom: '12px' }}>
         <div style={{ fontWeight: 700, fontSize: '14px', marginBottom: '8px' }}>Billing Model</div>
-        <div style={{ fontSize: '13px' }}>A${data.model.billing_unit} per table per night</div>
-        <div style={{ fontSize: '13px' }}>Weekday cap: A${data.model.nightly_cap_weekday}</div>
-        <div style={{ fontSize: '13px' }}>Weekend cap: A${data.model.nightly_cap_weekend}</div>
+        <div style={{ fontSize: '13px' }}>{formatMoney(data.model.billing_unit)} per table per night</div>
+        <div style={{ fontSize: '13px' }}>Weekday cap: {formatMoney(data.model.nightly_cap_weekday)}</div>
+        <div style={{ fontSize: '13px' }}>Weekend cap: {formatMoney(data.model.nightly_cap_weekend)}</div>
       </div>
 
       {/* Tonight card */}
       <div style={{ ...cardStyle, marginBottom: '12px' }}>
         <div style={{ fontWeight: 700, fontSize: '14px', marginBottom: '8px' }}>Tonight</div>
         <div style={{ fontFamily: 'var(--font-headline)', fontSize: '28px' }}>
-          A${data.tonight.total}
+          {formatMoney(data.tonight.total)}
         </div>
         <div style={{ fontSize: '13px', color: 'var(--on-surface-dim)', marginTop: '4px' }}>
           {data.tonight.billable_tables} tables played
@@ -111,6 +112,37 @@ export default function DashboardBilling({ token, user }) {
             (weekend rate)
           </div>
         )}
+
+        {/* Cap progress bar */}
+        {data.tonight.cap && (
+          <div style={{ marginTop: '8px' }}>
+            <div style={{
+              height: '6px',
+              borderRadius: '3px',
+              background: 'var(--bg-container)',
+              overflow: 'hidden',
+            }}>
+              <div style={{
+                height: '100%',
+                width: Math.min(100, (parseFloat(data.tonight.total) / parseFloat(data.tonight.cap)) * 100) + '%',
+                background: data.tonight.cap_applied ? 'var(--tertiary)' : 'var(--secondary)',
+                borderRadius: '3px',
+                transition: 'width 0.3s',
+              }} />
+            </div>
+            <div style={{
+              fontSize: '11px',
+              color: 'var(--on-surface-dim)',
+              marginTop: '2px',
+              display: 'flex',
+              justifyContent: 'space-between',
+            }}>
+              <span>{formatMoney(data.tonight.total)}</span>
+              <span>cap: {formatMoney(data.tonight.cap)}</span>
+            </div>
+          </div>
+        )}
+
         {data.tonight.cap_applied && (
           <div style={{
             display: 'inline-block',
@@ -131,7 +163,7 @@ export default function DashboardBilling({ token, user }) {
       <div style={{ ...cardStyle, marginBottom: '12px' }}>
         <div style={{ fontWeight: 700, fontSize: '14px', marginBottom: '8px' }}>Month to Date</div>
         <div style={{ fontFamily: 'var(--font-headline)', fontSize: '28px' }}>
-          A${data.month_estimate.total}
+          {formatMoney(data.month_estimate.total)}
         </div>
         <div style={{ marginTop: '8px' }}>
           {data.month_estimate.nights.length > 0
@@ -152,7 +184,7 @@ export default function DashboardBilling({ token, user }) {
                   >
                     <span>{dateLabel}</span>
                     <span>
-                      {night.tables} tables -- A${night.capped}
+                      {night.tables} tables -- {formatMoney(night.capped)}
                       {night.cap_applied && (
                         <span style={{ color: 'var(--on-surface-dim)' }}> (capped)</span>
                       )}

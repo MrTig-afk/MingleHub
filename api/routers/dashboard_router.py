@@ -2,6 +2,7 @@ import os
 import secrets
 import traceback
 import uuid
+from collections import defaultdict
 from datetime import timedelta
 from typing import Literal, Optional
 
@@ -161,6 +162,68 @@ async def table_detail(
                 "expired": "idle",
             }
 
+            # A2: batch all per-session queries to eliminate the N+1 pattern.
+            session_ids = [str(r["session_id"]) for r in session_rows]
+
+            leaderboard_map: defaultdict = defaultdict(list)
+            round_map: defaultdict = defaultdict(list)
+            host_map: dict = {}
+
+            if session_ids:
+                all_leaderboard_rows = await conn.fetch(
+                    """
+                    SELECT session_id, name, score, left_early
+                    FROM game_players
+                    WHERE session_id = ANY($1::uuid[])
+                    ORDER BY session_id, left_early ASC, score DESC, name ASC
+                    """,
+                    session_ids,
+                )
+                for r in all_leaderboard_rows:
+                    leaderboard_map[str(r["session_id"])].append(r)
+
+                all_round_rows = await conn.fetch(
+                    """
+                    SELECT session_id, round_number, round_type, result, score_awarded
+                    FROM rounds
+                    WHERE session_id = ANY($1::uuid[])
+                    ORDER BY session_id, created_at
+                    """,
+                    session_ids,
+                )
+                for r in all_round_rows:
+                    round_map[str(r["session_id"])].append(r)
+
+                # Batch host lookup: only query sessions that have an origin_phone_id.
+                sessions_with_host = [
+                    (str(r["session_id"]), str(r["origin_phone_id"]))
+                    for r in session_rows
+                    if r["origin_phone_id"] is not None
+                ]
+                if sessions_with_host:
+                    host_session_ids = [s for s, _ in sessions_with_host]
+                    host_phone_ids = [p for _, p in sessions_with_host]
+                    host_rows = await conn.fetch(
+                        """
+                        SELECT session_id, phone_id, name
+                        FROM game_players
+                        WHERE session_id = ANY($1::uuid[])
+                          AND phone_id = ANY($2::text[])
+                          AND left_early = FALSE
+                        """,
+                        host_session_ids,
+                        host_phone_ids,
+                    )
+                    # Match the exact (session, its own origin phone) pair — the
+                    # batch ANY() fetch is a cross-product, so key by the pair to
+                    # reproduce the original per-session WHERE session_id AND phone_id.
+                    host_by_pair = {
+                        (str(r["session_id"]), r["phone_id"]): r["name"] for r in host_rows
+                    }
+                    host_map = {
+                        sid: host_by_pair.get((sid, pid)) for sid, pid in sessions_with_host
+                    }
+
             active_sessions = []
             for row in session_rows:
                 session_id = str(row["session_id"])
@@ -176,41 +239,11 @@ async def table_detail(
                     status = state_map.get(retap["state"], "active")
                     secs_active = int(row["seconds_active"])
 
-                leaderboard_rows = await conn.fetch(
-                    """
-                    SELECT name, score, left_early
-                    FROM game_players
-                    WHERE session_id = $1
-                    ORDER BY left_early ASC, score DESC, name ASC
-                    """,
-                    session_id,
-                )
-
-                round_rows = await conn.fetch(
-                    """
-                    SELECT round_number, round_type, result, score_awarded
-                    FROM rounds
-                    WHERE session_id = $1
-                    ORDER BY created_at
-                    """,
-                    session_id,
-                )
-
-                # Derive current round type from the last round row — no extra query.
+                leaderboard_rows = leaderboard_map.get(session_id, [])
+                round_rows = round_map.get(session_id, [])
+                # Derive current round type from the last round row.
                 current_round_type = round_rows[-1]["round_type"] if round_rows else None
-
-                host_name = None
-                if row["origin_phone_id"] is not None:
-                    host_row = await conn.fetchrow(
-                        """
-                        SELECT name FROM game_players
-                        WHERE session_id = $1 AND phone_id = $2 AND left_early = FALSE
-                        LIMIT 1
-                        """,
-                        session_id, str(row["origin_phone_id"]),
-                    )
-                    if host_row:
-                        host_name = host_row["name"]
+                host_name = host_map.get(session_id)
 
                 active_sessions.append({
                     "session_id": session_id,
@@ -513,13 +546,23 @@ async def overview(
                 VENUE_TIMEZONE,
             )
 
+            # A1: players_tonight merged into totals_row as a scalar subquery
+            # to save one DB round-trip.
             totals_row = await conn.fetchrow(
                 """
                 SELECT
                     COUNT(DISTINCT gs.table_id) FILTER (WHERE gs.ended_at IS NULL)
                         AS active_tables,
                     COALESCE(SUM(gs.total_rounds), 0) AS rounds_tonight,
-                    COUNT(*) AS sessions_tonight
+                    COUNT(*) AS sessions_tonight,
+                    (SELECT COUNT(*)
+                     FROM game_players gp
+                     JOIN game_sessions gs2 ON gs2.id = gp.session_id
+                     JOIN tables t2 ON t2.id = gs2.table_id
+                     WHERE t2.venue_id = $1
+                       AND gs2.started_at >= $2
+                       AND gp.left_early = FALSE
+                    ) AS players_tonight
                 FROM game_sessions gs
                 JOIN tables t ON t.id = gs.table_id
                 WHERE t.venue_id = $1
@@ -529,20 +572,8 @@ async def overview(
                 tonight_boundary,
             )
 
-            players_tonight = await conn.fetchval(
-                """
-                SELECT COUNT(*)
-                FROM game_players gp
-                JOIN game_sessions gs ON gs.id = gp.session_id
-                JOIN tables t ON t.id = gs.table_id
-                WHERE t.venue_id = $1
-                  AND gs.started_at >= $2
-                  AND gp.left_early = FALSE
-                """,
-                current_user.venue_id,
-                tonight_boundary,
-            )
-
+            # A1: correlated scalar subqueries for player_count and current_round_type
+            # replaced with LEFT JOIN LATERAL — semantically identical, more efficient.
             session_rows = await conn.fetch(
                 """
                 SELECT
@@ -556,14 +587,20 @@ async def overview(
                     EXTRACT(EPOCH FROM NOW() - COALESCE(gs.last_activity_at, gs.created_at))
                         AS idle_seconds,
                     COALESCE(v.retap_interval_minutes, 15) * 60 AS threshold_seconds,
-                    (SELECT COUNT(*) FROM game_players gp
-                     WHERE gp.session_id = gs.id AND gp.left_early = FALSE) AS player_count,
-                    (SELECT r.round_type FROM rounds r
-                     WHERE r.session_id = gs.id
-                     ORDER BY r.created_at DESC LIMIT 1) AS current_round_type
+                    COALESCE(pc.cnt, 0) AS player_count,
+                    lr.round_type AS current_round_type
                 FROM game_sessions gs
                 JOIN tables t ON t.id = gs.table_id
                 JOIN venues v ON v.id = t.venue_id
+                LEFT JOIN LATERAL (
+                    SELECT COUNT(*) AS cnt FROM game_players gp
+                    WHERE gp.session_id = gs.id AND gp.left_early = FALSE
+                ) pc ON TRUE
+                LEFT JOIN LATERAL (
+                    SELECT r.round_type FROM rounds r
+                    WHERE r.session_id = gs.id
+                    ORDER BY r.created_at DESC LIMIT 1
+                ) lr ON TRUE
                 WHERE t.venue_id = $1
                   AND gs.ended_at IS NULL
                 ORDER BY t.table_number, gs.group_label
@@ -605,7 +642,7 @@ async def overview(
         return {
             "tonight": {
                 "active_tables": int(totals_row["active_tables"]),
-                "players_tonight": int(players_tonight),
+                "players_tonight": int(totals_row["players_tonight"]),
                 "rounds_tonight": int(totals_row["rounds_tonight"]),
                 "sessions_tonight": int(totals_row["sessions_tonight"]),
             },

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { fetchTableDetail } from '../../services/dashboardApi'
 import {
   buttonStyle,
@@ -8,6 +8,7 @@ import {
   formatDuration,
   labelStyle,
 } from './dashboardStyles'
+import usePolling from './usePolling'
 
 const shimmerCard = (height = 100) => ({
   ...cardStyle,
@@ -145,58 +146,10 @@ function SessionCard({ session }) {
 }
 
 export default function DashboardTableDetail({ token, tableId, navigate, user }) {
-  const [data, setData] = useState(null)
-  const [status, setStatus] = useState('loading')
-  const [error, setError] = useState(null)
-  // Bumped by Retry to re-trigger the fetch effect (deps otherwise unchanged).
-  const [reloadKey, setReloadKey] = useState(0)
-
-  useEffect(() => {
-    let cancelled = false
-    const run = async () => {
-      try {
-        const d = await fetchTableDetail(token, tableId)
-        if (cancelled) return
-        setData(d)
-        setStatus('ready')
-      } catch (e) {
-        if (cancelled) return
-        const msg = e.message || ''
-        if (msg.includes('401') || msg.includes('token') || msg.includes('expired')) {
-          localStorage.removeItem('mh_dashboard_token')
-          window.location.reload()
-          return
-        }
-        setStatus('error')
-        setError(msg)
-      }
-    }
-    run()
-    return () => { cancelled = true }
-  }, [token, tableId, reloadKey])
-
-  // Poll every 7 seconds once the initial fetch has settled
-  useEffect(() => {
-    if (status === 'loading' || !token) return
-    const id = setInterval(() => {
-      fetchTableDetail(token, tableId)
-        .then((d) => {
-          setData(d)
-          setStatus('ready')
-        })
-        .catch((e) => {
-          const msg = e.message || ''
-          if (msg.includes('401') || msg.includes('token') || msg.includes('expired')) {
-            localStorage.removeItem('mh_dashboard_token')
-            window.location.reload()
-            return
-          }
-          // Keep stale data, signal reconnecting
-          setStatus('reconnecting')
-        })
-    }, 7000)
-    return () => clearInterval(id)
-  }, [status, token, tableId])
+  const { data, status, error, reload } = usePolling(
+    () => fetchTableDetail(token, tableId),
+    { intervalMs: 7000, tokenKey: 'mh_dashboard_token' }
+  )
 
   if (status === 'loading') {
     return (
@@ -228,7 +181,7 @@ export default function DashboardTableDetail({ token, tableId, navigate, user })
                 Could not load table. {error}
               </p>
               <button
-                onClick={() => { setStatus('loading'); setError(null); setReloadKey((k) => k + 1) }}
+                onClick={reload}
                 style={buttonStyle}
               >
                 Retry

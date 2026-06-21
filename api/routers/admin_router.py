@@ -55,6 +55,8 @@ async def admin_overview(
                 VENUE_TIMEZONE,
             )
 
+            # A4: players_tonight and active_sessions_now merged into totals_row
+            # as scalar subqueries to save two DB round-trips.
             # Platform totals (is_test venues excluded per security.md line 145).
             totals_row = await conn.fetchrow(
                 """
@@ -62,36 +64,27 @@ async def admin_overview(
                     (SELECT COUNT(*) FROM venues WHERE is_test = FALSE) AS total_venues,
                     COUNT(DISTINCT gs.venue_id) FILTER (WHERE gs.ended_at IS NULL) AS active_venues_now,
                     COUNT(*) AS sessions_tonight,
-                    COALESCE(SUM(gs.total_rounds), 0) AS rounds_tonight
+                    COALESCE(SUM(gs.total_rounds), 0) AS rounds_tonight,
+                    (SELECT COUNT(*)
+                     FROM game_players gp
+                     JOIN game_sessions gs2 ON gs2.id = gp.session_id
+                     JOIN venues v2 ON v2.id = gs2.venue_id
+                     WHERE v2.is_test = FALSE
+                       AND gs2.started_at >= $1
+                       AND gp.left_early = FALSE
+                    ) AS players_tonight,
+                    (SELECT COUNT(*)
+                     FROM game_sessions gs3
+                     JOIN venues v3 ON v3.id = gs3.venue_id
+                     WHERE v3.is_test = FALSE
+                       AND gs3.ended_at IS NULL
+                    ) AS active_sessions_now
                 FROM game_sessions gs
                 JOIN venues v ON v.id = gs.venue_id
                 WHERE v.is_test = FALSE
                   AND gs.started_at >= $1
                 """,
                 tonight_boundary,
-            )
-
-            players_tonight = await conn.fetchval(
-                """
-                SELECT COUNT(*)
-                FROM game_players gp
-                JOIN game_sessions gs ON gs.id = gp.session_id
-                JOIN venues v ON v.id = gs.venue_id
-                WHERE v.is_test = FALSE
-                  AND gs.started_at >= $1
-                  AND gp.left_early = FALSE
-                """,
-                tonight_boundary,
-            )
-
-            active_sessions_now = await conn.fetchval(
-                """
-                SELECT COUNT(*)
-                FROM game_sessions gs
-                JOIN venues v ON v.id = gs.venue_id
-                WHERE v.is_test = FALSE
-                  AND gs.ended_at IS NULL
-                """,
             )
 
             # Per-venue live breakdown (is_test excluded).
@@ -122,9 +115,9 @@ async def admin_overview(
             "platform": {
                 "total_venues": int(totals_row["total_venues"]),
                 "active_venues_now": int(totals_row["active_venues_now"]),
-                "active_sessions_now": int(active_sessions_now),
+                "active_sessions_now": int(totals_row["active_sessions_now"]),
                 "sessions_tonight": int(totals_row["sessions_tonight"]),
-                "players_tonight": int(players_tonight),
+                "players_tonight": int(totals_row["players_tonight"]),
                 "rounds_tonight": int(totals_row["rounds_tonight"]),
             },
             "per_venue": [
@@ -442,6 +435,8 @@ async def admin_venue_override(
 async def admin_venue_config_history(
     venue_id: str,
     request: Request,
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
     current_user: CurrentUser = Depends(require_role("admin")),
 ):
     try:
@@ -459,6 +454,12 @@ async def admin_venue_config_history(
             if not exists:
                 raise HTTPException(status_code=404, detail="Venue not found")
 
+            # A5: total count for pagination metadata (ignores limit/offset).
+            total_count = await conn.fetchval(
+                "SELECT COUNT(*) FROM venue_config_overrides WHERE venue_id = $1",
+                validated_id,
+            )
+
             rows = await conn.fetch(
                 """
                 SELECT vco.id, vco.field_name, vco.old_value, vco.new_value, vco.reason,
@@ -468,8 +469,11 @@ async def admin_venue_config_history(
                 LEFT JOIN users u ON u.id = vco.changed_by
                 WHERE vco.venue_id = $1
                 ORDER BY vco.created_at DESC
+                LIMIT $2 OFFSET $3
                 """,
                 validated_id,
+                limit,
+                offset,
             )
 
         return {
@@ -485,7 +489,10 @@ async def admin_venue_config_history(
                     "created_at": row["created_at"].isoformat() if row["created_at"] else None,
                 }
                 for row in rows
-            ]
+            ],
+            "total": int(total_count),
+            "limit": limit,
+            "offset": offset,
         }
     except HTTPException:
         raise

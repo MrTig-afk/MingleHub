@@ -117,6 +117,7 @@ export default function DashboardTables({ token, navigate }) {
                   ? <span style={smallChip(LIVE_CHIP)}>{table.active_session_count} live</span>
                   : <span style={smallChip(IDLE_CHIP)}>Idle</span>
                 }
+                <span style={{ color: 'var(--on-surface-dim)', fontSize: '18px' }}>&rsaquo;</span>
               </div>
             </div>
           </div>

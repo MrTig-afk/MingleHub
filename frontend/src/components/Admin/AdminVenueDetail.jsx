@@ -50,6 +50,9 @@ const EMPTY_FORM = {
   reason: '',
 }
 
+// High-impact fields that require a diff/confirm step before patching.
+const HIGH_IMPACT = ['billing_unit', 'status', 'is_test']
+
 function venueToForm(venue) {
   return {
     billing_unit: venue.billing_unit ?? '',
@@ -67,12 +70,15 @@ export default function AdminVenueDetail({ token, venueId, navigate }) {
   const [status, setStatus] = useState('loading')
   const [venue, setVenue] = useState(null)
   const [history, setHistory] = useState([])
+  const [historyTotal, setHistoryTotal] = useState(0)
   const [error, setError] = useState(null)
   const [reloadKey, setReloadKey] = useState(0)
   const [form, setForm] = useState(EMPTY_FORM)
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState(null)
   const [saveSuccess, setSaveSuccess] = useState(null)
+  // When non-null, holds {changes, reason} awaiting admin confirmation.
+  const [pendingConfirm, setPendingConfirm] = useState(null)
 
   // Fetch venue detail + config history in parallel.
   // All setState calls are after await (react-hooks/set-state-in-effect compliant).
@@ -82,7 +88,7 @@ export default function AdminVenueDetail({ token, venueId, navigate }) {
       try {
         const [detail, hist] = await Promise.all([
           fetchAdminVenueDetail(token, venueId),
-          fetchAdminVenueConfigHistory(token, venueId),
+          fetchAdminVenueConfigHistory(token, venueId, { limit: 50, offset: 0 }),
         ])
         if (cancelled) return
         // table_count / sessions_tonight / lifetime_sessions are top-level on the
@@ -94,6 +100,7 @@ export default function AdminVenueDetail({ token, venueId, navigate }) {
           lifetime_sessions: detail.lifetime_sessions,
         })
         setHistory(hist.history || [])
+        setHistoryTotal(hist.total || 0)
         setForm(venueToForm(detail.venue))
         setStatus('ready')
       } catch (e) {
@@ -112,36 +119,48 @@ export default function AdminVenueDetail({ token, venueId, navigate }) {
     return () => { cancelled = true }
   }, [token, venueId, reloadKey])
 
-  const handleOverride = async () => {
+  // Build the list of changed fields for the current form vs saved venue values.
+  function buildChanges() {
+    const changes = []
+    if (parseFloat(form.billing_unit) !== parseFloat(venue.billing_unit))
+      changes.push({ field: 'billing_unit', oldVal: venue.billing_unit, newVal: form.billing_unit })
+    if (parseInt(form.retap_interval_minutes, 10) !== venue.retap_interval_minutes)
+      changes.push({ field: 'retap_interval_minutes', oldVal: venue.retap_interval_minutes, newVal: form.retap_interval_minutes })
+    if (parseFloat(form.nightly_cap_weekday) !== parseFloat(venue.nightly_cap_weekday))
+      changes.push({ field: 'nightly_cap_weekday', oldVal: venue.nightly_cap_weekday, newVal: form.nightly_cap_weekday })
+    if (parseFloat(form.nightly_cap_weekend) !== parseFloat(venue.nightly_cap_weekend))
+      changes.push({ field: 'nightly_cap_weekend', oldVal: venue.nightly_cap_weekend, newVal: form.nightly_cap_weekend })
+    if (form.restrict_adult_content !== venue.restrict_adult_content)
+      changes.push({ field: 'restrict_adult_content', oldVal: venue.restrict_adult_content, newVal: form.restrict_adult_content })
+    if (form.is_test !== venue.is_test)
+      changes.push({ field: 'is_test', oldVal: venue.is_test, newVal: form.is_test })
+    if (form.status !== venue.status)
+      changes.push({ field: 'status', oldVal: venue.status, newVal: form.status })
+    return changes
+  }
+
+  // Fire the actual PATCH call. Called both from handleOverride (no high-impact)
+  // and from confirmOverride (after the user confirms the diff panel).
+  async function applyPatch() {
     setSaving(true)
     setSaveError(null)
     setSaveSuccess(null)
 
     const body = { reason: form.reason }
-
-    // Include only fields that differ from current venue values.
-    // Parse form string inputs to numbers for comparison with venue's string-typed numerics.
-    if (parseFloat(form.billing_unit) !== parseFloat(venue.billing_unit)) {
+    if (parseFloat(form.billing_unit) !== parseFloat(venue.billing_unit))
       body.billing_unit = parseFloat(form.billing_unit)
-    }
-    if (parseInt(form.retap_interval_minutes, 10) !== venue.retap_interval_minutes) {
+    if (parseInt(form.retap_interval_minutes, 10) !== venue.retap_interval_minutes)
       body.retap_interval_minutes = parseInt(form.retap_interval_minutes, 10)
-    }
-    if (parseFloat(form.nightly_cap_weekday) !== parseFloat(venue.nightly_cap_weekday)) {
+    if (parseFloat(form.nightly_cap_weekday) !== parseFloat(venue.nightly_cap_weekday))
       body.nightly_cap_weekday = parseFloat(form.nightly_cap_weekday)
-    }
-    if (parseFloat(form.nightly_cap_weekend) !== parseFloat(venue.nightly_cap_weekend)) {
+    if (parseFloat(form.nightly_cap_weekend) !== parseFloat(venue.nightly_cap_weekend))
       body.nightly_cap_weekend = parseFloat(form.nightly_cap_weekend)
-    }
-    if (form.restrict_adult_content !== venue.restrict_adult_content) {
+    if (form.restrict_adult_content !== venue.restrict_adult_content)
       body.restrict_adult_content = form.restrict_adult_content
-    }
-    if (form.is_test !== venue.is_test) {
+    if (form.is_test !== venue.is_test)
       body.is_test = form.is_test
-    }
-    if (form.status !== venue.status) {
+    if (form.status !== venue.status)
       body.status = form.status
-    }
 
     const changedCount = Object.keys(body).length - 1 // minus reason
     if (changedCount === 0) {
@@ -159,6 +178,24 @@ export default function AdminVenueDetail({ token, venueId, navigate }) {
       setSaveError(e.message)
     }
     setSaving(false)
+  }
+
+  const handleOverride = async () => {
+    const changes = buildChanges()
+    const hasHighImpact = changes.some((c) => HIGH_IMPACT.includes(c.field))
+
+    // If there are high-impact fields and no confirmation pending yet, show diff panel.
+    if (hasHighImpact && pendingConfirm === null) {
+      setPendingConfirm({ changes, reason: form.reason.trim() })
+      return
+    }
+
+    await applyPatch()
+  }
+
+  const confirmOverride = async () => {
+    setPendingConfirm(null)
+    await applyPatch()
   }
 
   if (status === 'loading') {
@@ -251,7 +288,7 @@ export default function AdminVenueDetail({ token, venueId, navigate }) {
           </div>
         </div>
 
-        {/* Field rows */}
+        {/* Field rows — each shows current value beside the label */}
         {[
           { key: 'billing_unit', label: 'Billing Unit', type: 'number', step: '0.01', min: '0', current: venue.billing_unit },
           { key: 'retap_interval_minutes', label: 'Retap Interval (minutes)', type: 'number', step: '1', min: '1', current: venue.retap_interval_minutes },
@@ -361,6 +398,41 @@ export default function AdminVenueDetail({ token, venueId, navigate }) {
             {saveError}
           </p>
         )}
+
+        {/* Diff/confirm panel for high-impact changes */}
+        {pendingConfirm && (
+          <div style={{
+            ...cardStyle,
+            background: 'rgba(231, 0, 110, 0.08)',
+            border: '2px solid var(--tertiary)',
+            marginTop: '12px',
+            padding: '16px',
+          }}>
+            <div style={{ fontWeight: 700, marginBottom: '8px', color: 'var(--tertiary)' }}>
+              Confirm High-Impact Change
+            </div>
+            {pendingConfirm.changes.map(({ field, oldVal, newVal }) => (
+              <div key={field} style={{ fontSize: '13px', marginBottom: '4px' }}>
+                <strong>{field}:</strong> {String(oldVal)} &rarr; {String(newVal)}
+              </div>
+            ))}
+            <div style={{ fontSize: '13px', fontStyle: 'italic', margin: '8px 0', color: 'var(--on-surface-dim)' }}>
+              Reason: &ldquo;{pendingConfirm.reason}&rdquo;
+            </div>
+            <div style={{ display: 'flex', gap: '8px', marginTop: '12px' }}>
+              <button
+                onClick={confirmOverride}
+                disabled={saving}
+                style={{ ...buttonStyle, opacity: saving ? 0.5 : 1 }}
+              >
+                {saving ? 'Applying...' : 'Confirm Override'}
+              </button>
+              <button onClick={() => setPendingConfirm(null)} style={buttonSecondaryStyle}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Config history */}
@@ -381,7 +453,7 @@ export default function AdminVenueDetail({ token, venueId, navigate }) {
                 </span>
               </div>
               <div style={{ ...labelStyle, fontStyle: 'italic', marginBottom: '2px' }}>
-                "{entry.reason}"
+                &ldquo;{entry.reason}&rdquo;
               </div>
               <div style={{ ...labelStyle, fontSize: '12px' }}>
                 by {entry.changed_by_clerk_id || entry.changed_by || 'unknown'}
@@ -390,6 +462,27 @@ export default function AdminVenueDetail({ token, venueId, navigate }) {
               </div>
             </div>
           ))
+        )}
+
+        {/* Paginated "Load More" button */}
+        {history.length < historyTotal && (
+          <button
+            onClick={async () => {
+              try {
+                const more = await fetchAdminVenueConfigHistory(token, venueId, {
+                  limit: 50,
+                  offset: history.length,
+                })
+                setHistory((prev) => [...prev, ...(more.history || [])])
+                setHistoryTotal(more.total)
+              } catch {
+                // Silently fail — existing history remains visible.
+              }
+            }}
+            style={{ ...buttonSecondaryStyle, marginTop: '12px', width: '100%' }}
+          >
+            Load More ({historyTotal - history.length} remaining)
+          </button>
         )}
       </div>
     </div>

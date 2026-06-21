@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { fetchOverview } from '../../services/dashboardApi'
-import { buttonStyle, cardStyle, chipStyle, formatDuration } from './dashboardStyles'
+import { buttonStyle, cardStyle, chipStyle, formatDuration, formatRelativeTime } from './dashboardStyles'
+import usePolling from './usePolling'
 
 const shimmerCard = (height = 80) => ({
   ...cardStyle,
@@ -10,78 +11,17 @@ const shimmerCard = (height = 80) => ({
 })
 
 export default function DashboardHome({ token, navigate }) {
-  const [data, setData] = useState(null)
-  const [status, setStatus] = useState('loading') // loading | ready | error | reconnecting
-  const [error, setError] = useState(null)
+  const { data, status, error, lastUpdatedAt, reload } = usePolling(
+    () => fetchOverview(token),
+    { intervalMs: 7000, tokenKey: 'mh_dashboard_token' }
+  )
 
-  const load = () => {
-    setStatus('loading')
-    fetchOverview(token)
-      .then((d) => {
-        setData(d)
-        setStatus('ready')
-      })
-      .catch((e) => {
-        const msg = e.message || ''
-        if (msg.includes('401') || msg.includes('token') || msg.includes('expired')) {
-          localStorage.removeItem('mh_dashboard_token')
-          window.location.reload()
-          return
-        }
-        setStatus('error')
-        setError(msg)
-      })
-  }
-
-  // Initial fetch. All setState happens inside the async resolution (after the
-  // await), never synchronously in the effect body — the same mount pattern as
-  // PatronLanding (avoids react-hooks/set-state-in-effect cascading renders).
+  // Tick every 10 seconds so "updated N ago" re-renders without a new fetch.
+  const [, setTick] = useState(0)
   useEffect(() => {
-    let cancelled = false
-    const run = async () => {
-      try {
-        const d = await fetchOverview(token)
-        if (cancelled) return
-        setData(d)
-        setStatus('ready')
-      } catch (e) {
-        if (cancelled) return
-        const msg = e.message || ''
-        if (msg.includes('401') || msg.includes('token') || msg.includes('expired')) {
-          localStorage.removeItem('mh_dashboard_token')
-          window.location.reload()
-          return
-        }
-        setStatus('error')
-        setError(msg)
-      }
-    }
-    run()
-    return () => { cancelled = true }
-  }, [token])
-
-  // Poll every 7 seconds once the initial fetch has settled
-  useEffect(() => {
-    if (status === 'loading' || !token) return
-    const id = setInterval(() => {
-      fetchOverview(token)
-        .then((d) => {
-          setData(d)
-          setStatus('ready')
-        })
-        .catch((e) => {
-          const msg = e.message || ''
-          if (msg.includes('401') || msg.includes('token') || msg.includes('expired')) {
-            localStorage.removeItem('mh_dashboard_token')
-            window.location.reload()
-            return
-          }
-          // Keep last data visible, signal reconnecting
-          setStatus('reconnecting')
-        })
-    }, 7000)
+    const id = setInterval(() => setTick((t) => t + 1), 10000)
     return () => clearInterval(id)
-  }, [status, token])
+  }, [])
 
   if (status === 'loading') {
     return (
@@ -102,7 +42,7 @@ export default function DashboardHome({ token, navigate }) {
         <p style={{ color: 'var(--tertiary)', fontFamily: 'var(--font-mono)', fontSize: '13px', margin: '0 0 12px' }}>
           Could not load dashboard data. {error}
         </p>
-        <button onClick={load} style={buttonStyle}>Retry</button>
+        <button onClick={reload} style={buttonStyle}>Retry</button>
       </div>
     )
   }
@@ -123,6 +63,12 @@ export default function DashboardHome({ token, navigate }) {
       {status === 'reconnecting' && (
         <p style={{ fontSize: '12px', color: 'var(--on-surface-dim)', margin: '0 0 8px' }}>
           Reconnecting...
+        </p>
+      )}
+
+      {status === 'ready' && lastUpdatedAt && (
+        <p style={{ fontSize: '11px', color: 'var(--on-surface-dim)', margin: '0 0 8px', textAlign: 'right' }}>
+          Updated {formatRelativeTime(lastUpdatedAt)}
         </p>
       )}
 
@@ -189,7 +135,21 @@ export default function DashboardHome({ token, navigate }) {
                 {/* Top row: table number + status chip */}
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
                   <span style={{ fontWeight: 700 }}>Table {s.table_number}</span>
-                  <span style={chipStyle(s.status)}>{s.status}</span>
+                  <span style={chipStyle(s.status)}>
+                    {s.status === 'active' && (
+                      <span style={{
+                        display: 'inline-block',
+                        width: '6px',
+                        height: '6px',
+                        borderRadius: '50%',
+                        background: 'var(--secondary)',
+                        marginRight: '4px',
+                        verticalAlign: 'middle',
+                        animation: 'pulse-dot 2s ease-in-out infinite',
+                      }} />
+                    )}
+                    {s.status}
+                  </span>
                 </div>
 
                 {/* Group label */}

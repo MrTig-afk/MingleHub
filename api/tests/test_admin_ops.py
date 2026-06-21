@@ -467,7 +467,7 @@ def test_admin_override_unchanged_value_no_audit_row(client, api_key_header):
 # ---------------------------------------------------------------------------
 
 def test_admin_config_history_200(client, api_key_header):
-    """Admin GET config-history after an override -> history list with correct entry."""
+    """Admin GET config-history after an override -> paginated shape with correct entry."""
     original = _get_venue_fields(VENUE_A_ID)
     try:
         token = dev_login(client, api_key_header, ADMIN_CLERK_ID)
@@ -488,6 +488,13 @@ def test_admin_config_history_200(client, api_key_header):
         assert resp.status_code == 200
         body = resp.json()
         assert "history" in body
+
+        # A5 pagination fields must be present
+        assert "total" in body
+        assert body["total"] >= 1
+        assert body["limit"] == 50
+        assert body["offset"] == 0
+
         history = body["history"]
         assert len(history) >= 1
 
@@ -509,6 +516,65 @@ def test_admin_config_history_200(client, api_key_header):
         _restore_venue(VENUE_A_ID, original)
         _delete_config_overrides(VENUE_A_ID)
         assert _count_config_overrides(VENUE_A_ID) == 0
+
+
+def test_admin_config_history_limit_1(client, api_key_header):
+    """?limit=1 returns at most 1 history item; total still reflects full count."""
+    original = _get_venue_fields(VENUE_A_ID)
+    try:
+        token = dev_login(client, api_key_header, ADMIN_CLERK_ID)
+        headers = {**api_key_header, **auth_header(token)}
+
+        # Insert two overrides so total >= 2
+        client.patch(
+            f"/api/admin/venues/{VENUE_A_ID}",
+            headers=headers,
+            json={"reason": "Pagination test A", "billing_unit": 11.11},
+        )
+        client.patch(
+            f"/api/admin/venues/{VENUE_A_ID}",
+            headers=headers,
+            json={"reason": "Pagination test B", "billing_unit": 22.22},
+        )
+
+        resp = client.get(
+            f"/api/admin/venues/{VENUE_A_ID}/config-history?limit=1",
+            headers=headers,
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+
+        # Only 1 row returned despite total >= 2
+        assert len(body["history"]) <= 1
+        assert body["limit"] == 1
+        assert body["offset"] == 0
+        # total must still reflect the full unfiltered count
+        assert body["total"] >= 2
+
+    finally:
+        _restore_venue(VENUE_A_ID, original)
+        _delete_config_overrides(VENUE_A_ID)
+        assert _count_config_overrides(VENUE_A_ID) == 0
+
+
+def test_admin_config_history_limit_too_large_422(client, api_key_header):
+    """?limit=999 -> 422 (FastAPI ge=1,le=200 constraint)."""
+    token = dev_login(client, api_key_header, ADMIN_CLERK_ID)
+    resp = client.get(
+        f"/api/admin/venues/{VENUE_A_ID}/config-history?limit=999",
+        headers={**api_key_header, **auth_header(token)},
+    )
+    assert resp.status_code == 422
+
+
+def test_admin_config_history_negative_offset_422(client, api_key_header):
+    """?offset=-1 -> 422 (FastAPI ge=0 constraint)."""
+    token = dev_login(client, api_key_header, ADMIN_CLERK_ID)
+    resp = client.get(
+        f"/api/admin/venues/{VENUE_A_ID}/config-history?offset=-1",
+        headers={**api_key_header, **auth_header(token)},
+    )
+    assert resp.status_code == 422
 
 
 def test_admin_config_history_owner_403(client, api_key_header):

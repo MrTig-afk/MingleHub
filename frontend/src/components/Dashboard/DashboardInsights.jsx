@@ -26,7 +26,13 @@ function StatCard({ value, label }) {
   )
 }
 
-function ProportionalBar({ count, maxCount }) {
+const ROUND_TYPE_COLORS = {
+  chooser: 'rgba(236, 178, 255, 0.35)',
+  roulette: 'rgba(231, 0, 110, 0.25)',
+  trivia: 'rgba(0, 238, 252, 0.25)',
+}
+
+function ProportionalBar({ count, maxCount, color = 'rgba(151, 71, 255, 0.2)' }) {
   const pct = maxCount > 0 ? Math.round((count / maxCount) * 100) : 0
   return (
     <div style={{ position: 'relative', height: '20px', borderRadius: '4px', background: 'var(--bg-container)', overflow: 'hidden' }}>
@@ -34,7 +40,7 @@ function ProportionalBar({ count, maxCount }) {
         position: 'absolute',
         left: 0, top: 0, bottom: 0,
         width: `${pct}%`,
-        background: 'rgba(151, 71, 255, 0.2)',
+        background: color,
         borderRadius: '4px',
         transition: 'width 0.3s',
       }} />
@@ -148,6 +154,7 @@ export default function DashboardInsights({ token }) {
   const trend = data?.trend || []
 
   const maxRoundMix = Math.max(roundMix.chooser, roundMix.roulette, roundMix.trivia, 1)
+  const roundTotal = roundMix.chooser + roundMix.roulette + roundMix.trivia
   const maxTrend = Math.max(...trend.map((t) => t.count), 1)
 
   const avgMinDisplay = totals.avg_session_minutes != null ? `${totals.avg_session_minutes} min` : '--'
@@ -204,8 +211,13 @@ export default function DashboardInsights({ token }) {
                 { label: 'Trivia', key: 'trivia' },
               ].map(({ label, key }) => (
                 <div key={key} style={{ marginBottom: '8px' }}>
-                  <div style={{ fontSize: '13px', marginBottom: '4px' }}>{label}</div>
-                  <ProportionalBar count={roundMix[key]} maxCount={maxRoundMix} />
+                  <div style={{ fontSize: '13px', marginBottom: '4px' }}>
+                    {label}{' '}
+                    <span style={{ color: 'var(--on-surface-dim)' }}>
+                      ({roundTotal > 0 ? Math.round((roundMix[key] / roundTotal) * 100) : 0}%)
+                    </span>
+                  </div>
+                  <ProportionalBar count={roundMix[key]} maxCount={maxRoundMix} color={ROUND_TYPE_COLORS[key]} />
                 </div>
               ))}
             </>
@@ -252,6 +264,11 @@ export default function DashboardInsights({ token }) {
       {/* Sessions trend widget */}
       <div style={{ ...cardStyle, marginBottom: '12px' }}>
         <div style={{ fontWeight: 700, fontSize: '14px', marginBottom: '8px' }}>Sessions per Night</div>
+        {trend.length > 0 && (
+          <div style={{ fontSize: '12px', color: 'var(--on-surface-dim)', textAlign: 'right', marginBottom: '4px' }}>
+            Peak: {maxTrend} sessions
+          </div>
+        )}
         {trend.length === 0
           ? <div style={{ fontSize: '13px', color: 'var(--on-surface-dim)' }}>No data for this period.</div>
           : trend.map((item) => {

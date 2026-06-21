@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { fetchAdminOverview } from '../../services/adminApi'
-import { buttonStyle, cardStyle, chipStyle } from '../Dashboard/dashboardStyles'
+import { buttonStyle, buttonSecondaryStyle, cardStyle, chipStyle, formatRelativeTime } from '../Dashboard/dashboardStyles'
+import usePolling from '../Dashboard/usePolling'
 
 const shimmerCard = (height = 80) => ({
   ...cardStyle,
@@ -10,77 +11,19 @@ const shimmerCard = (height = 80) => ({
 })
 
 export default function AdminHome({ token }) {
-  const [data, setData] = useState(null)
-  const [status, setStatus] = useState('loading') // loading | ready | error | reconnecting
-  const [error, setError] = useState(null)
+  const { data, status, error, lastUpdatedAt, reload } = usePolling(
+    () => fetchAdminOverview(token),
+    { intervalMs: 7000, tokenKey: 'mh_admin_token' }
+  )
 
-  const load = () => {
-    setStatus('loading')
-    fetchAdminOverview(token)
-      .then((d) => {
-        setData(d)
-        setStatus('ready')
-      })
-      .catch((e) => {
-        const msg = e.message || ''
-        if (msg.includes('401') || msg.includes('token') || msg.includes('expired')) {
-          localStorage.removeItem('mh_admin_token')
-          window.location.reload()
-          return
-        }
-        setStatus('error')
-        setError(msg)
-      })
-  }
-
-  // Initial fetch. All setState happens inside the async resolution (after the
-  // await), never synchronously in the effect body (react-hooks/set-state-in-effect).
+  // Tick every 10 seconds so "updated N ago" re-renders without a new fetch.
+  const [, setTick] = useState(0)
   useEffect(() => {
-    let cancelled = false
-    const run = async () => {
-      try {
-        const d = await fetchAdminOverview(token)
-        if (cancelled) return
-        setData(d)
-        setStatus('ready')
-      } catch (e) {
-        if (cancelled) return
-        const msg = e.message || ''
-        if (msg.includes('401') || msg.includes('token') || msg.includes('expired')) {
-          localStorage.removeItem('mh_admin_token')
-          window.location.reload()
-          return
-        }
-        setStatus('error')
-        setError(msg)
-      }
-    }
-    run()
-    return () => { cancelled = true }
-  }, [token])
-
-  // Poll every 7 seconds once the initial fetch has settled.
-  useEffect(() => {
-    if (status === 'loading' || !token) return
-    const id = setInterval(() => {
-      fetchAdminOverview(token)
-        .then((d) => {
-          setData(d)
-          setStatus('ready')
-        })
-        .catch((e) => {
-          const msg = e.message || ''
-          if (msg.includes('401') || msg.includes('token') || msg.includes('expired')) {
-            localStorage.removeItem('mh_admin_token')
-            window.location.reload()
-            return
-          }
-          // Keep last data visible, signal reconnecting
-          setStatus('reconnecting')
-        })
-    }, 7000)
+    const id = setInterval(() => setTick((t) => t + 1), 10000)
     return () => clearInterval(id)
-  }, [status, token])
+  }, [])
+
+  const [venueSort, setVenueSort] = useState('active')
 
   if (status === 'loading') {
     return (
@@ -101,13 +44,19 @@ export default function AdminHome({ token }) {
         <p style={{ color: 'var(--tertiary)', fontFamily: 'var(--font-mono)', fontSize: '13px', margin: '0 0 12px' }}>
           Could not load admin data. {error}
         </p>
-        <button onClick={load} style={buttonStyle}>Retry</button>
+        <button onClick={reload} style={buttonStyle}>Retry</button>
       </div>
     )
   }
 
   const platform = data?.platform || {}
   const perVenue = data?.per_venue || []
+
+  const sortedVenues = [...perVenue].sort((a, b) => {
+    if (venueSort === 'active') return b.active_sessions - a.active_sessions || a.name.localeCompare(b.name)
+    if (venueSort === 'tonight') return b.sessions_tonight - a.sessions_tonight || a.name.localeCompare(b.name)
+    return a.name.localeCompare(b.name)
+  })
 
   const platformCards = [
     { value: platform.total_venues,        label: 'total venues' },
@@ -118,13 +67,19 @@ export default function AdminHome({ token }) {
     { value: platform.rounds_tonight,      label: 'rounds tonight' },
   ]
 
-  const noActivity = perVenue.every((v) => v.active_sessions === 0 && v.sessions_tonight === 0)
+  const noActivity = sortedVenues.every((v) => v.active_sessions === 0 && v.sessions_tonight === 0)
 
   return (
     <div>
       {status === 'reconnecting' && (
         <p style={{ fontSize: '12px', color: 'var(--on-surface-dim)', margin: '0 0 8px' }}>
           Reconnecting...
+        </p>
+      )}
+
+      {status === 'ready' && lastUpdatedAt && (
+        <p style={{ fontSize: '11px', color: 'var(--on-surface-dim)', margin: '0 0 8px', textAlign: 'right' }}>
+          Updated {formatRelativeTime(lastUpdatedAt)}
         </p>
       )}
 
@@ -145,6 +100,27 @@ export default function AdminHome({ token }) {
         Per-Venue Breakdown
       </h2>
 
+      {/* Sort buttons */}
+      <div style={{ display: 'flex', gap: '8px', marginBottom: '12px' }}>
+        {[
+          { key: 'active', label: 'Active' },
+          { key: 'tonight', label: 'Tonight' },
+          { key: 'name', label: 'Name' },
+        ].map(({ key, label }) => (
+          <button
+            key={key}
+            onClick={() => setVenueSort(key)}
+            style={{
+              ...(venueSort === key ? buttonStyle : buttonSecondaryStyle),
+              padding: '6px 12px',
+              fontSize: '12px',
+            }}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
       {perVenue.length === 0 && (
         <p style={{ color: 'var(--on-surface-dim)', textAlign: 'center', padding: '16px 0' }}>
           No venues configured
@@ -157,7 +133,7 @@ export default function AdminHome({ token }) {
         </p>
       )}
 
-      {perVenue.length > 0 && !noActivity && perVenue.map((v) => (
+      {perVenue.length > 0 && !noActivity && sortedVenues.map((v) => (
         <div key={v.venue_id} style={{ ...cardStyle, marginBottom: '12px' }}>
           {/* Top row: name + active chip */}
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>

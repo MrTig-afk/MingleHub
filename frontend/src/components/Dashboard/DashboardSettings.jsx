@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { fetchSettings, patchSettings } from '../../services/dashboardApi'
-import { buttonStyle, cardStyle, labelStyle, selectStyle } from './dashboardStyles'
+import { buttonStyle, cardStyle, formatMoney, labelStyle, selectStyle } from './dashboardStyles'
 
 const shimmerCard = (height = 80) => ({
   ...cardStyle,
@@ -43,6 +43,22 @@ export default function DashboardSettings({ token, user }) {
     return () => { cancelled = true }
   }, [token, reloadKey])
 
+  // Guard against accidental navigation when there are unsaved changes.
+  // hasChanges is derived from state so React sees it update correctly as a dep.
+  const hasChanges = data && (
+    editName.trim() !== data.editable.name ||
+    editRestrict !== data.editable.restrict_adult_content
+  )
+  useEffect(() => {
+    if (!hasChanges) return
+    const handler = (e) => {
+      e.preventDefault()
+      e.returnValue = ''
+    }
+    window.addEventListener('beforeunload', handler)
+    return () => window.removeEventListener('beforeunload', handler)
+  }, [hasChanges])
+
   // Owner-only guard — checked after all hooks.
   if (user.role !== 'venue_owner') {
     return (
@@ -80,10 +96,6 @@ export default function DashboardSettings({ token, user }) {
     )
   }
 
-  const hasChanges = data && (
-    editName.trim() !== data.editable.name ||
-    editRestrict !== data.editable.restrict_adult_content
-  )
   const nameValid = editName.trim().length > 0
   const saveDisabled = !hasChanges || !nameValid || saving
 
@@ -134,8 +146,9 @@ export default function DashboardSettings({ token, user }) {
             />
             <span> Restrict adult content</span>
           </label>
-          <div style={{ ...labelStyle, marginTop: '4px' }}>
-            When on, the Adults Only toggle never appears for patrons. Applies to new games only.
+          <div style={{ ...labelStyle, marginTop: '4px', fontStyle: 'italic' }}>
+            When on, the Adults Only toggle never appears for patrons.
+            Changes apply to new games only -- active sessions are not affected.
           </div>
         </div>
 
@@ -168,9 +181,9 @@ export default function DashboardSettings({ token, user }) {
         </div>
         {[
           ['Re-tap interval', `${data.read_only.retap_interval_minutes} min`],
-          ['Billing unit', `A$${data.read_only.billing_unit} / table / night`],
-          ['Nightly cap (weekday)', `A$${data.read_only.nightly_cap_weekday}`],
-          ['Nightly cap (weekend)', `A$${data.read_only.nightly_cap_weekend}`],
+          ['Billing unit', `${formatMoney(data.read_only.billing_unit)} / table / night`],
+          ['Nightly cap (weekday)', formatMoney(data.read_only.nightly_cap_weekday)],
+          ['Nightly cap (weekend)', formatMoney(data.read_only.nightly_cap_weekend)],
         ].map(([label, value]) => (
           <div
             key={label}

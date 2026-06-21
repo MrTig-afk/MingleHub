@@ -82,7 +82,8 @@ export default function AdminLeads({ token }) {
     }
   }
 
-  const submitDisabled = formStatus === 'saving' || (!form.name.trim() && !form.email.trim())
+  const emailValid = !form.email.trim() || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim())
+  const submitDisabled = formStatus === 'saving' || (!form.name.trim() && !form.email.trim()) || !emailValid
 
   return (
     <div>
@@ -110,6 +111,11 @@ export default function AdminLeads({ token }) {
               onChange={(e) => setForm((f) => ({ ...f, [key]: e.target.value }))}
               style={inputStyle}
             />
+            {key === 'email' && form.email.trim() && !emailValid && (
+              <div style={{ color: 'var(--tertiary)', fontSize: '12px', marginTop: '2px' }}>
+                Invalid email format
+              </div>
+            )}
           </div>
         ))}
 
@@ -135,6 +141,12 @@ export default function AdminLeads({ token }) {
             style={{ ...inputStyle, minHeight: '70px', resize: 'vertical', fontFamily: 'var(--font-body)' }}
           />
         </div>
+
+        {!form.name.trim() && !form.email.trim() && (
+          <div style={{ fontSize: '12px', color: 'var(--on-surface-dim)', marginBottom: '8px' }}>
+            Name or email is required
+          </div>
+        )}
 
         <button
           onClick={handleSubmit}

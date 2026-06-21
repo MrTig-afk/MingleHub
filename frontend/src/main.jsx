@@ -3,9 +3,13 @@ import ReactDOM from 'react-dom/client'
 import { Analytics } from '@vercel/analytics/react'
 import Splash from './components/Splash/Splash.jsx'
 import PatronLanding from './components/PatronLanding/PatronLanding.jsx'
-import DashboardRoot from './components/Dashboard/DashboardRoot.jsx'
-import AdminRoot from './components/Admin/AdminRoot.jsx'
 import './styles/main.css'
+
+// Dashboard and Admin are lazy-loaded so patron pages never download their JS.
+// eslint-disable-next-line react-refresh/only-export-components
+const DashboardRoot = React.lazy(() => import('./components/Dashboard/DashboardRoot.jsx'))
+// eslint-disable-next-line react-refresh/only-export-components
+const AdminRoot = React.lazy(() => import('./components/Admin/AdminRoot.jsx'))
 
 // Always keep the phone on fresh code (dev AND prod). The PWA is self-destroying
 // now (see vite.config.js), but a phone that cached an earlier build still has the
@@ -41,7 +45,33 @@ if (path.startsWith('/dashboard')) {
 
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
-    {page}
+    <React.Suspense fallback={
+      <div style={{
+        minHeight: '100dvh',
+        background: '#0A0A0C',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+      }}>
+        <div style={{
+          width: '120px',
+          height: '4px',
+          borderRadius: '2px',
+          background: '#1E1E24',
+          overflow: 'hidden',
+        }}>
+          <div style={{
+            width: '40%',
+            height: '100%',
+            background: '#ECB2FF',
+            borderRadius: '2px',
+            animation: 'dev-shimmer 1.5s infinite',
+          }} />
+        </div>
+      </div>
+    }>
+      {page}
+    </React.Suspense>
     <Analytics />
   </React.StrictMode>
 )

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { fetchAdminTeam } from '../../services/adminApi'
-import { buttonStyle, cardStyle, labelStyle } from '../Dashboard/dashboardStyles'
+import { buttonStyle, buttonSecondaryStyle, cardStyle, labelStyle } from '../Dashboard/dashboardStyles'
 
 const shimmerCard = (height = 64) => ({
   ...cardStyle,
@@ -9,6 +9,16 @@ const shimmerCard = (height = 64) => ({
   background: 'var(--bg-container)',
   marginBottom: '12px',
 })
+
+const inputStyle = {
+  padding: '10px 12px',
+  borderRadius: '8px',
+  background: 'var(--bg-surface)',
+  color: 'var(--on-surface)',
+  border: '1px solid var(--outline)',
+  width: '100%',
+  boxSizing: 'border-box',
+}
 
 // Role badge styles — match AdminShell admin badge for admin role.
 const roleBadge = (role) => {
@@ -33,6 +43,10 @@ export default function AdminTeam({ token }) {
   const [users, setUsers] = useState([])
   const [error, setError] = useState(null)
   const [reloadKey, setReloadKey] = useState(0)
+
+  // Client-side search + role filter state.
+  const [search, setSearch] = useState('')
+  const [roleFilter, setRoleFilter] = useState('all')
 
   // All setState calls are after await (react-hooks/set-state-in-effect compliant).
   useEffect(() => {
@@ -60,6 +74,14 @@ export default function AdminTeam({ token }) {
     return () => { cancelled = true }
   }, [token, reloadKey])
 
+  const lowerSearch = search.toLowerCase()
+  const filteredUsers = users.filter((u) => {
+    if (roleFilter !== 'all' && u.role !== roleFilter) return false
+    if (search && !u.clerk_user_id.toLowerCase().includes(lowerSearch) &&
+        !(u.venue_name || '').toLowerCase().includes(lowerSearch)) return false
+    return true
+  })
+
   return (
     <div>
       <h2 style={{ fontFamily: 'var(--font-headline)', fontSize: '18px', marginTop: 0, marginBottom: '4px' }}>
@@ -68,6 +90,32 @@ export default function AdminTeam({ token }) {
       <p style={{ ...labelStyle, marginTop: 0, marginBottom: '16px' }}>
         Read-only. Invite flow coming soon.
       </p>
+
+      {/* Search box */}
+      <input
+        type="text"
+        placeholder="Search by user ID or venue..."
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+        style={{ ...inputStyle, marginBottom: '12px' }}
+      />
+
+      {/* Role filter buttons */}
+      <div style={{ display: 'flex', gap: '8px', marginBottom: '12px', flexWrap: 'wrap' }}>
+        {['all', 'admin', 'venue_owner', 'venue_staff'].map((r) => (
+          <button
+            key={r}
+            onClick={() => setRoleFilter(r)}
+            style={{
+              ...(roleFilter === r ? buttonStyle : buttonSecondaryStyle),
+              padding: '6px 12px',
+              fontSize: '12px',
+            }}
+          >
+            {r === 'all' ? 'All' : r.replace(/_/g, ' ')}
+          </button>
+        ))}
+      </div>
 
       {status === 'loading' && (
         <div>
@@ -89,13 +137,19 @@ export default function AdminTeam({ token }) {
         </div>
       )}
 
+      {status === 'ready' && filteredUsers.length === 0 && users.length > 0 && (
+        <div style={{ ...cardStyle, textAlign: 'center' }}>
+          <p style={{ ...labelStyle, margin: 0 }}>No team members match filters</p>
+        </div>
+      )}
+
       {status === 'ready' && users.length === 0 && (
         <div style={{ ...cardStyle, textAlign: 'center' }}>
           <p style={{ ...labelStyle, margin: 0 }}>No team members</p>
         </div>
       )}
 
-      {status === 'ready' && users.map((u) => (
+      {status === 'ready' && filteredUsers.map((u) => (
         <div key={u.id} style={{ ...cardStyle, marginBottom: '12px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
             <span style={{ fontWeight: 700 }}>{u.clerk_user_id}</span>

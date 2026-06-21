@@ -63,3 +63,23 @@ export function formatDuration(seconds) {
   const rm = m % 60
   return rm > 0 ? `${h}h ${rm}m` : `${h}h`
 }
+
+export function formatMoney(value) {
+  const num = typeof value === 'string' ? parseFloat(value) : value
+  if (num == null || isNaN(num)) return 'A$0.00'
+  return 'A$' + num.toLocaleString('en-AU', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })
+}
+
+export function formatRelativeTime(date) {
+  if (!date) return ''
+  const seconds = Math.floor((Date.now() - date.getTime()) / 1000)
+  if (seconds < 5) return 'just now'
+  if (seconds < 60) return seconds + 's ago'
+  const minutes = Math.floor(seconds / 60)
+  if (minutes < 60) return minutes + 'm ago'
+  const hours = Math.floor(minutes / 60)
+  return hours + 'h ago'
+}

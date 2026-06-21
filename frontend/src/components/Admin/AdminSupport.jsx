@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { fetchAdminSupport, patchAdminSupportMessage } from '../../services/adminApi'
-import { buttonStyle, buttonSecondaryStyle, cardStyle, labelStyle } from '../Dashboard/dashboardStyles'
+import { buttonStyle, buttonSecondaryStyle, cardStyle, formatRelativeTime, labelStyle } from '../Dashboard/dashboardStyles'
 
 const shimmerCard = (height = 80) => ({
   ...cardStyle,
@@ -124,7 +124,13 @@ export default function AdminSupport({ token }) {
           <p style={{ margin: '8px 0', fontSize: '14px', lineHeight: '1.5' }}>{msg.message}</p>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <span style={{ ...labelStyle, fontSize: '12px' }}>
-              {msg.created_at ? new Date(msg.created_at).toLocaleString() : '--'}
+              {msg.created_at ? (
+                <>
+                  {formatRelativeTime(new Date(msg.created_at))}
+                  {' -- '}
+                  {new Date(msg.created_at).toLocaleString()}
+                </>
+              ) : '--'}
             </span>
             <button
               onClick={() => handlePatchStatus(msg.id, msg.status === 'open' ? 'resolved' : 'open')}
