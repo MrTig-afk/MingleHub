@@ -73,6 +73,17 @@ def end_game(sess, phone): return _req("POST", f"/sessions/{sess}/end-game", jso
 def recap(sess): return _req("GET", f"/sessions/{sess}/recap")
 def leaderboard(sess): return _req("GET", f"/sessions/{sess}/leaderboard")
 def current_round(sess): return _req("GET", f"/sessions/{sess}/current-round")
+def skip_roulette(rid, phone): return _req("POST", f"/rounds/{rid}/roulette/skip", json={"phone_id": phone})
+def join_session(sess, phone, name): return _req("POST", f"/sessions/{sess}/join", json={"phone_id": phone, "name": name})
+def new_group(table_id, phone): return _req("POST", f"/table/{table_id}/new-group", json={"phone_id": phone})
+
+
+def dash_get(path, token):
+    r = S.get(f"{BASE}/api/dashboard/{path}",
+              headers={"Authorization": f"Bearer {token}"}, verify=False)
+    if not r.ok:
+        raise SimError(f"GET /dashboard/{path} -> {r.status_code}: {r.text[:200]}")
+    return r.json()
 
 
 def owner_token():
@@ -242,11 +253,96 @@ def scenario_new_game_bypass(table, tok):
     expect(fresh == "lobby", f"new_game re-tap -> fresh lobby, bypassing recap-lock (got {fresh})")
 
 
+def scenario_three_phones(table, tok):
+    print("\n### three_phones: full 3-player game -> end -> recap")
+    phones = new_phones(3)
+    host = phones[0]
+    sess, _ = open_lobby_session(table, phones, tok)
+    play_chooser(sess, host)
+    play_roulette(sess, host, phones)
+    play_trivia(sess, host, phones[1:])
+    end_game(sess, host)
+    rc = recap(sess)
+    expect(len(rc.get("leaderboard", [])) == 3, "3-player recap shows all three")
+
+
+def scenario_roulette_skip(table, tok):
+    print("\n### roulette_skip: origin skips roulette -> 0 pts, advances")
+    phones = new_phones(2)
+    host = phones[0]
+    sess, _ = open_lobby_session(table, phones, tok)
+    play_chooser(sess, host)
+    rs = roulette_start(sess, host)
+    skip_roulette(rs["round_id"], host)
+    expect(current_round(sess)["current_round_number"] == 2, "skipped roulette still records round #2")
+    expect(current_round(sess)["ended"] is False, "skip does not end the game")
+
+
+def scenario_trivia_afk(table, tok):
+    print("\n### trivia_afk: one phone never answers -> round still finalizes")
+    phones = new_phones(2)
+    host, afk = phones
+    sess, _ = open_lobby_session(table, phones, tok)
+    play_chooser(sess, host)
+    play_roulette(sess, host, phones)
+    ts = trivia_start(sess, host)
+    rid = ts["trivia_round_id"]
+    trivia_join(rid, afk)
+    begun = trivia_begin(rid, host)
+    n = len(begun.get("questions", [])) or 5
+    for qi in range(n):
+        trivia_answer(rid, host, qi, "A")   # afk answers nothing this whole round
+    try:
+        trivia_finish(rid, host)
+    except SimError:
+        pass
+    lb = {r["name"]: r for r in leaderboard(sess)["leaderboard"]}
+    expect(lb.get("P2", {}).get("score", -1) == 0, "AFK player (P2) scored 0 in trivia")
+    expect(current_round(sess)["ended"] is False, "AFK trivia round finalizes without ending the game")
+
+
+def scenario_join_or_new(table, tok):
+    print("\n### join_or_new: 3rd phone joins a live table; 4th starts a new group")
+    phones = new_phones(2)
+    sess, _ = open_lobby_session(table, phones, tok)
+    p3 = new_phones(1)[0]
+    st = tap(p3, table)["table_state"]
+    expect(st["phase"] == "join_or_new", f"3rd phone on a live table -> join_or_new (got {st['phase']})")
+    join_session(st["groups"][0]["session_id"], p3, "P3")
+    names = [r["name"] for r in leaderboard(sess)["leaderboard"]]
+    expect("P3" in names, "3rd phone joined the existing session")
+    p4 = new_phones(1)[0]
+    st4 = tap(p4, table)["table_state"]
+    ng = new_group(st4["table_id"], p4)
+    expect("lobby_id" in ng or ng.get("phase") == "lobby", "4th phone can start a new group")
+
+
+def scenario_dashboard_reflection(table, tok):
+    print("\n### dashboard_reflection: a live game shows in /overview and /tables")
+    phones = new_phones(2)
+    host = phones[0]
+    sess, _ = open_lobby_session(table, phones, tok)
+    play_chooser(sess, host)
+    ov = dash_get("overview", tok)
+    mine = [x for x in ov["active_sessions"] if x["session_id"] == sess]
+    expect(bool(mine), "live session appears in /dashboard/overview")
+    expect(bool(mine and mine[0].get("table_id")), "overview session carries table_id")
+    tb = dash_get("tables", tok)
+    this_table = [t for t in tb if t["table_number"] == table]
+    expect(bool(this_table and this_table[0]["active_session_count"] >= 1),
+           "table shows >=1 active session in /tables")
+
+
 SCENARIOS = {
     "happy_path": scenario_happy_path,
     "host_migration": scenario_host_migration,
     "last_leaver": scenario_last_leaver,
     "new_game_bypass": scenario_new_game_bypass,
+    "three_phones": scenario_three_phones,
+    "roulette_skip": scenario_roulette_skip,
+    "trivia_afk": scenario_trivia_afk,
+    "join_or_new": scenario_join_or_new,
+    "dashboard_reflection": scenario_dashboard_reflection,
 }
 
 

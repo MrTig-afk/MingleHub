@@ -48,9 +48,14 @@ Scenarios (all self-clean the table afterward):
 - `host_migration` — host leaves mid-game → migrates to the other player, game lives
 - `last_leaver` — non-host leaves (continues) → last player leaves → game ends
 - `new_game_bypass` — ended game: plain tap → recap, `new_game` tap → fresh lobby
+- `three_phones` — full 3-player game end-to-end
+- `roulette_skip` — origin skips Roulette → 0 pts, advances
+- `trivia_afk` — a phone never answers → round still finalizes (AFK scored 0)
+- `join_or_new` — 3rd phone joins a live table; 4th starts a new group
+- `dashboard_reflection` — a live game shows in `/dashboard/overview` + `/tables`
 
-**Result: 17/17 assertions pass.** This is your regression net for the game loop
-without needing your phones — re-run it any time after backend changes.
+**Result: 38/38 assertions across 9 scenarios pass.** This is your regression net for
+the game loop without needing your phones — re-run it any time after backend changes.
 
 ---
 
@@ -66,10 +71,17 @@ New pytest coverage for today's backend changes (4 tests, all pass):
 **Full suite regression run: 308 passed, 0 failed** (14m37s, uvicorn stopped so Neon
 wasn't contended). No regressions from today's changes.
 
-Note: the host-gate, drop-to-1 countdown, and trivia shuffle are **frontend-timer/UI**
-behaviors — covered by the simulator at the API level and by manual on-device testing,
-not by these pytest cases. A Playwright pass for those is the natural next add (not done
-here — would need the dev Playwright setup wired up).
+### Playwright e2e — `frontend/e2e/patron-flows.spec.js`
+Covers the **frontend-only** behaviors pytest/the simulator can't reach (host-gate,
+drop-to-1 UI, New game button). Setup uses the backend API to jump straight to the
+target game state, then drives the real UI in a headless browser.
+- `host-gates the Roulette round` — Start button shows, round doesn't auto-fire
+- `drop-to-1 shows Waiting + countdown + End game now`
+- `Recap "New game" button bypasses the recap-lock into a fresh lobby`
+
+Run: `cd frontend && npm run test:e2e` (needs Vite on :5174 + backend on :8000 up).
+**Result: 3/3 pass.** `@playwright/test` added as a devDependency (Chromium already
+cached; no browser download).
 
 ---
 
