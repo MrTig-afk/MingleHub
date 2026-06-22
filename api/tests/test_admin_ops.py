@@ -13,6 +13,7 @@ Every test that mutates shared venue rows restores them in a finally block.
 Every test that inserts rows into new tables deletes them in a finally block.
 """
 import asyncio
+import json
 import os
 import uuid
 
@@ -805,3 +806,61 @@ def test_admin_support_patch_owner_403(client, api_key_header):
         assert resp.status_code == 403
     finally:
         _delete_support_message(msg_id)
+
+
+# ---------------------------------------------------------------------------
+# Build #1: audit log written on venue config override
+# ---------------------------------------------------------------------------
+
+def _delete_audit_logs_for_venue(venue_id):
+    async def _q():
+        conn = await asyncpg.connect(os.environ["DATABASE_URL"])
+        try:
+            await conn.execute(
+                "DELETE FROM admin_audit_log WHERE target_id = $1", venue_id,
+            )
+        finally:
+            await conn.close()
+    asyncio.run(_q())
+
+
+def _fetch_audit_logs_for_venue(venue_id, action):
+    async def _q():
+        conn = await asyncpg.connect(os.environ["DATABASE_URL"])
+        try:
+            return await conn.fetch(
+                "SELECT action, target_type, target_id, detail FROM admin_audit_log "
+                "WHERE action = $1 AND target_id = $2 ORDER BY created_at DESC",
+                action, venue_id,
+            )
+        finally:
+            await conn.close()
+    return asyncio.run(_q())
+
+
+def test_venue_override_creates_audit_log(client, api_key_header):
+    """PATCH venue config override also writes a row in admin_audit_log."""
+    original = _get_venue_fields(VENUE_A_ID)
+    try:
+        token = dev_login(client, api_key_header, ADMIN_CLERK_ID)
+        headers = {**api_key_header, **auth_header(token)}
+        resp = client.patch(
+            f"/api/admin/venues/{VENUE_A_ID}",
+            headers=headers,
+            json={"reason": "audit log test", "is_test": not original["is_test"]},
+        )
+        assert resp.status_code == 200, resp.text
+
+        rows = _fetch_audit_logs_for_venue(VENUE_A_ID, 'venue_config_override')
+        assert len(rows) >= 1, "Expected at least one audit_log row for venue_config_override"
+        row = rows[0]
+        assert row["action"] == "venue_config_override"
+        assert row["target_type"] == "venue"
+        assert row["target_id"] == VENUE_A_ID
+        detail = row["detail"] if isinstance(row["detail"], dict) else json.loads(row["detail"])
+        assert detail["field_name"] == "is_test"
+        assert detail["reason"] == "audit log test"
+    finally:
+        _restore_venue(VENUE_A_ID, original)
+        _delete_config_overrides(VENUE_A_ID)
+        _delete_audit_logs_for_venue(VENUE_A_ID)
