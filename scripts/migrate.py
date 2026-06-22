@@ -616,6 +616,15 @@ async def migrate():
         await seed_themes(conn)
         print("OK themes seeded")
 
+        # Stripe usage billing: a 'sent' status (pushed to Stripe, awaiting
+        # payment) sits between pending and paid/failed.
+        await conn.execute("ALTER TABLE invoices DROP CONSTRAINT IF EXISTS invoices_status_check")
+        await conn.execute("""
+            ALTER TABLE invoices ADD CONSTRAINT invoices_status_check
+            CHECK (status IN ('pending', 'sent', 'paid', 'failed'))
+        """)
+        print("OK invoices status check allows 'sent'")
+
         schema = await conn.fetch("""
             SELECT column_name, data_type, is_nullable, column_default
             FROM information_schema.columns

@@ -22,6 +22,7 @@ from api.services.session_service import compute_retap_state
 from api.services.billing_service import cap_blocks, BLOCK_SECONDS
 from api.services.analytics_service import range_totals
 from api.services.theme_service import resolve_active_theme
+from api.services import stripe_service
 
 router = APIRouter(prefix="/api/dashboard", dependencies=[Depends(verify_api_key)])
 
@@ -1038,6 +1039,26 @@ async def session_billing(
     except Exception:
         await notify_error("GET /dashboard/session-billing failed 🚨", traceback.format_exc()[:500])
         raise HTTPException(status_code=500, detail="Internal error")
+
+
+@router.post("/billing/sync")
+@limiter.limit("10/minute")
+async def sync_billing_to_stripe(
+    request: Request,
+    current_user: CurrentUser = Depends(require_role("venue_owner")),
+):
+    """Push this venue's latest invoice to Stripe (test mode; stub until real test
+    keys are set). Returns the stripe customer + invoice ids. No real charge is
+    possible — test keys + test customers only."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        invoice_id = await conn.fetchval(
+            "SELECT id FROM invoices WHERE venue_id = $1 ORDER BY period_start DESC LIMIT 1",
+            current_user.venue_id)
+        if not invoice_id:
+            raise HTTPException(status_code=404, detail="No invoice to sync")
+        result = await stripe_service.sync_invoice(conn, invoice_id)
+    return result
 
 
 class PairTagRequest(BaseModel):

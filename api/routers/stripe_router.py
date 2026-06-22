@@ -5,8 +5,10 @@ import stripe
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 
+from api.db import get_pool
 from api.security import limiter, verify_api_key
 from api.services.notify import notify_payment
+from api.services import stripe_service
 
 stripe.api_key = os.getenv("STRIPE_SECRET_KEY", "")
 _PRICE_ID = os.getenv("STRIPE_PRICE_ID", "")
@@ -60,3 +62,21 @@ async def stripe_webhook(request: Request):
         )
 
     return JSONResponse({"status": "ok"})
+
+
+@router.post("/stripe/usage-webhook")
+async def usage_webhook(request: Request):
+    """Usage-billing webhook: Stripe invoice.paid / payment_failed -> move the
+    invoice's status. Signature-verified (Stripe HMAC scheme). Public, but a bad
+    signature is rejected with 400."""
+    payload = await request.body()
+    sig_header = request.headers.get("stripe-signature", "")
+    try:
+        event = stripe_service.verify_webhook(
+            payload, sig_header, stripe_service.STRIPE_WEBHOOK_SECRET)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        applied = await stripe_service.apply_invoice_event(conn, event)
+    return JSONResponse({"status": "ok", "applied": applied})
