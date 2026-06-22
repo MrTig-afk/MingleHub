@@ -10,7 +10,7 @@ MingleHub is a **tap-to-play social game platform for bars, pubs and venues** �
 
 **Where we are:** the full platform is **built, tested, and continuously-integration-green** — onboarding, multi-venue isolation, the three games, venue + admin dashboards, a complete usage-billing system, performance/caching infrastructure, and a theme engine. It is **not yet deployed** — deployment is a configuration step (env vars, a production database, a domain), not remaining engineering.
 
-**By the numbers:** ~45 feature commits, **~411 automated tests across 33 test files**, every change gated by CI (lint + full test suite + production build) before it can land, plus independent adversarial code reviews on the money-handling and access-control code.
+**By the numbers:** ~49 feature commits, **455 automated tests across 34 test files** (451 passing + 4 Stripe-webhook tests that skip without a webhook secret), every change gated by CI (lint + full test suite + production build) before it can land, plus independent adversarial code reviews on the money-handling and access-control code.
 
 ---
 
@@ -72,7 +72,7 @@ Grouped by area. Each: *what it is · why · how.*
 
 ## 3. Why the branch structure (and what each holds)
 
-We build **one feature per branch**, off the others in a clean stack, and **nothing merges until CI is fully green** (lint + all 370 tests + a production build). This keeps every change isolated, reviewable, and reversible.
+We build **one feature per branch**, off the others in a clean stack, and **nothing merges until CI is fully green** (lint + the full test suite + a production build). This keeps every change isolated, reviewable, and reversible.
 
 | Branch | What it delivers |
 |---|---|
@@ -82,8 +82,9 @@ We build **one feature per branch**, off the others in a clean stack, and **noth
 | `feature/dashboard-perf` | Client caching (instant tabs) + analytics rollup tables |
 | `feature/theme-engine` | Theme engine + per-session billing breakdown + Stripe (test) + the deploy CSP fix |
 | `feature/venue-invites-admin-security` | QR invite flow for controlled onboarding + admin audit log + docs hidden in production |
+| `feature/billing-lifecycle` | Venue cancellation, 7-day reactivation window, dunning (non-payment suspension), webhook auto-reactivate, admin force-status with audit trail |
 
-`feature/venue-invites-admin-security` is the current **tip** — it contains everything above it in the stack. Merging it brings the whole platform to `main` in one go (we'd merge the stack in order).
+`feature/billing-lifecycle` is the current **tip** — it contains everything above it in the stack.
 
 ---
 
@@ -128,6 +129,15 @@ This is where the rigor lives. A sample of what's explicitly handled and tested:
 - **Single-use invites can't be double-redeemed:** the redeem path is a single atomic guarded write (not read-then-write), so a race between two owners on the same code resolves to exactly one winner — the loser gets a clean "invalid/expired."
 - **Un-invited owners are stopped server-side**, not just hidden in the UI: a venue-less owner with no redeemed invite is gated to "Contact us."
 - **Every admin mutation is audited**, all admin/invite inputs reject unknown fields, and a CI guard blocks dangerous code patterns from ever landing.
+
+### Billing lifecycle (Build #2)
+- **Owner voluntary cancel:** venue owners can cancel their account (with a reason) from the Settings page; all NFC tags stop working immediately; a final invoice is issued for the current month.
+- **7-day reactivation window:** after a voluntary cancel, the owner has 7 days to reactivate at no extra charge — handled server-side (not just UI).
+- **Admin force-status:** admins can set any venue to active / suspended / cancelled from the admin panel, with a mandatory reason that writes both a config-override row and an audit log entry.
+- **Dunning (non-payment suspension):** if a venue's invoice stays in `failed` status for more than 7 days, the nightly billing rollup automatically suspends it (`suspension_reason='dunning'`). Test venues are never dunning-suspended.
+- **Auto-reactivate on payment:** when Stripe reports an invoice paid (webhook), the venue is automatically restored to active — but only if it was suspended for non-payment, not for admin action.
+- **In-progress games unaffected:** a cancellation or suspension only blocks NEW games from starting; any session already in progress runs to completion naturally.
+- **All transitions idempotent:** double-cancel, double-reactivate, replayed webhooks are all no-ops at the database level.
 
 ### Operational reality
 - Because dev shares one database, tests run **sequentially** to avoid corrupting each other (a lesson we hit and codified). Deploy is region-pinned to **Sydney** (close to our users + data).
@@ -187,4 +197,4 @@ This is where the rigor lives. A sample of what's explicitly handled and tested:
 - [ ] Signed NFC tags (only if/when we want physical-presence proof)
 - [ ] Rotate the development secret key before real users
 
-**The headline:** the *product* is done — onboarding, isolation, games, dashboards, billing, theming, controlled-invite onboarding, and admin audit trail — all tested and CI-green. What remains between here and a live, multi-venue platform is **configuration and a domain purchase**, not feature development. We're clear to move on the domain.
+**The headline:** the *product* is done — onboarding, isolation, games, dashboards, billing, theming, controlled-invite onboarding, admin audit trail, and a complete billing lifecycle (cancel/suspend/reactivate/dunning) — all tested and CI-green. What remains between here and a live, multi-venue platform is **configuration and a domain purchase**, not feature development. We're clear to move on the domain.
