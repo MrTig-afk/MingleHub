@@ -13,6 +13,7 @@ from api.dev_fixtures import (  # noqa: E402
     VENUE_B_TABLE_ID, VENUE_B_TABLE_2_ID,
     OWNER_A_ID, STAFF_A_ID, OWNER_B_ID, ADMIN_ID,
     OWNER_A_CLERK_ID, STAFF_A_CLERK_ID, OWNER_B_CLERK_ID, ADMIN_CLERK_ID,
+    OWNER_NOVEN_ID, OWNER_NOVEN_CLERK_ID,
 )
 
 # Two separate venues so BOLA (venue isolation) tests have real cross-venue
@@ -37,6 +38,7 @@ USERS = [
     (STAFF_A_ID, STAFF_A_CLERK_ID, VENUE_A_ID, "venue_staff"),
     (OWNER_B_ID, OWNER_B_CLERK_ID, VENUE_B_ID, "venue_owner"),
     (ADMIN_ID, ADMIN_CLERK_ID, None, "admin"),
+    (OWNER_NOVEN_ID, OWNER_NOVEN_CLERK_ID, None, "venue_owner"),
 ]
 
 

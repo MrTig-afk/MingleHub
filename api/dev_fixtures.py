@@ -29,3 +29,7 @@ OWNER_A_CLERK_ID = "dev_owner_a"
 STAFF_A_CLERK_ID = "dev_staff_a"
 OWNER_B_CLERK_ID = "dev_owner_b"
 ADMIN_CLERK_ID = "dev_admin"
+
+# Venue-less owner fixture: a venue_owner with no venue yet (for invite flow tests).
+OWNER_NOVEN_ID = _id("owner-no-venue")
+OWNER_NOVEN_CLERK_ID = "dev_owner_noven"

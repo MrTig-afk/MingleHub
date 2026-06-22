@@ -625,6 +625,56 @@ async def migrate():
         """)
         print("OK invoices status check allows 'sent'")
 
+        # Build #1: venue invites, admin audit log, users.email
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS venue_invites (
+                id             UUID PRIMARY KEY,
+                code           TEXT UNIQUE NOT NULL,
+                invited_email  TEXT NOT NULL,
+                signup_email   TEXT,
+                venue_name     TEXT NOT NULL,
+                address        TEXT,
+                lat            NUMERIC,
+                lng            NUMERIC,
+                place_id       TEXT,
+                status         TEXT NOT NULL DEFAULT 'active'
+                    CHECK (status IN ('active', 'used', 'revoked', 'expired')),
+                expires_at     TIMESTAMP NOT NULL,
+                created_by     UUID REFERENCES users(id),
+                used_by        UUID REFERENCES users(id),
+                used_at        TIMESTAMP,
+                created_at     TIMESTAMP DEFAULT NOW()
+            )
+        """)
+        print("OK venue_invites table ready")
+
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_venue_invites_code ON venue_invites (code)"
+        )
+        print("OK idx_venue_invites_code index ready")
+
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS admin_audit_log (
+                id          UUID PRIMARY KEY,
+                actor_id    UUID REFERENCES users(id),
+                action      TEXT NOT NULL,
+                target_type TEXT,
+                target_id   TEXT,
+                detail      JSONB,
+                ip          TEXT,
+                created_at  TIMESTAMP DEFAULT NOW()
+            )
+        """)
+        print("OK admin_audit_log table ready")
+
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_audit_log_created ON admin_audit_log (created_at DESC)"
+        )
+        print("OK idx_audit_log_created index ready")
+
+        await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS email TEXT")
+        print("OK users.email column ready")
+
         schema = await conn.fetch("""
             SELECT column_name, data_type, is_nullable, column_default
             FROM information_schema.columns
