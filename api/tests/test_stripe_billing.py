@@ -131,6 +131,30 @@ def test_apply_unknown_event_is_noop():
     assert _run(lambda c: stripe_service.apply_invoice_event(c, event)) is None
 
 
+def test_apply_event_never_regresses_paid_invoice():
+    # A late payment_failed after the invoice is already paid must NOT flip it.
+    iid = _make_invoice(stripe_invoice_id="in_stub_alreadypaid", status="paid")
+    try:
+        event = {"type": "invoice.payment_failed", "data": {"object": {"id": "in_stub_alreadypaid"}}}
+        new = _run(lambda c: stripe_service.apply_invoice_event(c, event))
+        assert new is None                                      # no update applied
+        status = _run(lambda c: c.fetchval("SELECT status FROM invoices WHERE id=$1", iid))
+        assert status == "paid"                                 # stays paid
+    finally:
+        _cleanup(iid)
+
+
+def test_sync_invoice_idempotent_on_sent():
+    # Re-syncing a 'sent' invoice must not re-push (would dup items in real mode).
+    iid = _make_invoice(stripe_invoice_id="in_stub_already", status="sent")
+    try:
+        result = _run(lambda c: stripe_service.sync_invoice(c, iid))
+        assert result["skipped"] == "already_sent"
+        assert result["stripe_invoice_id"] == "in_stub_already"
+    finally:
+        _cleanup(iid)
+
+
 # --- endpoints ---
 
 def test_usage_webhook_endpoint(client, api_key_header, monkeypatch):

@@ -118,9 +118,12 @@ export default function RoundOrigin({
     return () => { cancelled = true }
   }, [sessionId, roundNumber])
 
-  // Theme weights: fetched once on mount, independent of the round-number
-  // bootstrap above (which is skipped on resume when initialRoundNumber is set).
+  // Theme weights on RESUME only: on a fresh game the round-number bootstrap
+  // above already fetches /current-round and sets the weights, so fetching here
+  // too would double-call. This branch covers resume (initialRoundNumber given),
+  // where that bootstrap early-returns without fetching.
   useEffect(() => {
+    if (!(initialRoundNumber != null && initialRoundNumber >= 1)) return undefined
     let cancelled = false
     fetchCurrentRound(sessionId)
       .then((data) => {
@@ -128,7 +131,7 @@ export default function RoundOrigin({
       })
       .catch(() => {})
     return () => { cancelled = true }
-  }, [sessionId])
+  }, [sessionId, initialRoundNumber])
 
   // roundType is only meaningful once roundNumber is loaded.
   const roundType = roundNumber !== null

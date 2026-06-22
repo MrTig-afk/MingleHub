@@ -38,7 +38,7 @@ async def sync_invoice(conn, invoice_id) -> dict:
     invoice 'sent' (awaiting payment). Idempotent: re-running yields the same ids.
     """
     inv = await conn.fetchrow(
-        """SELECT i.id, i.venue_id, i.total_amount, i.status,
+        """SELECT i.id, i.venue_id, i.total_amount, i.status, i.stripe_invoice_id,
                   v.stripe_customer_id, v.name
            FROM invoices i JOIN venues v ON v.id = i.venue_id
            WHERE i.id = $1""",
@@ -46,9 +46,12 @@ async def sync_invoice(conn, invoice_id) -> dict:
     )
     if not inv:
         raise LookupError("invoice_not_found")
-    if inv["status"] == "paid":
+    # Idempotent: never re-push an invoice already sent or paid (in real Stripe
+    # mode that would create duplicate invoice items + a second Stripe invoice).
+    if inv["status"] in ("paid", "sent"):
         return {"customer_id": inv["stripe_customer_id"],
-                "stripe_invoice_id": None, "skipped": "already_paid"}
+                "stripe_invoice_id": inv["stripe_invoice_id"],
+                "skipped": f"already_{inv['status']}"}
 
     items = await conn.fetch(
         "SELECT table_id, play_date, units_billed, amount FROM invoice_line_items "
@@ -96,7 +99,11 @@ def verify_webhook(payload: bytes, sig_header: str, secret: str, tolerance: int 
     ts, v1 = parts.get("t"), parts.get("v1")
     if not ts or not v1:
         raise ValueError("malformed_signature")
-    if tolerance and abs(int(time.time()) - int(ts)) > tolerance:
+    try:
+        ts_int = int(ts)
+    except (TypeError, ValueError):
+        raise ValueError("malformed_signature")
+    if tolerance and abs(int(time.time()) - ts_int) > tolerance:
         raise ValueError("timestamp_outside_tolerance")
     signed = f"{ts}.".encode() + payload
     expected = hmac.new(secret.encode(), signed, hashlib.sha256).hexdigest()
@@ -126,9 +133,10 @@ async def apply_invoice_event(conn, event: dict) -> str | None:
                   "invoice.payment_failed": "failed"}.get(etype)
     if not new_status:
         return None
+    # Never regress a paid invoice (a late payment_failed after paid must not flip it).
     updated = await conn.fetchval(
         "UPDATE invoices SET status = $1, updated_at = NOW() "
-        "WHERE stripe_invoice_id = $2 RETURNING id",
+        "WHERE stripe_invoice_id = $2 AND status != 'paid' RETURNING id",
         new_status, stripe_invoice_id)
     return new_status if updated else None
 

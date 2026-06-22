@@ -4,9 +4,10 @@ Chooser->Roulette->Trivia cadence with a theme-weighted draw.
 The round-type pick is DETERMINISTIC for a given (session, round_number, theme)
 so every phone computes/sees the same type and it never flickers across polls —
 it's seeded by a hash of the session id + round number, then drawn from the
-active theme's round-type weights. The same live rules as the old cadence apply:
-Roulette/Trivia need >= 2 active players (else fall back to Chooser), and a
-just-abandoned Trivia gather is excluded from the immediate next pick.
+active theme's round-type weights. Roulette/Trivia need >= 2 active players (else fall back to Chooser). An optional
+exclude_trivia guard implements the "just-abandoned Trivia gather excluded from
+the immediate next pick" rule; it's available + tested but not yet wired to the
+live abandonment signal (the old cadence didn't implement it either).
 """
 import hashlib
 import json
