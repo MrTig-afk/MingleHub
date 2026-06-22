@@ -90,12 +90,26 @@ export default function DashboardBilling({ token, user }) {
         </span>
       </div>
 
+      {data.is_test_venue && (
+        <div style={{ ...labelStyle, textAlign: 'center', marginBottom: '12px' }}>
+          Test venue -- excluded from real invoices.
+        </div>
+      )}
+
       {/* Billing model card */}
       <div style={{ ...cardStyle, marginBottom: '12px' }}>
         <div style={{ fontWeight: 700, fontSize: '14px', marginBottom: '8px' }}>Billing Model</div>
-        <div style={{ fontSize: '13px' }}>{formatMoney(data.model.billing_unit)} per table per night</div>
-        <div style={{ fontSize: '13px' }}>Weekday cap: {formatMoney(data.model.nightly_cap_weekday)}</div>
-        <div style={{ fontSize: '13px' }}>Weekend cap: {formatMoney(data.model.nightly_cap_weekend)}</div>
+        <div style={{ fontSize: '13px' }}>
+          {formatMoney(data.model.billing_unit)} per {data.model.block_minutes}-min block of active play
+        </div>
+        <div style={{ fontSize: '13px' }}>
+          Weekday cap: {formatMoney(data.model.nightly_cap_weekday)}/table/night
+          ({data.model.blocks_per_night_cap_weekday} blocks)
+        </div>
+        <div style={{ fontSize: '13px' }}>
+          Weekend cap: {formatMoney(data.model.nightly_cap_weekend)}/table/night
+          ({data.model.blocks_per_night_cap_weekend} blocks)
+        </div>
       </div>
 
       {/* Tonight card */}
@@ -105,44 +119,8 @@ export default function DashboardBilling({ token, user }) {
           {formatMoney(data.tonight.total)}
         </div>
         <div style={{ fontSize: '13px', color: 'var(--on-surface-dim)', marginTop: '4px' }}>
-          {data.tonight.billable_tables} tables played
+          {data.tonight.blocks_billed} block{data.tonight.blocks_billed === 1 ? '' : 's'} billed
         </div>
-        {data.tonight.is_weekend && (
-          <div style={{ fontSize: '13px', color: 'var(--on-surface-dim)', marginTop: '2px' }}>
-            (weekend rate)
-          </div>
-        )}
-
-        {/* Cap progress bar */}
-        {data.tonight.cap && (
-          <div style={{ marginTop: '8px' }}>
-            <div style={{
-              height: '6px',
-              borderRadius: '3px',
-              background: 'var(--bg-container)',
-              overflow: 'hidden',
-            }}>
-              <div style={{
-                height: '100%',
-                width: Math.min(100, (parseFloat(data.tonight.total) / parseFloat(data.tonight.cap)) * 100) + '%',
-                background: data.tonight.cap_applied ? 'var(--tertiary)' : 'var(--secondary)',
-                borderRadius: '3px',
-                transition: 'width 0.3s',
-              }} />
-            </div>
-            <div style={{
-              fontSize: '11px',
-              color: 'var(--on-surface-dim)',
-              marginTop: '2px',
-              display: 'flex',
-              justifyContent: 'space-between',
-            }}>
-              <span>{formatMoney(data.tonight.total)}</span>
-              <span>cap: {formatMoney(data.tonight.cap)}</span>
-            </div>
-          </div>
-        )}
-
         {data.tonight.cap_applied && (
           <div style={{
             display: 'inline-block',
@@ -154,9 +132,32 @@ export default function DashboardBilling({ token, user }) {
             borderRadius: '10px',
             fontWeight: 700,
           }}>
-            Cap reached
+            Cap reached on a table
           </div>
         )}
+      </div>
+
+      {/* Play-time analytics card */}
+      <div style={{ ...cardStyle, marginBottom: '12px' }}>
+        <div style={{ fontWeight: 700, fontSize: '14px', marginBottom: '8px' }}>
+          Play Time (month to date)
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', padding: '3px 0' }}>
+          <span style={{ color: 'var(--on-surface-dim)' }}>Actual play</span>
+          <span>{data.play_analytics.actual_play_minutes} min</span>
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', padding: '3px 0' }}>
+          <span style={{ color: 'var(--on-surface-dim)' }}>Billed span</span>
+          <span>{data.play_analytics.billed_span_minutes} min</span>
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', padding: '3px 0' }}>
+          <span style={{ color: 'var(--on-surface-dim)' }}>Billed</span>
+          <span>{data.play_analytics.billed_blocks} blocks</span>
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', padding: '3px 0' }}>
+          <span style={{ color: 'var(--on-surface-dim)' }}>Unbilled remainder</span>
+          <span>{data.play_analytics.unbilled_remainder_minutes} min</span>
+        </div>
       </div>
 
       {/* Month estimate card */}
@@ -164,6 +165,9 @@ export default function DashboardBilling({ token, user }) {
         <div style={{ fontWeight: 700, fontSize: '14px', marginBottom: '8px' }}>Month to Date</div>
         <div style={{ fontFamily: 'var(--font-headline)', fontSize: '28px' }}>
           {formatMoney(data.month_estimate.total)}
+        </div>
+        <div style={{ fontSize: '13px', color: 'var(--on-surface-dim)', marginTop: '2px' }}>
+          {data.month_estimate.blocks_billed} blocks billed
         </div>
         <div style={{ marginTop: '8px' }}>
           {data.month_estimate.nights.length > 0
@@ -184,7 +188,7 @@ export default function DashboardBilling({ token, user }) {
                   >
                     <span>{dateLabel}</span>
                     <span>
-                      {night.tables} tables -- {formatMoney(night.capped)}
+                      {night.blocks_billed} block{night.blocks_billed === 1 ? '' : 's'} -- {formatMoney(night.amount)}
                       {night.cap_applied && (
                         <span style={{ color: 'var(--on-surface-dim)' }}> (capped)</span>
                       )}
@@ -204,14 +208,35 @@ export default function DashboardBilling({ token, user }) {
       {/* Payment status card */}
       <div style={{ ...cardStyle, marginBottom: '12px' }}>
         <div style={{ fontWeight: 700, fontSize: '14px', marginBottom: '8px' }}>Payment</div>
-        <div style={{ fontSize: '16px', fontWeight: 700 }}>Not connected</div>
+        <div style={{ fontSize: '16px', fontWeight: 700 }}>
+          {data.payment_status === 'connected' ? 'Connected' : 'Not connected'}
+        </div>
         <div style={{ ...labelStyle, marginTop: '4px' }}>Stripe integration coming soon.</div>
       </div>
 
       {/* Invoice history card */}
       <div style={cardStyle}>
         <div style={{ fontWeight: 700, fontSize: '14px', marginBottom: '8px' }}>Invoice History</div>
-        <div style={{ fontSize: '13px', color: 'var(--on-surface-dim)' }}>No invoices yet.</div>
+        {data.invoice_history.length > 0
+          ? data.invoice_history.map((iv) => (
+              <div
+                key={iv.period_start}
+                style={{
+                  display: 'flex', justifyContent: 'space-between',
+                  fontSize: '12px', padding: '4px 0',
+                }}
+              >
+                <span>{iv.period_start}</span>
+                <span>
+                  {formatMoney(iv.total_amount)}
+                  <span style={{ color: 'var(--on-surface-dim)' }}> ({iv.status})</span>
+                </span>
+              </div>
+            ))
+          : (
+            <div style={{ fontSize: '13px', color: 'var(--on-surface-dim)' }}>No invoices yet.</div>
+          )
+        }
       </div>
     </div>
   )
