@@ -79,4 +79,14 @@ async def usage_webhook(request: Request):
     pool = await get_pool()
     async with pool.acquire() as conn:
         applied = await stripe_service.apply_invoice_event(conn, event)
+        if applied == "paid":
+            from api.services import venue_lifecycle_service
+            stripe_inv_id = (event.get("data") or {}).get("object", {}).get("id")
+            if stripe_inv_id:
+                venue_id = await conn.fetchval(
+                    "SELECT venue_id FROM invoices WHERE stripe_invoice_id = $1",
+                    stripe_inv_id,
+                )
+                if venue_id:
+                    await venue_lifecycle_service.auto_reactivate_on_payment(conn, str(venue_id))
     return JSONResponse({"status": "ok", "applied": applied})

@@ -174,6 +174,15 @@ async def resolve_table_state(
     """Called right after a tap verifies. Decides what this phone should see:
     a lobby to wait in, a Join-or-New chooser, "table full", or a session
     resume (re-tap of a phone that already belongs to an active session)."""
+    # Gate new game creation when the venue is not active. In-progress sessions
+    # continue naturally; the tap endpoint already blocks non-active venues via
+    # AND status = 'active'. Only the new-game path is blocked here.
+    venue_status = await conn.fetchval(
+        "SELECT status FROM venues WHERE id = $1", venue_id
+    )
+    if venue_status != "active":
+        return {"phase": "venue_inactive", "venue_status": venue_status}
+
     # Re-tap resume: if this phone already belongs to an active session at
     # this table, send it straight back into that session rather than
     # showing join-or-new. Checked before _active_sessions so a returning
@@ -267,6 +276,13 @@ async def start_new_group(conn, venue_id: str, table_id: str, phone_id: str) -> 
     explicit, unlike the auto-create-lobby path in resolve_table_state,
     since a tap with active sessions already present always shows
     Join-or-New first rather than silently spawning a 2nd/3rd lobby."""
+    # Belt-and-suspenders: block new groups when venue is not active.
+    venue_status = await conn.fetchval(
+        "SELECT status FROM venues WHERE id = $1", venue_id
+    )
+    if venue_status != "active":
+        raise ValueError("venue_inactive")
+
     groups = await _active_sessions(conn, table_id)
     if len(groups) >= MAX_GROUPS_PER_TABLE:
         raise ValueError("table_full")
@@ -505,6 +521,14 @@ async def adults_only_allowed(conn, venue_id: str, table_id: str) -> bool:
 async def start_game(
     conn, lobby: dict, phone_id: str, adults_only: bool, group_label: str | None,
 ) -> dict:
+    # Belt-and-suspenders gate: if the venue was cancelled/suspended between lobby
+    # formation and the host pressing Start, reject the game start here too.
+    venue_status = await conn.fetchval(
+        "SELECT status FROM venues WHERE id = $1", lobby["venue_id"]
+    )
+    if venue_status != "active":
+        raise ValueError("venue_inactive")
+
     if lobby["status"] != "open":
         raise ValueError("lobby_not_open")
     if lobby["host_phone_id"] != phone_id:

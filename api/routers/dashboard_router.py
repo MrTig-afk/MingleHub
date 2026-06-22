@@ -4,7 +4,7 @@ import secrets
 import traceback
 import uuid
 from collections import defaultdict
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Literal, Optional
 
@@ -23,6 +23,7 @@ from api.services.billing_service import cap_blocks, BLOCK_SECONDS
 from api.services.analytics_service import range_totals
 from api.services.theme_service import resolve_active_theme
 from api.services import stripe_service
+from api.services import venue_lifecycle_service
 
 router = APIRouter(prefix="/api/dashboard", dependencies=[Depends(verify_api_key)])
 
@@ -661,13 +662,20 @@ async def get_settings(
                 """
                 SELECT name, restrict_adult_content,
                        retap_interval_minutes, billing_unit,
-                       nightly_cap_weekday, nightly_cap_weekend
+                       nightly_cap_weekday, nightly_cap_weekend,
+                       status, cancelled_at, suspended_at
                 FROM venues WHERE id = $1
                 """,
                 current_user.venue_id,
             )
         if not row:
             raise HTTPException(status_code=404, detail="Venue not found")
+        cancelled_at = row["cancelled_at"]
+        can_reactivate = (
+            row["status"] == "cancelled"
+            and cancelled_at is not None
+            and (datetime.now(timezone.utc).replace(tzinfo=None) - cancelled_at.replace(tzinfo=None)).days < 7
+        )
         return {
             "editable": {
                 "name": row["name"],
@@ -678,6 +686,12 @@ async def get_settings(
                 "billing_unit": str(row["billing_unit"]),
                 "nightly_cap_weekday": str(row["nightly_cap_weekday"]),
                 "nightly_cap_weekend": str(row["nightly_cap_weekend"]),
+            },
+            "venue_status": {
+                "status": row["status"],
+                "cancelled_at": cancelled_at.isoformat() if cancelled_at else None,
+                "suspended_at": row["suspended_at"].isoformat() if row["suspended_at"] else None,
+                "can_reactivate": can_reactivate,
             },
         }
     except HTTPException:
@@ -779,7 +793,7 @@ async def get_billing(
             venue_row = await conn.fetchrow(
                 """
                 SELECT billing_unit, nightly_cap_weekday, nightly_cap_weekend,
-                       stripe_customer_id, is_test
+                       stripe_customer_id, is_test, status AS venue_status
                 FROM venues WHERE id = $1
                 """,
                 current_user.venue_id,
@@ -884,6 +898,7 @@ async def get_billing(
 
         return {
             "is_estimate": True,
+            "venue_status": venue_row["venue_status"],
             "model": {
                 "billing_unit": str(unit),
                 "block_minutes": block_min,
@@ -926,6 +941,83 @@ async def get_billing(
         }
     except Exception:
         await notify_error("GET /dashboard/billing failed 🚨", traceback.format_exc()[:500])
+        raise HTTPException(status_code=500, detail="Internal error")
+
+
+class CancelVenueRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    reason: str = Field(..., min_length=1, max_length=500)
+
+
+@router.post("/cancel")
+@limiter.limit("5/minute")
+async def cancel_venue_endpoint(
+    request: Request,
+    body: CancelVenueRequest,
+    current_user: CurrentUser = Depends(require_role("venue_owner")),
+):
+    # BOLA: venue_id always from auth, never from the request body.
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            try:
+                # One transaction so the service's SELECT ... FOR UPDATE lock holds
+                # across the status flip + final-invoice issuance — otherwise asyncpg
+                # autocommit releases the lock immediately (double-cancel race + a
+                # partial-failure window where the venue is cancelled with no invoice).
+                async with conn.transaction():
+                    result = await venue_lifecycle_service.cancel_venue(
+                        conn, current_user.venue_id, body.reason.strip(),
+                    )
+            except ValueError as e:
+                if str(e) == "venue_suspended":
+                    raise HTTPException(
+                        status_code=409,
+                        detail="Your account is suspended. Please settle your outstanding balance first.",
+                    )
+                raise HTTPException(status_code=409, detail=str(e))
+        return result
+    except HTTPException:
+        raise
+    except Exception:
+        await notify_error("POST /dashboard/cancel failed 🚨", traceback.format_exc()[:500])
+        raise HTTPException(status_code=500, detail="Internal error")
+
+
+@router.post("/reactivate")
+@limiter.limit("5/minute")
+async def reactivate_venue_endpoint(
+    request: Request,
+    current_user: CurrentUser = Depends(require_role("venue_owner")),
+):
+    # BOLA: venue_id always from auth, no body needed.
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            try:
+                # Same atomicity reason as cancel: hold the FOR UPDATE lock across
+                # the window re-check + status flip.
+                async with conn.transaction():
+                    result = await venue_lifecycle_service.reactivate_venue(
+                        conn, current_user.venue_id,
+                    )
+            except ValueError as e:
+                if str(e) == "reactivation_window_expired":
+                    raise HTTPException(
+                        status_code=409,
+                        detail="Reactivation window has expired. Contact support.",
+                    )
+                if str(e) == "venue_suspended":
+                    raise HTTPException(
+                        status_code=409,
+                        detail="Your account is suspended. Contact support.",
+                    )
+                raise HTTPException(status_code=409, detail=str(e))
+        return result
+    except HTTPException:
+        raise
+    except Exception:
+        await notify_error("POST /dashboard/reactivate failed 🚨", traceback.format_exc()[:500])
         raise HTTPException(status_code=500, detail="Internal error")
 
 

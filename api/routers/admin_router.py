@@ -11,6 +11,7 @@ from api.auth import CurrentUser, get_current_user, require_role
 from api.db import get_pool
 from api.security import limiter, verify_api_key, get_client_ip
 from api.services.notify import notify_error
+from api.services import venue_lifecycle_service
 from api.routers.dashboard_router import VENUE_TIMEZONE
 
 # TODO: 2FA for admin
@@ -236,7 +237,7 @@ class AdminVenueOverride(BaseModel):
     nightly_cap_weekend: Optional[float] = Field(None, ge=0)
     restrict_adult_content: Optional[bool] = None
     is_test: Optional[bool] = None
-    status: Optional[Literal["active", "suspended"]] = None
+    status: Optional[Literal["active", "suspended", "cancelled"]] = None
 
 
 class PatchSupportMessage(BaseModel):
@@ -419,6 +420,12 @@ async def admin_venue_override(
                     raise HTTPException(status_code=404, detail="Venue not found")
 
                 updated_fields = []
+
+                # Status transitions go through the lifecycle service (handles
+                # final invoice, payment method archive, and audit log internally).
+                # Pop it from the generic field loop to avoid double-processing.
+                status_override = provided.pop("status", None)
+
                 for field_name, new_value in provided.items():
                     old_value = current[field_name]
 
@@ -461,6 +468,16 @@ async def admin_venue_override(
                         get_client_ip(request),
                     )
                     updated_fields.append(field_name)
+
+                # Status override handled by the lifecycle service which writes
+                # its own audit log + config override row.
+                if status_override is not None and str(current["status"]) != status_override:
+                    result = await venue_lifecycle_service.admin_change_status(
+                        conn, validated_id, status_override, stripped_reason,
+                        current_user.id, get_client_ip(request),
+                    )
+                    if result.get("updated"):
+                        updated_fields.append("status")
 
         return {"updated_fields": updated_fields, "overrides_recorded": len(updated_fields)}
     except HTTPException:
