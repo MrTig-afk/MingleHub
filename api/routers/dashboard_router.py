@@ -966,6 +966,80 @@ async def set_theme(
     return {"theme_key": body.theme_key}
 
 
+@router.get("/session-billing/{session_id}")
+@limiter.limit("120/minute")
+async def session_billing(
+    request: Request,
+    session_id: str,
+    current_user: CurrentUser = Depends(require_role("venue_owner")),
+):
+    """Per-session billing breakdown: rounds by type + active span + blocks + cost
+    + time-to-next-block. Answers 'how many rounds / minutes of each game hit a
+    15-min block, and what it costs'. Live sessions show a PROVISIONAL block count
+    (frozen only at session end). Owner-only, BOLA-checked by venue_id."""
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT gs.venue_id, gs.started_at, gs.ended_at, gs.total_rounds,
+                       gs.billable_blocks, gs.active_span_seconds, gs.active_play_seconds,
+                       gs.billing_finalized_at,
+                       GREATEST(0, EXTRACT(EPOCH FROM
+                           COALESCE(gs.last_activity_at, gs.started_at) - gs.started_at))::int
+                           AS live_span_seconds,
+                       v.billing_unit
+                FROM game_sessions gs JOIN venues v ON v.id = gs.venue_id
+                WHERE gs.id = $1 AND gs.venue_id = $2
+                """,
+                session_id, current_user.venue_id,
+            )
+            if not row:
+                raise HTTPException(status_code=404, detail="Not found")
+            type_rows = await conn.fetch(
+                "SELECT round_type, COUNT(*) AS c FROM rounds WHERE session_id = $1 GROUP BY round_type",
+                session_id,
+            )
+
+        rounds_by_type = {"chooser": 0, "trivia": 0, "roulette": 0}
+        for r in type_rows:
+            if r["round_type"] in rounds_by_type:
+                rounds_by_type[r["round_type"]] = int(r["c"])
+
+        finalized = row["billing_finalized_at"] is not None
+        span = int(row["active_span_seconds"]) if finalized else int(row["live_span_seconds"])
+        played = int(row["total_rounds"]) >= 1
+        if finalized:
+            blocks = int(row["billable_blocks"] or 0)
+        else:
+            blocks = (span // BLOCK_SECONDS) if played else 0
+        unit = row["billing_unit"]
+        amount = unit * blocks
+        # Time until the next whole block accrues (only meaningful once a round is played).
+        secs_to_next = (BLOCK_SECONDS - (span % BLOCK_SECONDS)) if played else BLOCK_SECONDS
+
+        return {
+            "session_id": session_id,
+            "finalized": finalized,
+            "rounds_by_type": rounds_by_type,
+            "total_rounds": int(row["total_rounds"]),
+            "active_span_seconds": span,
+            "active_span_minutes": round(span / 60.0, 1),
+            "active_play_seconds": int(row["active_play_seconds"] or 0) if finalized else None,
+            "block_minutes": BLOCK_SECONDS // 60,
+            "billable_blocks": blocks,
+            "billing_unit": str(unit),
+            "amount": f"{amount:.2f}",
+            "seconds_to_next_block": secs_to_next,
+            "minutes_to_next_block": round(secs_to_next / 60.0, 1),
+        }
+    except HTTPException:
+        raise
+    except Exception:
+        await notify_error("GET /dashboard/session-billing failed 🚨", traceback.format_exc()[:500])
+        raise HTTPException(status_code=500, detail="Internal error")
+
+
 class PairTagRequest(BaseModel):
     tag_uid: str = Field(min_length=4, max_length=64)
     table_number: int = Field(gt=0)
