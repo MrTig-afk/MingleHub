@@ -5,6 +5,7 @@ import traceback
 import uuid
 from collections import defaultdict
 from datetime import timedelta
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Literal, Optional
 
 import asyncpg
@@ -19,6 +20,7 @@ from api.services.notify import notify_error
 from api.services.nfc_crypto import encrypt_tag_key
 from api.services.session_service import compute_retap_state
 from api.services.billing_service import cap_blocks, BLOCK_SECONDS
+from api.services.analytics_service import range_totals
 
 router = APIRouter(prefix="/api/dashboard", dependencies=[Depends(verify_api_key)])
 
@@ -358,33 +360,10 @@ async def insights(
             else:  # 30d
                 range_start = tonight_boundary - timedelta(days=29)
 
-            totals_row = await conn.fetchrow(
-                """
-                SELECT
-                    COUNT(*) AS session_count,
-                    COALESCE(SUM(gs.total_rounds), 0) AS total_rounds,
-                    ROUND(AVG(gs.player_count)::numeric, 1) AS avg_players
-                FROM game_sessions gs
-                JOIN tables t ON t.id = gs.table_id
-                WHERE t.venue_id = $1
-                  AND gs.started_at >= $2
-                """,
-                current_user.venue_id, range_start,
-            )
-
-            avg_minutes_val = await conn.fetchval(
-                """
-                SELECT
-                    ROUND(AVG(EXTRACT(EPOCH FROM gs.ended_at - gs.started_at) / 60.0)::numeric, 1)
-                FROM game_sessions gs
-                JOIN tables t ON t.id = gs.table_id
-                WHERE t.venue_id = $1
-                  AND gs.started_at >= $2
-                  AND gs.ended_at IS NOT NULL
-                  AND gs.started_at IS NOT NULL
-                """,
-                current_user.venue_id, range_start,
-            )
+            # Session-level totals + trend: read pre-aggregated rollup for
+            # completed days + a live query for today (only today scans raw
+            # sessions). Equivalent to the old full-range scan — see test_insights_*.
+            agg = await range_totals(conn, current_user.venue_id, range_param)
 
             player_count = await conn.fetchval(
                 """
@@ -412,19 +391,6 @@ async def insights(
                 current_user.venue_id, range_start,
             )
 
-            trivia_row = await conn.fetchrow(
-                """
-                SELECT
-                    COALESCE(SUM(gs.trivia_correct), 0) AS trivia_correct,
-                    COALESCE(SUM(gs.trivia_wrong), 0) AS trivia_wrong
-                FROM game_sessions gs
-                JOIN tables t ON t.id = gs.table_id
-                WHERE t.venue_id = $1
-                  AND gs.started_at >= $2
-                """,
-                current_user.venue_id, range_start,
-            )
-
             roulette_row = await conn.fetchrow(
                 """
                 SELECT
@@ -441,45 +407,33 @@ async def insights(
                 current_user.venue_id, range_start,
             )
 
-            trend_rows = await conn.fetch(
-                """
-                SELECT
-                    date_trunc('day', (gs.started_at AT TIME ZONE 'UTC' AT TIME ZONE $3)
-                        - INTERVAL '4 hours')::date AS play_night,
-                    COUNT(*) AS session_count
-                FROM game_sessions gs
-                JOIN tables t ON t.id = gs.table_id
-                WHERE t.venue_id = $1
-                  AND gs.started_at >= $2
-                GROUP BY play_night
-                ORDER BY play_night
-                """,
-                current_user.venue_id, range_start, VENUE_TIMEZONE,
-            )
-
         round_mix = {"chooser": 0, "roulette": 0, "trivia": 0}
         for row in round_mix_rows:
             if row["round_type"] in round_mix:
                 round_mix[row["round_type"]] = int(row["count"])
 
-        trivia_correct = int(trivia_row["trivia_correct"])
-        trivia_wrong = int(trivia_row["trivia_wrong"])
+        trivia_correct = agg["trivia_correct"]
+        trivia_wrong = agg["trivia_wrong"]
         total_trivia = trivia_correct + trivia_wrong
         trivia_accuracy = round(trivia_correct / total_trivia, 3) if total_trivia > 0 else None
 
-        trend = [
-            {"date": str(row["play_night"]), "count": int(row["session_count"])}
-            for row in trend_rows
-        ]
+        trend = agg["trend"]
+
+        # ROUND_HALF_UP + exact Decimal arithmetic matches Postgres ROUND(numeric,1)
+        # so the rollup-derived averages equal the old live AVG()s exactly.
+        def _avg1(total, count):
+            if not count:
+                return None
+            return float((Decimal(total) / Decimal(count)).quantize(Decimal("0.1"), ROUND_HALF_UP))
 
         return {
             "range": range_param,
             "totals": {
-                "sessions": int(totals_row["session_count"]),
+                "sessions": agg["sessions"],
                 "players": int(player_count),
-                "rounds": int(totals_row["total_rounds"]),
-                "avg_session_minutes": float(avg_minutes_val) if avg_minutes_val is not None else None,
-                "avg_players": float(totals_row["avg_players"]) if totals_row["avg_players"] is not None else None,
+                "rounds": agg["rounds"],
+                "avg_session_minutes": _avg1(agg["duration_seconds"], agg["ended"] * 60),
+                "avg_players": _avg1(agg["sum_player"], agg["sessions"]),
             },
             "round_mix": round_mix,
             "trivia": {

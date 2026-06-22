@@ -6,6 +6,8 @@ idempotent, recomputed by a nightly job.
 A "day" is the 4am-boundary play-date (a session that runs past midnight counts
 on the night it started), matching the dashboard's "tonight" boundary.
 """
+from datetime import timedelta
+
 VENUE_TIMEZONE = "Australia/Melbourne"  # mirrors dashboard_router.VENUE_TIMEZONE
 
 DEFAULT_WINDOW_DAYS = 35  # covers the 30d insights range + buffer for late-ending sessions
@@ -74,3 +76,92 @@ async def recompute_daily_stats(conn, ref_ts=None, window_days: int = DEFAULT_WI
     )
     return {"rows_upserted": result["rows_upserted"], "venues": result["venues"],
             "window_days": window_days}
+
+
+_RANGE_DAYS = {"tonight": 0, "7d": 6, "30d": 29}
+
+
+async def range_totals(conn, venue_id, range_param: str) -> dict:
+    """Session-level totals + per-day trend for a dashboard range, read from
+    venue_daily_stats for COMPLETED days plus a small live query for TODAY (which
+    isn't rolled up yet). Equivalent to scanning raw game_sessions over the range,
+    but only the current day is scanned live — history is pre-aggregated.
+
+    Returns raw sums/counts so the caller derives averages with its own rounding.
+    """
+    days = _RANGE_DAYS[range_param]
+    bounds = await conn.fetchrow(
+        """
+        SELECT
+            (date_trunc('day', (NOW() AT TIME ZONE $1) - INTERVAL '4 hours'))::date AS today,
+            ((date_trunc('day', (NOW() AT TIME ZONE $1) - INTERVAL '4 hours')
+                + INTERVAL '4 hours') AT TIME ZONE $1) AT TIME ZONE 'UTC' AS today_start
+        """,
+        VENUE_TIMEZONE,
+    )
+    today = bounds["today"]
+    today_start = bounds["today_start"]
+    range_start_date = today - timedelta(days=days)
+
+    # Completed days: pre-aggregated rows (stat_date strictly before today).
+    closed = await conn.fetchrow(
+        """
+        SELECT
+            COALESCE(SUM(session_count), 0)        AS sessions,
+            COALESCE(SUM(total_rounds), 0)         AS rounds,
+            COALESCE(SUM(sum_player_count), 0)     AS sum_player,
+            COALESCE(SUM(ended_count), 0)          AS ended,
+            COALESCE(SUM(sum_duration_seconds), 0) AS duration,
+            COALESCE(SUM(trivia_correct), 0)       AS trivia_correct,
+            COALESCE(SUM(trivia_wrong), 0)         AS trivia_wrong
+        FROM venue_daily_stats
+        WHERE venue_id = $1 AND stat_date >= $2 AND stat_date < $3
+        """,
+        venue_id, range_start_date, today,
+    )
+
+    # Today: live aggregate (the only day scanned from raw sessions).
+    live = await conn.fetchrow(
+        """
+        SELECT
+            COUNT(*)                                                  AS sessions,
+            COALESCE(SUM(total_rounds), 0)                            AS rounds,
+            COALESCE(SUM(player_count), 0)                            AS sum_player,
+            COUNT(*) FILTER (WHERE ended_at IS NOT NULL)              AS ended,
+            COALESCE(SUM(EXTRACT(EPOCH FROM ended_at - started_at))
+                FILTER (WHERE ended_at IS NOT NULL), 0)::bigint       AS duration,
+            COALESCE(SUM(trivia_correct), 0)                          AS trivia_correct,
+            COALESCE(SUM(trivia_wrong), 0)                            AS trivia_wrong
+        FROM game_sessions
+        WHERE venue_id = $1 AND started_at >= $2
+        """,
+        venue_id, today_start,
+    )
+
+    # Per-day trend: completed days from the rollup + today's live count.
+    trend_rows = await conn.fetch(
+        """
+        SELECT stat_date AS d, session_count AS c
+        FROM venue_daily_stats
+        WHERE venue_id = $1 AND stat_date >= $2 AND stat_date < $3 AND session_count > 0
+        ORDER BY stat_date
+        """,
+        venue_id, range_start_date, today,
+    )
+    trend = [{"date": str(r["d"]), "count": int(r["c"])} for r in trend_rows]
+    if int(live["sessions"]) > 0:
+        trend.append({"date": str(today), "count": int(live["sessions"])})
+
+    def _sum(key):
+        return int(closed[key]) + int(live[key])
+
+    return {
+        "sessions": _sum("sessions"),
+        "rounds": _sum("rounds"),
+        "sum_player": _sum("sum_player"),
+        "ended": _sum("ended"),
+        "duration_seconds": _sum("duration"),
+        "trivia_correct": _sum("trivia_correct"),
+        "trivia_wrong": _sum("trivia_wrong"),
+        "trend": trend,
+    }
