@@ -34,7 +34,30 @@ VENUE_TIMEZONE = "Australia/Melbourne"
 @router.get("/me")
 @limiter.limit("60/minute")
 async def me(request: Request, current_user: CurrentUser = Depends(get_current_user)):
-    return current_user
+    result = current_user.model_dump()
+    if current_user.venue_id is None and current_user.role == "venue_owner":
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            inv = await conn.fetchrow(
+                "SELECT venue_name, address, lat, lng, place_id FROM venue_invites "
+                "WHERE used_by = $1 AND status = 'used' ORDER BY used_at DESC LIMIT 1",
+                current_user.id,
+            )
+        result["has_redeemed_invite"] = inv is not None
+        # Surface the invite prefill here too so a refresh between redeem and setup
+        # completion still pre-fills the wizard (the redeem response otherwise lives
+        # only in transient React state).
+        result["invite_prefill"] = ({
+            "venue_name": inv["venue_name"],
+            "address": inv["address"],
+            "lat": float(inv["lat"]) if inv["lat"] is not None else None,
+            "lng": float(inv["lng"]) if inv["lng"] is not None else None,
+            "place_id": inv["place_id"],
+        } if inv else None)
+    else:
+        result["has_redeemed_invite"] = None  # Not applicable
+        result["invite_prefill"] = None
+    return result
 
 
 @router.get("/venue")
@@ -1224,6 +1247,61 @@ class SetupVenueRequest(BaseModel):
     latitude: Optional[float] = None
     longitude: Optional[float] = None
     place_id: Optional[str] = Field(default=None, max_length=200)
+    # Informational only: links setup to the invite for future analytics.
+    # The hard gate is the frontend showing "Contact us" for un-invited owners.
+    invite_code: Optional[str] = Field(None, max_length=100)
+
+
+class RedeemInviteRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    code: str = Field(..., min_length=10, max_length=100)
+
+
+@router.post("/redeem-invite")
+@limiter.limit("10/minute")
+async def redeem_invite(
+    request: Request,
+    body: RedeemInviteRequest,
+    current_user: CurrentUser = Depends(require_role("venue_owner")),
+):
+    """Redeem an active invite code, marking it used and returning prefill data."""
+    if current_user.venue_id is not None:
+        raise HTTPException(status_code=409, detail="Venue already set up")
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            # Fetch the owner's email to record on the invite for analytics.
+            user_email = await conn.fetchval(
+                "SELECT email FROM users WHERE id = $1", current_user.id,
+            )
+            # Atomic single-use claim: the UPDATE's own WHERE clause enforces
+            # active + unexpired, so two concurrent redeems of the same code can't
+            # both win — the loser matches 0 rows and gets the 404 below.
+            invite = await conn.fetchrow(
+                """
+                UPDATE venue_invites
+                SET status = 'used', used_by = $1, used_at = NOW(), signup_email = $2
+                WHERE code = $3 AND status = 'active' AND expires_at > NOW()
+                RETURNING venue_name, address, lat, lng, place_id
+                """,
+                current_user.id, user_email, body.code,
+            )
+            if not invite:
+                raise HTTPException(status_code=404, detail="Invalid or expired invite code")
+        return {
+            "invite": {
+                "venue_name": invite["venue_name"],
+                "address": invite["address"],
+                "lat": float(invite["lat"]) if invite["lat"] is not None else None,
+                "lng": float(invite["lng"]) if invite["lng"] is not None else None,
+                "place_id": invite["place_id"],
+            }
+        }
+    except HTTPException:
+        raise
+    except Exception:
+        await notify_error("POST /dashboard/redeem-invite failed \U0001f6a8", traceback.format_exc()[:500])
+        raise HTTPException(status_code=500, detail="Internal error")
 
 
 @router.post("/setup-venue")

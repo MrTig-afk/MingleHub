@@ -18,6 +18,8 @@ def get_client_ip(request: Request) -> str:
 
 
 limiter = Limiter(key_func=get_client_ip)
+# TODO: swap in-memory store for Redis when scaling to multiple processes:
+#   limiter = Limiter(key_func=get_client_ip, storage_uri="redis://...")
 
 
 async def verify_api_key(request: Request, x_api_key: str = Header(...)):

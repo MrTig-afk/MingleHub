@@ -24,7 +24,12 @@ from api.routers import patron_router
 from api.security import limiter, get_client_ip
 from api.services.notify import notify_error, notify_security
 
-app = FastAPI()
+_dev = os.getenv("DEV_MODE") == "true"
+app = FastAPI(
+    docs_url="/docs" if _dev else None,
+    redoc_url="/redoc" if _dev else None,
+    openapi_url="/openapi.json" if _dev else None,
+)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 

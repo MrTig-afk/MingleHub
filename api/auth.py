@@ -134,6 +134,13 @@ async def _provision_user(conn, clerk_user_id: str) -> Optional[dict]:
         "ON CONFLICT (clerk_user_id) DO NOTHING",
         clerk_user_id, role,
     )
+    # Store the Clerk-resolved email on first provision (going forward).
+    # Runs on every provision; the WHERE email IS NULL guard makes it idempotent.
+    if email:
+        await conn.execute(
+            "UPDATE users SET email = $1 WHERE clerk_user_id = $2 AND email IS NULL",
+            email, clerk_user_id,
+        )
     return await conn.fetchrow(
         "SELECT id, clerk_user_id, venue_id, role FROM users WHERE clerk_user_id = $1",
         clerk_user_id,

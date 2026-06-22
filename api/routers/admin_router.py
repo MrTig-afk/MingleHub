@@ -1,5 +1,7 @@
+import secrets
 import traceback
 import uuid
+from datetime import datetime, timedelta
 from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -7,11 +9,27 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from api.auth import CurrentUser, get_current_user, require_role
 from api.db import get_pool
-from api.security import limiter, verify_api_key
+from api.security import limiter, verify_api_key, get_client_ip
 from api.services.notify import notify_error
 from api.routers.dashboard_router import VENUE_TIMEZONE
 
+# TODO: 2FA for admin
+# When ready, enforce MFA on admin accounts via Clerk instance settings, then
+# check the `mfa_enabled` claim in the JWT here. Until then, admin accounts
+# are protected by the ADMIN_EMAILS allowlist + Clerk's own session security.
+# See: https://clerk.com/docs/authentication/configuration/sign-up-sign-in-options#multi-factor-authentication
+
 router = APIRouter(prefix="/api/admin", dependencies=[Depends(verify_api_key)])
+
+
+async def _write_audit_log(conn, actor_id, action, target_type, target_id, detail, ip):
+    await conn.execute(
+        """
+        INSERT INTO admin_audit_log (id, actor_id, action, target_type, target_id, detail, ip, created_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+        """,
+        str(uuid.uuid4()), actor_id, action, target_type, target_id, detail, ip,
+    )
 
 
 @router.get("/ping")
@@ -237,6 +255,21 @@ class CreateLead(BaseModel):
     notes: Optional[str] = Field(None, max_length=2000)
 
 
+class CreateVenueInvite(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    invited_email: str = Field(..., min_length=3, max_length=320)
+    venue_name: str = Field(..., min_length=1, max_length=120)
+    address: Optional[str] = Field(None, max_length=400)
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    place_id: Optional[str] = Field(None, max_length=200)
+
+
+class RevokeVenueInvite(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    invite_id: str = Field(..., min_length=1, max_length=50)
+
+
 # ---------------------------------------------------------------------------
 # 2A. GET /api/admin/venues/{venue_id} -- Venue Detail
 # ---------------------------------------------------------------------------
@@ -415,6 +448,17 @@ async def admin_venue_override(
                         str(new_value),
                         stripped_reason,
                         current_user.id,
+                    )
+                    await _write_audit_log(
+                        conn, current_user.id, 'venue_config_override', 'venue',
+                        validated_id,
+                        {
+                            "field_name": field_name,
+                            "old_value": str(old_value),
+                            "new_value": str(new_value),
+                            "reason": stripped_reason,
+                        },
+                        get_client_ip(request),
                     )
                     updated_fields.append(field_name)
 
@@ -750,4 +794,139 @@ async def admin_team_list(
         raise
     except Exception:
         await notify_error("GET /admin/team failed \U0001f6a8", traceback.format_exc()[:500])
+        raise HTTPException(status_code=500, detail="Internal error")
+
+
+# ---------------------------------------------------------------------------
+# 2I. POST /api/admin/invites -- Create Venue Invite
+# ---------------------------------------------------------------------------
+
+@router.post("/invites", status_code=201)
+@limiter.limit("30/minute")
+async def create_invite(
+    request: Request,
+    body: CreateVenueInvite,
+    current_user: CurrentUser = Depends(require_role("admin")),
+):
+    try:
+        invited_email = body.invited_email.strip()
+        venue_name = body.venue_name.strip()
+        invite_id = str(uuid.uuid4())
+        code = secrets.token_urlsafe(32)
+        expires_at = datetime.utcnow() + timedelta(hours=24)
+
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO venue_invites
+                    (id, code, invited_email, venue_name, address, lat, lng, place_id, status, expires_at, created_by)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'active', $9, $10)
+                """,
+                invite_id, code, invited_email, venue_name,
+                body.address, body.latitude, body.longitude, body.place_id,
+                expires_at, current_user.id,
+            )
+            await _write_audit_log(
+                conn, current_user.id, 'invite_create', 'venue_invite',
+                invite_id,
+                {"invited_email": invited_email, "venue_name": venue_name},
+                get_client_ip(request),
+            )
+
+        return {
+            "id": invite_id,
+            "code": code,
+            "invited_email": invited_email,
+            "venue_name": venue_name,
+            "expires_at": expires_at.isoformat(),
+            "status": "active",
+        }
+    except HTTPException:
+        raise
+    except Exception:
+        await notify_error("POST /admin/invites failed \U0001f6a8", traceback.format_exc()[:500])
+        raise HTTPException(status_code=500, detail="Internal error")
+
+
+# ---------------------------------------------------------------------------
+# 2J. GET /api/admin/invites -- List Venue Invites
+# ---------------------------------------------------------------------------
+
+@router.get("/invites")
+@limiter.limit("60/minute")
+async def list_invites(
+    request: Request,
+    current_user: CurrentUser = Depends(require_role("admin")),
+):
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT id, code, invited_email, signup_email, venue_name, status, expires_at, created_at
+                FROM venue_invites
+                ORDER BY created_at DESC
+                """
+            )
+
+        return {
+            "invites": [
+                {
+                    "id": str(row["id"]),
+                    "code": row["code"],
+                    "invited_email": row["invited_email"],
+                    "signup_email": row["signup_email"],
+                    "venue_name": row["venue_name"],
+                    "status": row["status"],
+                    "expires_at": row["expires_at"].isoformat() if row["expires_at"] else None,
+                    "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+                }
+                for row in rows
+            ]
+        }
+    except HTTPException:
+        raise
+    except Exception:
+        await notify_error("GET /admin/invites failed \U0001f6a8", traceback.format_exc()[:500])
+        raise HTTPException(status_code=500, detail="Internal error")
+
+
+# ---------------------------------------------------------------------------
+# 2K. POST /api/admin/invites/revoke -- Revoke Venue Invite
+# ---------------------------------------------------------------------------
+
+@router.post("/invites/revoke")
+@limiter.limit("30/minute")
+async def revoke_invite(
+    request: Request,
+    body: RevokeVenueInvite,
+    current_user: CurrentUser = Depends(require_role("admin")),
+):
+    try:
+        try:
+            validated_id = str(uuid.UUID(body.invite_id))
+        except (ValueError, AttributeError):
+            raise HTTPException(status_code=404, detail="Invite not found")
+
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "UPDATE venue_invites SET status = 'revoked' WHERE id = $1 AND status = 'active' RETURNING id",
+                validated_id,
+            )
+            if not row:
+                raise HTTPException(status_code=404, detail="Invite not found or not active")
+            await _write_audit_log(
+                conn, current_user.id, 'invite_revoke', 'venue_invite',
+                validated_id,
+                {},
+                get_client_ip(request),
+            )
+
+        return {"id": str(row["id"]), "status": "revoked"}
+    except HTTPException:
+        raise
+    except Exception:
+        await notify_error("POST /admin/invites/revoke failed \U0001f6a8", traceback.format_exc()[:500])
         raise HTTPException(status_code=500, detail="Internal error")
