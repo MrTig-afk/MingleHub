@@ -52,7 +52,14 @@ export default function AdminRoot() {
     return (
       <ClerkProvider publishableKey={CLERK_KEY} afterSignOutUrl="/admin">
         <SignedOut>
-          <Centered><SignIn routing="hash" /></Centered>
+          <Centered>
+            {/* Land on /admin after sign-in, not the patron root. */}
+            <SignIn
+              routing="hash"
+              forceRedirectUrl="/admin"
+              signUpForceRedirectUrl="/admin"
+            />
+          </Centered>
         </SignedOut>
         <SignedIn>
           <ClerkAuthed />

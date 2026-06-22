@@ -68,7 +68,16 @@ export default function DashboardRoot() {
     return (
       <ClerkProvider publishableKey={CLERK_KEY} afterSignOutUrl="/dashboard">
         <SignedOut>
-          <Centered><SignIn routing="hash" /></Centered>
+          <Centered>
+            {/* After sign-in/up, land on /dashboard (not the patron root). An owner
+                with no venue yet is then routed to the setup wizard by DashboardInner;
+                an existing owner/staff goes straight to their dashboard. */}
+            <SignIn
+              routing="hash"
+              forceRedirectUrl="/dashboard"
+              signUpForceRedirectUrl="/dashboard"
+            />
+          </Centered>
         </SignedOut>
         <SignedIn>
           <ClerkAuthed />
