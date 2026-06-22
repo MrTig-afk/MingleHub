@@ -20,11 +20,34 @@ from api.dev_fixtures import (
     VENUE_A_ID,
     VENUE_B_ID,
 )
+from api.services.analytics_service import recompute_daily_stats
 from api.tests.conftest import dev_login
 
 
 def auth_header(token):
     return {"Authorization": f"Bearer {token}"}
+
+
+def _rollup():
+    """Roll completed days into venue_daily_stats so insights (which reads the
+    rollup for closed days) reflects just-seeded historical sessions."""
+    async def _q():
+        conn = await asyncpg.connect(os.environ["DATABASE_URL"])
+        try:
+            await recompute_daily_stats(conn)
+        finally:
+            await conn.close()
+    asyncio.run(_q())
+
+
+def _clear_daily_stats(venue_id):
+    async def _q():
+        conn = await asyncpg.connect(os.environ["DATABASE_URL"])
+        try:
+            await conn.execute("DELETE FROM venue_daily_stats WHERE venue_id = $1", venue_id)
+        finally:
+            await conn.close()
+    asyncio.run(_q())
 
 
 # ---------------------------------------------------------------------------
@@ -411,6 +434,7 @@ def test_insights_7d_range(client, api_key_header, fresh_table):
 
     started = _utcnow() - timedelta(days=3)
     session_id = _insert_session(table_id, VENUE_A_ID, started_at=started, ended_at=None)
+    _rollup()  # closed-day session must be rolled up before insights reads it
 
     try:
         token = dev_login(client, api_key_header, OWNER_A_CLERK_ID)
@@ -420,6 +444,7 @@ def test_insights_7d_range(client, api_key_header, fresh_table):
         assert resp.json()["totals"]["sessions"] >= 1
     finally:
         _delete_session(session_id)
+        _clear_daily_stats(VENUE_A_ID)
 
 
 def test_insights_30d_range(client, api_key_header, fresh_table):
@@ -428,6 +453,7 @@ def test_insights_30d_range(client, api_key_header, fresh_table):
 
     started = _utcnow() - timedelta(days=20)
     session_id = _insert_session(table_id, VENUE_A_ID, started_at=started, ended_at=None)
+    _rollup()  # closed-day session must be rolled up before insights reads it
 
     try:
         token = dev_login(client, api_key_header, OWNER_A_CLERK_ID)
@@ -437,6 +463,7 @@ def test_insights_30d_range(client, api_key_header, fresh_table):
         assert resp.json()["totals"]["sessions"] >= 1
     finally:
         _delete_session(session_id)
+        _clear_daily_stats(VENUE_A_ID)
 
 
 def test_insights_7d_excludes_session_outside_window(client, api_key_header, fresh_table):
