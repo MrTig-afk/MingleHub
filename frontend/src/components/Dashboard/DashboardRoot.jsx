@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { ClerkProvider, SignedIn, SignedOut, SignIn, useAuth, useClerk } from '@clerk/clerk-react'
-import { fetchMe, fetchVenue } from '../../services/dashboardApi'
+import { fetchMe, fetchVenue, redeemInvite } from '../../services/dashboardApi'
 import PairTags from '../PairTags/PairTags.jsx'
 import DashboardLogin from './DashboardLogin.jsx'
 import DashboardShell from './DashboardShell.jsx'
@@ -148,11 +148,12 @@ function DevAuthed() {
 // The dashboard itself, given an already-resolved bearer token.
 // ---------------------------------------------------------------------------
 function DashboardInner({ token, onLogout, renderUnauth }) {
-  const [authState, setAuthState] = useState('loading') // loading | ok | setup | admin_wrong_surface | unauth | error
+  const [authState, setAuthState] = useState('loading') // loading | ok | setup | no_invite | invite_error | admin_wrong_surface | unauth | error
   const [user, setUser] = useState(null)
   const [venue, setVenue] = useState(null)
   const [error, setError] = useState(null)
   const [path, setPath] = useState(window.location.pathname)
+  const [prefill, setPrefill] = useState(null)
 
   const checkAuth = async () => {
     setAuthState('loading')
@@ -164,9 +165,30 @@ function DashboardInner({ token, onLogout, renderUnauth }) {
         return
       }
       if (!me.venue_id) {
-        // A newly-provisioned owner with no venue yet -> the setup wizard.
         setUser(me)
-        setAuthState('setup')
+        // Check for ?invite=CODE in the URL
+        const params = new URLSearchParams(window.location.search)
+        const inviteCode = params.get('invite')
+        if (inviteCode) {
+          try {
+            const { invite } = await redeemInvite(token, inviteCode)
+            // Clean the URL (remove ?invite=...)
+            window.history.replaceState({}, '', '/dashboard')
+            setPrefill(invite)
+            setAuthState('setup')
+          } catch (e) {
+            setError(e.message || 'Invalid or expired invite')
+            setAuthState('invite_error')
+          }
+        } else if (me.has_redeemed_invite) {
+          // Owner redeemed an invite previously but hasn't finished setup. Re-hydrate
+          // the prefill from /me so a page refresh still pre-fills the wizard.
+          if (me.invite_prefill) setPrefill(me.invite_prefill)
+          setAuthState('setup')
+        } else {
+          // No venue, no invite -> locked "Contact us" screen
+          setAuthState('no_invite')
+        }
         return
       }
       const v = await fetchVenue(token)
@@ -196,7 +218,7 @@ function DashboardInner({ token, onLogout, renderUnauth }) {
 
   if (authState === 'loading') return <LoadingShimmer />
   if (authState === 'unauth') return renderUnauth()
-  if (authState === 'setup') return <VenueSetup token={token} onDone={checkAuth} navigate={navigate} />
+  if (authState === 'setup') return <VenueSetup token={token} onDone={checkAuth} navigate={navigate} prefill={prefill} />
 
   if (authState === 'admin_wrong_surface') {
     return (
@@ -220,6 +242,36 @@ function DashboardInner({ token, onLogout, renderUnauth }) {
           <button onClick={onLogout} style={{ ...buttonStyle, background: 'transparent', color: 'var(--on-surface-dim)', marginTop: '10px' }}>
             Log out / use a different account
           </button>
+        </div>
+      </Centered>
+    )
+  }
+
+  if (authState === 'no_invite') {
+    return (
+      <Centered>
+        <div style={{ ...cardStyle, maxWidth: '480px', textAlign: 'center' }}>
+          <h2 style={{ fontFamily: 'var(--font-headline)', fontSize: '22px', margin: '0 0 12px' }}>
+            Welcome to MingleHub
+          </h2>
+          <p style={{ color: 'var(--on-surface-dim)', fontSize: '14px', margin: '0 0 20px' }}>
+            To get started, you need an invite from MingleHub.
+            Contact us to get your venue set up.
+          </p>
+          <button onClick={onLogout} style={buttonStyle}>Log out</button>
+        </div>
+      </Centered>
+    )
+  }
+
+  if (authState === 'invite_error') {
+    return (
+      <Centered>
+        <div style={{ ...cardStyle, maxWidth: '480px', textAlign: 'center' }}>
+          <p style={{ color: 'var(--tertiary)', fontFamily: 'var(--font-mono)', fontSize: '13px', marginBottom: '16px' }}>
+            {error}
+          </p>
+          <button onClick={onLogout} style={buttonStyle}>Log out</button>
         </div>
       </Centered>
     )

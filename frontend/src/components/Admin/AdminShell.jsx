@@ -8,6 +8,7 @@ const adminLinks = [
   { path: '/admin/support', label: 'Support' },
   { path: '/admin/team', label: 'Team' },
   { path: '/admin/leads', label: 'Leads' },
+  { path: '/admin/invites', label: 'Invites' },
 ]
 
 export default function AdminShell({

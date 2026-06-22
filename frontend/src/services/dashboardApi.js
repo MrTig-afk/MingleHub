@@ -140,3 +140,14 @@ export const geoAutocomplete = (token, q) =>
       if (!r.ok) return { suggestions: [] }
       return r.json()
     })
+
+// Redeem a venue invite code. Returns { invite: { venue_name, address, lat, lng, place_id } }.
+export const redeemInvite = (token, code) =>
+  fetch(`${BASE}/api/dashboard/redeem-invite`, {
+    method: 'POST',
+    headers: h(token),
+    body: JSON.stringify({ code }),
+  }).then(async (r) => {
+    if (!r.ok) throw new Error((await r.json()).detail || r.status)
+    return r.json()
+  })

@@ -9,6 +9,7 @@ import AdminVenueDetail from './AdminVenueDetail.jsx'
 import AdminSupport from './AdminSupport.jsx'
 import AdminTeam from './AdminTeam.jsx'
 import AdminLeads from './AdminLeads.jsx'
+import AdminInvites from './AdminInvites.jsx'
 import { cardStyle, buttonStyle } from '../Dashboard/dashboardStyles'
 
 const CLERK_KEY = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY
@@ -207,6 +208,8 @@ function AdminInner({ token, onLogout, renderUnauth }) {
     content = <AdminTeam token={token} />
   } else if (path === '/admin/leads') {
     content = <AdminLeads token={token} />
+  } else if (path === '/admin/invites') {
+    content = <AdminInvites token={token} />
   } else {
     content = (
       <div style={{ padding: '48px 0', textAlign: 'center', color: 'var(--on-surface-dim)' }}>

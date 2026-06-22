@@ -62,14 +62,18 @@ function Dropdown({ items, onPick }) {
 // name and address fields use a keyless (Photon/OSM, AU-biased) autocomplete: picking a
 // named place from the NAME field also auto-fills the address; the ADDRESS field is the
 // fallback for venues not in OSM. Then setup-venue creates the venue + tables.
-export default function VenueSetup({ token, onDone, navigate }) {
-  const [name, setName] = useState('')
+export default function VenueSetup({ token, onDone, navigate, prefill }) {
+  const [name, setName] = useState(prefill?.venue_name || '')
   const [venueType, setVenueType] = useState('bar')
   const [tableCount, setTableCount] = useState(4)
   const [allowAdult, setAllowAdult] = useState(false)
-  const [address, setAddress] = useState('')
+  const [address, setAddress] = useState(prefill?.address || '')
   const [created, setCreated] = useState(null) // setup-venue response -> success screen
-  const [coords, setCoords] = useState({ latitude: null, longitude: null, place_id: null })
+  const [coords, setCoords] = useState({
+    latitude: prefill?.lat ?? null,
+    longitude: prefill?.lng ?? null,
+    place_id: prefill?.place_id ?? null,
+  })
   const [nameSug, setNameSug] = useState([])
   const [addrSug, setAddrSug] = useState([])
   const [showName, setShowName] = useState(false)

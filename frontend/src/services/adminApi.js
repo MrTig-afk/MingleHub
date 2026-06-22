@@ -1,7 +1,7 @@
-import { devLogin } from './dashboardApi'
+import { devLogin, geoAutocomplete } from './dashboardApi'
 
-// Re-export devLogin — the POST /api/auth/dev-login endpoint is role-agnostic.
-export { devLogin }
+// Re-export devLogin and geoAutocomplete — shared utilities used by admin components.
+export { devLogin, geoAutocomplete }
 
 const BASE = import.meta.env.VITE_API_URL || ''
 const KEY = import.meta.env.VITE_API_KEY
@@ -69,3 +69,30 @@ export const createAdminLead = (token, body) =>
 export const fetchAdminTeam = (token) =>
   fetch(`${BASE}/api/admin/team`, { headers: h(token) })
     .then(async (r) => { if (!r.ok) throw new Error((await r.json()).detail || r.status); return r.json() })
+
+export const createInvite = (token, body) =>
+  fetch(`${BASE}/api/admin/invites`, {
+    method: 'POST',
+    headers: h(token),
+    body: JSON.stringify(body),
+  }).then(async (r) => {
+    if (!r.ok) throw new Error((await r.json()).detail || r.status)
+    return r.json()
+  })
+
+export const fetchInvites = (token) =>
+  fetch(`${BASE}/api/admin/invites`, { headers: h(token) })
+    .then(async (r) => {
+      if (!r.ok) throw new Error((await r.json()).detail || r.status)
+      return r.json()
+    })
+
+export const revokeInvite = (token, inviteId) =>
+  fetch(`${BASE}/api/admin/invites/revoke`, {
+    method: 'POST',
+    headers: h(token),
+    body: JSON.stringify({ invite_id: inviteId }),
+  }).then(async (r) => {
+    if (!r.ok) throw new Error((await r.json()).detail || r.status)
+    return r.json()
+  })
