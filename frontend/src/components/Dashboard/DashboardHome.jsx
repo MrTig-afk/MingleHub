@@ -19,7 +19,7 @@ export default function DashboardHome({ token, navigate }) {
       const tables = await fetchTables(token).catch(() => [])
       return { ...overview, tables }
     }),
-    { intervalMs: 7000, tokenKey: 'mh_dashboard_token' }
+    { intervalMs: 7000, tokenKey: 'mh_dashboard_token', cacheKey: 'dash:home' }
   )
 
   // Tick every 10 seconds so "updated N ago" re-renders without a new fetch.

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { fetchInsights } from '../../services/dashboardApi'
 import { buttonStyle, buttonSecondaryStyle, cardStyle } from './dashboardStyles'
+import { readCache, writeCache } from './usePolling'
 
 const shimmerCard = (height = 80) => ({
   ...cardStyle,
@@ -63,15 +64,17 @@ function ProportionalBar({ count, maxCount, color = 'rgba(151, 71, 255, 0.2)' })
 
 export default function DashboardInsights({ token }) {
   // data: null means loading has not completed yet for the current range.
-  const [data, setData] = useState(null)
+  const ckey = (r) => `dash:insights:${r}`
+  // data: null means loading not done for the current range; seeded from the SWR cache.
+  const [data, setData] = useState(() => readCache(ckey('tonight')) ?? null)
   const [fetchError, setFetchError] = useState(null)
   const [range, setRange] = useState('tonight')
   // Bumped by Retry to re-trigger the fetch effect when the range is unchanged.
   const [reloadKey, setReloadKey] = useState(0)
 
-  // When range changes via the selector button, reset data to null so shimmer shows.
+  // On range change, seed instantly from cache for that range (shimmer only if uncached).
   const changeRange = (newRange) => {
-    setData(null)
+    setData(readCache(ckey(newRange)) ?? null)
     setFetchError(null)
     setRange(newRange)
   }
@@ -89,6 +92,7 @@ export default function DashboardInsights({ token }) {
         const d = await fetchInsights(token, range)
         if (cancelled) return
         setData(d)
+        writeCache(ckey(range), d)
         setFetchError(null)
       } catch (e) {
         if (cancelled) return

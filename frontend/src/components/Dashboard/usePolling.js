@@ -1,15 +1,45 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
-// Shared fetch-on-mount + interval poll + visibility-pause hook.
+// Module-level stale-while-revalidate cache, shared across mounts. Keyed by the
+// caller's cacheKey. Re-opening a tab seeds state from here so it renders the last
+// value INSTANTLY (no shimmer) while a background fetch revalidates. Lives for the
+// SPA session; cleared on logout/reload. Opt-in: no cacheKey -> no caching (old
+// behavior, e.g. for per-table-detail views you don't want to cross-show).
+const swrCache = new Map()
+
+export function clearDashboardCache() {
+  swrCache.clear()
+}
+
+// For components with their own fetch effect (e.g. range-dependent Insights) to
+// share the same SWR cache: seed from readCache(key), persist with writeCache.
+export function readCache(key) {
+  return swrCache.has(key) ? swrCache.get(key) : undefined
+}
+export function writeCache(key, value) {
+  swrCache.set(key, value)
+}
+
+// Shared fetch-on-mount + interval poll + visibility-pause hook, with optional SWR.
 // All setState calls happen after await (react-hooks/set-state-in-effect compliant).
 // The interval effect depends only on intervalMs (constant), so it never tears
 // down due to status changes — fixing the churn in the old per-component polls.
-export default function usePolling(fetchFn, { intervalMs = 7000, tokenKey = 'mh_dashboard_token' } = {}) {
-  const [data, setData] = useState(null)
-  const [status, setStatus] = useState('loading')
+// intervalMs <= 0 disables the background poll (for non-live tabs: settings, billing).
+export default function usePolling(
+  fetchFn,
+  { intervalMs = 7000, tokenKey = 'mh_dashboard_token', cacheKey = null } = {},
+) {
+  const cached = cacheKey ? swrCache.get(cacheKey) : undefined
+  const [data, setData] = useState(cached ?? null)
+  const [status, setStatus] = useState(cached !== undefined ? 'ready' : 'loading')
   const [error, setError] = useState(null)
   const [lastUpdatedAt, setLastUpdatedAt] = useState(null)
   const [reloadKey, setReloadKey] = useState(0)
+
+  // Write-through: every fresh value updates the shared cache.
+  const store = useCallback((d) => {
+    if (cacheKey) swrCache.set(cacheKey, d)
+  }, [cacheKey])
 
   // Always call the latest fetchFn without putting it in effect deps.
   const fetchFnRef = useRef(fetchFn)
@@ -32,6 +62,7 @@ export default function usePolling(fetchFn, { intervalMs = 7000, tokenKey = 'mh_
         const d = await fetchFnRef.current()
         if (cancelled) return
         setData(d)
+        store(d)
         setStatus('ready')
         setLastUpdatedAt(new Date())
         setError(null)
@@ -53,11 +84,13 @@ export default function usePolling(fetchFn, { intervalMs = 7000, tokenKey = 'mh_
   // Effect 2 — interval poll. Depends only on intervalMs (constant in practice),
   // so the setInterval is never recreated due to status changes.
   useEffect(() => {
+    if (intervalMs <= 0) return undefined // non-live tab: cache + on-demand only
     const id = setInterval(() => {
       if (pausedRef.current) return
       fetchFnRef.current()
         .then((d) => {
           setData(d)
+          store(d)
           setStatus('ready')
           setLastUpdatedAt(new Date())
           setError(null)
@@ -86,6 +119,7 @@ export default function usePolling(fetchFn, { intervalMs = 7000, tokenKey = 'mh_
         fetchFnRef.current()
           .then((d) => {
             setData(d)
+            store(d)
             setStatus('ready')
             setLastUpdatedAt(new Date())
             setError(null)

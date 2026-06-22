@@ -148,7 +148,7 @@ function SessionCard({ session }) {
 export default function DashboardTableDetail({ token, tableId, navigate, user }) {
   const { data, status, error, reload } = usePolling(
     () => fetchTableDetail(token, tableId),
-    { intervalMs: 7000, tokenKey: 'mh_dashboard_token' }
+    { intervalMs: 7000, tokenKey: 'mh_dashboard_token', cacheKey: `dash:table:${tableId}` }
   )
 
   if (status === 'loading') {

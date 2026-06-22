@@ -13,7 +13,7 @@ const shimmerCard = (height = 80) => ({
 export default function AdminHome({ token, navigate }) {
   const { data, status, error, lastUpdatedAt, reload } = usePolling(
     () => fetchAdminOverview(token),
-    { intervalMs: 7000, tokenKey: 'mh_admin_token' }
+    { intervalMs: 7000, tokenKey: 'mh_admin_token', cacheKey: 'admin:home' }
   )
 
   // Tick every 10 seconds so "updated N ago" re-renders without a new fetch.

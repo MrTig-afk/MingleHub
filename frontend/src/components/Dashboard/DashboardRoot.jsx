@@ -11,6 +11,7 @@ import DashboardInsights from './DashboardInsights.jsx'
 import DashboardSettings from './DashboardSettings.jsx'
 import DashboardBilling from './DashboardBilling.jsx'
 import VenueSetup from './VenueSetup.jsx'
+import { clearDashboardCache } from './usePolling'
 import { cardStyle, buttonStyle } from './dashboardStyles'
 
 // Clerk activates when its publishable key is present; otherwise the dev-login flow
@@ -108,7 +109,7 @@ function ClerkAuthed() {
   return (
     <DashboardInner
       token={token}
-      onLogout={() => signOut({ redirectUrl: '/dashboard' })}
+      onLogout={() => { clearDashboardCache(); signOut({ redirectUrl: '/dashboard' }) }}
       // A valid Clerk session whose user isn't provisioned in `users` yet.
       renderUnauth={() => (
         <Centered>
@@ -131,7 +132,7 @@ function ClerkAuthed() {
 function DevAuthed() {
   const [token, setToken] = useState(() => localStorage.getItem('mh_dashboard_token'))
   const login = () => setToken(localStorage.getItem('mh_dashboard_token'))
-  const onLogout = () => { localStorage.removeItem('mh_dashboard_token'); setToken(null); navigate('/dashboard/login') }
+  const onLogout = () => { clearDashboardCache(); localStorage.removeItem('mh_dashboard_token'); setToken(null); navigate('/dashboard/login') }
 
   if (!token) return <DashboardLogin onLoginSuccess={login} />
   return (

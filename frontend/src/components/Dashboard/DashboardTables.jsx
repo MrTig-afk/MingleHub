@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react'
 import { fetchTables } from '../../services/dashboardApi'
 import { buttonStyle, cardStyle, labelStyle } from './dashboardStyles'
+import usePolling from './usePolling'
 
 const shimmerCard = (height = 64) => ({
   ...cardStyle,
@@ -24,35 +24,11 @@ const smallChip = (extra) => ({
 })
 
 export default function DashboardTables({ token, navigate }) {
-  const [tables, setTables] = useState(null)
-  const [status, setStatus] = useState('loading')
-  const [error, setError] = useState(null)
-  // Bumped by Retry to re-trigger the fetch effect (deps otherwise unchanged).
-  const [reloadKey, setReloadKey] = useState(0)
-
-  useEffect(() => {
-    let cancelled = false
-    const run = async () => {
-      try {
-        const data = await fetchTables(token)
-        if (cancelled) return
-        setTables(data)
-        setStatus('ready')
-      } catch (e) {
-        if (cancelled) return
-        const msg = e.message || ''
-        if (msg.includes('401') || msg.includes('token') || msg.includes('expired')) {
-          localStorage.removeItem('mh_dashboard_token')
-          window.location.reload()
-          return
-        }
-        setStatus('error')
-        setError(msg)
-      }
-    }
-    run()
-    return () => { cancelled = true }
-  }, [token, reloadKey])
+  // SWR: seeded instantly from cache on revisit, then revalidated + polled.
+  const { data: tables, status, error, reload } = usePolling(
+    () => fetchTables(token),
+    { intervalMs: 7000, tokenKey: 'mh_dashboard_token', cacheKey: 'dash:tables' },
+  )
 
   if (status === 'loading') {
     return (
@@ -69,7 +45,7 @@ export default function DashboardTables({ token, navigate }) {
           Could not load tables. {error}
         </p>
         <button
-          onClick={() => { setStatus('loading'); setError(null); setReloadKey((k) => k + 1) }}
+          onClick={reload}
           style={buttonStyle}
         >
           Retry
