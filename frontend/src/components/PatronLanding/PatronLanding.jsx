@@ -102,6 +102,15 @@ export default function PatronLanding() {
     return () => { cancelled = true }
   }, [])
 
+  // Venue inactive: the venue has been cancelled or suspended — no new games.
+  if (status === 'venue_inactive') {
+    return (
+      <div style={{ padding: '32px 20px', textAlign: 'center', color: 'var(--on-surface-dim)' }}>
+        <p>This venue is not currently active. Games are temporarily unavailable.</p>
+      </div>
+    )
+  }
+
   // Single active seat: this phone tapped a different table while still in a live
   // game elsewhere — let it choose to switch (leave the old game) or keep playing.
   if (status === 'switch_confirm') {

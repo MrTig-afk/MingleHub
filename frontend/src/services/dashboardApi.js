@@ -141,6 +141,26 @@ export const geoAutocomplete = (token, q) =>
       return r.json()
     })
 
+export const cancelVenue = (token, reason) =>
+  fetch(`${BASE}/api/dashboard/cancel`, {
+    method: 'POST',
+    headers: h(token),
+    body: JSON.stringify({ reason }),
+  }).then(async (r) => {
+    if (!r.ok) throw new Error((await r.json()).detail || r.status)
+    return r.json()
+  })
+
+export const reactivateVenue = (token) =>
+  fetch(`${BASE}/api/dashboard/reactivate`, {
+    method: 'POST',
+    headers: h(token),
+    body: JSON.stringify({}),
+  }).then(async (r) => {
+    if (!r.ok) throw new Error((await r.json()).detail || r.status)
+    return r.json()
+  })
+
 // Redeem a venue invite code. Returns { invite: { venue_name, address, lat, lng, place_id } }.
 export const redeemInvite = (token, code) =>
   fetch(`${BASE}/api/dashboard/redeem-invite`, {

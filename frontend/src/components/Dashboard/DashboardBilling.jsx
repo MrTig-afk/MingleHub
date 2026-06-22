@@ -76,6 +76,18 @@ export default function DashboardBilling({ token, user }) {
 
   return (
     <div>
+      {/* Venue status note — shown when not active */}
+      {data.venue_status && data.venue_status !== 'active' && (
+        <div style={{
+          ...cardStyle,
+          background: 'rgba(100,100,100,0.15)',
+          marginBottom: '16px',
+          fontSize: '13px',
+        }}>
+          Your venue is currently <strong>{data.venue_status}</strong>. Existing invoices are shown below.
+        </div>
+      )}
+
       {/* Estimate disclaimer badge — stronger styling */}
       <div style={{
         ...cardStyle,

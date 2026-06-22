@@ -355,6 +355,7 @@ export default function AdminVenueDetail({ token, venueId, navigate }) {
           >
             <option value="active">active</option>
             <option value="suspended">suspended</option>
+            <option value="cancelled">cancelled</option>
           </select>
         </div>
 
