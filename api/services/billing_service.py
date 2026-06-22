@@ -27,7 +27,9 @@ IDLE_CUTOFF_SECONDS = 2 * 60   # gaps longer than this are "stepped away", not p
 
 def cap_blocks(nightly_cap, billing_unit) -> int:
     """Max billable blocks per table per night = cap dollars / unit price.
-    e.g. $30 cap / $3 unit = 10 blocks. Guards a zero/None unit."""
+    e.g. $30 cap / $3 unit = 10 blocks. Guards a zero/None cap or unit."""
+    if not nightly_cap or nightly_cap <= 0:
+        return 0
     if not billing_unit or billing_unit <= 0:
         return 0
     return int(nightly_cap // billing_unit)
@@ -165,38 +167,42 @@ async def recompute_invoices(conn, ref_ts=None) -> dict:
             summary["skipped_paid"] += 1
             continue
 
-        if existing:
-            invoice_id = existing["id"]
-            await conn.execute(
-                "DELETE FROM invoice_line_items WHERE invoice_id = $1", invoice_id)
-        else:
-            invoice_id = uuid.uuid4()
-            await conn.execute(
-                """INSERT INTO invoices (id, venue_id, period_start, period_end, status)
-                   VALUES ($1, $2, $3, $4, 'pending')""",
-                invoice_id, venue_id, period_start, period_end,
-            )
+        # Per-invoice atomic: delete-then-reinsert line items + total update never
+        # half-applies, regardless of whether the caller wraps the whole run.
+        # (asyncpg nests this as a savepoint if the caller already has a txn.)
+        async with conn.transaction():
+            if existing:
+                invoice_id = existing["id"]
+                await conn.execute(
+                    "DELETE FROM invoice_line_items WHERE invoice_id = $1", invoice_id)
+            else:
+                invoice_id = uuid.uuid4()
+                await conn.execute(
+                    """INSERT INTO invoices (id, venue_id, period_start, period_end, status)
+                       VALUES ($1, $2, $3, $4, 'pending')""",
+                    invoice_id, venue_id, period_start, period_end,
+                )
 
-        total = 0
-        for r in venue_rows:
-            cap = cap_we if r["dow"] in (0, 6) else cap_wd   # 0=Sun, 6=Sat
-            raw = r["raw_blocks"]
-            units = min(raw, cap)
-            amount = unit * units
-            total += amount
-            await conn.execute(
-                """INSERT INTO invoice_line_items
-                       (id, invoice_id, table_id, play_date, units_billed, amount, cap_applied)
-                   VALUES ($1, $2, $3, $4, $5, $6, $7)""",
-                uuid.uuid4(), invoice_id, r["table_id"], r["play_date"],
-                units, amount, raw > cap,
-            )
-            summary["line_items"] += 1
+            total = 0
+            for r in venue_rows:
+                cap = cap_we if r["dow"] in (0, 6) else cap_wd   # 0=Sun, 6=Sat
+                raw = r["raw_blocks"]
+                units = min(raw, cap)
+                amount = unit * units
+                total += amount
+                await conn.execute(
+                    """INSERT INTO invoice_line_items
+                           (id, invoice_id, table_id, play_date, units_billed, amount, cap_applied)
+                       VALUES ($1, $2, $3, $4, $5, $6, $7)""",
+                    uuid.uuid4(), invoice_id, r["table_id"], r["play_date"],
+                    units, amount, raw > cap,
+                )
+                summary["line_items"] += 1
 
-        await conn.execute(
-            "UPDATE invoices SET total_amount = $1, updated_at = NOW() WHERE id = $2",
-            total, invoice_id,
-        )
+            await conn.execute(
+                "UPDATE invoices SET total_amount = $1, updated_at = NOW() WHERE id = $2",
+                total, invoice_id,
+            )
         summary["venues"] += 1
         summary["invoices"] += 1
 
