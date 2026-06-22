@@ -607,3 +607,35 @@ def test_billing_month_estimate_has_nights(client, api_key_header, fresh_table):
     finally:
         _delete_session(s1)
         _delete_session(s2)
+
+
+def _set_billing_unit(venue_id, unit):
+    async def _q():
+        conn = await asyncpg.connect(os.environ["DATABASE_URL"])
+        try:
+            await conn.execute("UPDATE venues SET billing_unit=$2 WHERE id=$1", venue_id, unit)
+        finally:
+            await conn.close()
+    asyncio.run(_q())
+
+
+def test_billing_zero_unit_does_not_crash(client, api_key_header, fresh_table):
+    """A misconfigured zero billing_unit must not 500 the endpoint — it caps to 0."""
+    original = _get_venue_settings(VENUE_A_ID)
+    table_id = fresh_table["table_id"]
+    sid = None
+    try:
+        _set_billing_unit(VENUE_A_ID, "0")
+        sid = _insert_session(table_id, VENUE_A_ID, started_at=_utcnow(),
+                              ended_at=_utcnow(), billable_blocks=5, total_rounds=8)
+        token = dev_login(client, api_key_header, OWNER_A_CLERK_ID)
+        resp = client.get("/api/dashboard/billing",
+                          headers={**api_key_header, **auth_header(token)})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert float(body["tonight"]["total"]) == 0.0
+        assert body["model"]["blocks_per_night_cap_weekday"] == 0
+    finally:
+        if sid:
+            _delete_session(sid)
+        _restore_venue_settings(VENUE_A_ID, original)

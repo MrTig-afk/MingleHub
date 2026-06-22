@@ -9,7 +9,13 @@ from datetime import datetime, timedelta, timezone
 
 import asyncpg
 
-from api.dev_fixtures import VENUE_A_ID, VENUE_A_TABLE_ID, VENUE_B_ID, VENUE_B_TABLE_ID
+from api.dev_fixtures import (
+    VENUE_A_ID,
+    VENUE_A_TABLE_ID,
+    VENUE_A_TABLE_2_ID,
+    VENUE_B_ID,
+    VENUE_B_TABLE_ID,
+)
 from api.services.billing_service import (
     cap_blocks,
     finalize_session_billing,
@@ -133,7 +139,7 @@ def _invoice(venue_id):
         if not inv:
             return None, []
         items = await conn.fetch(
-            "SELECT units_billed, amount, cap_applied FROM invoice_line_items "
+            "SELECT play_date, units_billed, amount, cap_applied FROM invoice_line_items "
             "WHERE invoice_id = $1 ORDER BY play_date", inv["id"])
         return inv, items
     return _run(_q)
@@ -343,5 +349,100 @@ def test_recompute_skips_paid_invoice():
         _delete_session(sid)
         if sid2:
             _delete_session(sid2)
+        _clear_invoices(VENUE_A_ID)
+        _venue_restore(VENUE_A_ID, snap)
+
+
+# ---------------------------------------------------------------------------
+# Edge cases
+# ---------------------------------------------------------------------------
+
+def _date_in_month(weekday):
+    """A date in the current calendar month falling on the given weekday
+    (date.weekday(): Mon=0 .. Sun=6). 06:00 UTC keeps it the same Melbourne
+    local day after the 4am-boundary shift, so the night's DOW is stable."""
+    first = _utcnow().date().replace(day=1)
+    offset = (weekday - first.weekday()) % 7
+    return first + timedelta(days=offset)
+
+
+def _at_six_utc(d):
+    return datetime(d.year, d.month, d.day, 6, 0, 0)
+
+
+def test_finalize_span_excludes_idle_tail():
+    """active_span stops at last_activity_at, NOT ended_at — a session active for
+    20 min then auto-ended 20 min later bills on the 20, not 40."""
+    t0 = _utcnow()
+    sid = _insert_session(
+        table_id=VENUE_A_TABLE_ID, venue_id=VENUE_A_ID,
+        started_at=t0, last_activity_at=t0 + timedelta(minutes=20),
+        ended_at=t0 + timedelta(minutes=40), total_rounds=2)
+    try:
+        _run(lambda c: finalize_session_billing(c, sid))
+        row = _billing_cols(sid)
+        assert row["active_span_seconds"] == 1200      # 20 min, not 40
+        assert row["billable_blocks"] == 1             # floor(1200/900), not 2
+    finally:
+        _delete_session(sid)
+
+
+def test_recompute_multi_night_multi_table():
+    """Line items roll up per (table, play-date): 2 tables across 2 nights -> 3
+    distinct line items; invoice total sums them."""
+    snap = _venue_save(VENUE_A_ID)
+    unit = float(_venue_unit(VENUE_A_ID))
+    _clear_invoices(VENUE_A_ID)
+    _set_venue(VENUE_A_ID, is_test=False, cap_wd=10000, cap_we=10000)
+    wed, sat = _date_in_month(2), _date_in_month(5)
+    sids = [
+        _insert_session(table_id=VENUE_A_TABLE_ID, venue_id=VENUE_A_ID,
+                        started_at=_at_six_utc(wed), last_activity_at=_at_six_utc(wed),
+                        ended_at=_at_six_utc(wed), total_rounds=5, billable_blocks=3),
+        _insert_session(table_id=VENUE_A_TABLE_ID, venue_id=VENUE_A_ID,
+                        started_at=_at_six_utc(sat), last_activity_at=_at_six_utc(sat),
+                        ended_at=_at_six_utc(sat), total_rounds=5, billable_blocks=2),
+        _insert_session(table_id=VENUE_A_TABLE_2_ID, venue_id=VENUE_A_ID,
+                        started_at=_at_six_utc(wed), last_activity_at=_at_six_utc(wed),
+                        ended_at=_at_six_utc(wed), total_rounds=5, billable_blocks=4),
+    ]
+    try:
+        _run(lambda c: recompute_invoices(c))
+        inv, items = _invoice(VENUE_A_ID)
+        assert len(items) == 3                          # (t1,wed) (t1,sat) (t2,wed)
+        assert abs(float(inv["total_amount"]) - unit * (3 + 2 + 4)) < 0.001
+    finally:
+        for s in sids:
+            _delete_session(s)
+        _clear_invoices(VENUE_A_ID)
+        _venue_restore(VENUE_A_ID, snap)
+
+
+def test_recompute_cap_selected_by_day_of_week():
+    """The weekday cap applies to weekday nights, the weekend cap to weekend
+    nights — same blocks, different outcome by DOW."""
+    snap = _venue_save(VENUE_A_ID)
+    unit = float(_venue_unit(VENUE_A_ID))
+    _clear_invoices(VENUE_A_ID)
+    # Weekday cap = 2 blocks; weekend cap = huge.
+    _set_venue(VENUE_A_ID, is_test=False, cap_wd=unit * 2, cap_we=unit * 1000)
+    wed, sat = _date_in_month(2), _date_in_month(5)
+    sids = [
+        _insert_session(table_id=VENUE_A_TABLE_ID, venue_id=VENUE_A_ID,
+                        started_at=_at_six_utc(wed), last_activity_at=_at_six_utc(wed),
+                        ended_at=_at_six_utc(wed), total_rounds=12, billable_blocks=10),
+        _insert_session(table_id=VENUE_A_TABLE_2_ID, venue_id=VENUE_A_ID,
+                        started_at=_at_six_utc(sat), last_activity_at=_at_six_utc(sat),
+                        ended_at=_at_six_utc(sat), total_rounds=12, billable_blocks=10),
+    ]
+    try:
+        _run(lambda c: recompute_invoices(c))
+        _, items = _invoice(VENUE_A_ID)
+        by_date = {i["play_date"]: i for i in items}
+        assert by_date[wed]["units_billed"] == 2 and by_date[wed]["cap_applied"] is True
+        assert by_date[sat]["units_billed"] == 10 and by_date[sat]["cap_applied"] is False
+    finally:
+        for s in sids:
+            _delete_session(s)
         _clear_invoices(VENUE_A_ID)
         _venue_restore(VENUE_A_ID, snap)
