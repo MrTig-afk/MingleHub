@@ -586,16 +586,21 @@ async def _record_analytics_round(conn, rnd, result: str, score_awarded: int) ->
     """One `rounds` row per trivia round for session analytics. Per-phone /
     per-question detail lives in trivia_answers; this is the round-level record
     (gamespec Analytics -> per round)."""
+    # total_rounds is the resolved-round tally (billing gate + recap stats).
+    # An 'abandoned_at_gather' round never actually played (too few phones joined),
+    # so it advances the cadence (current_round_number) but is NOT counted as a
+    # played round. The rounds analytics row below still records it.
+    counts_as_played = result != "abandoned_at_gather"
     round_number = await conn.fetchval(
         """
         UPDATE game_sessions
         SET current_round_number = current_round_number + 1,
-            total_rounds = total_rounds + 1,
+            total_rounds = total_rounds + CASE WHEN $2 THEN 1 ELSE 0 END,
             last_activity_at = NOW()
         WHERE id = $1
         RETURNING current_round_number
         """,
-        rnd["session_id"],
+        rnd["session_id"], counts_as_played,
     )
     await conn.execute(
         """

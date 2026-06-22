@@ -57,7 +57,11 @@ def _tonight_boundary():
     return asyncio.run(_q())
 
 
-def _insert_session(table_id, venue_id, started_at=None, ended_at=None):
+def _insert_session(table_id, venue_id, started_at=None, ended_at=None,
+                    billable_blocks=None, total_rounds=0,
+                    active_span_seconds=None, active_play_seconds=0):
+    """Insert a session. Billing now counts blocks on FINALIZED (ended) sessions —
+    pass ended_at + billable_blocks to make a session count toward billing."""
     session_id = str(uuid.uuid4())
 
     async def _q():
@@ -66,10 +70,13 @@ def _insert_session(table_id, venue_id, started_at=None, ended_at=None):
             await conn.execute(
                 """
                 INSERT INTO game_sessions
-                    (id, venue_id, table_id, player_count, started_at, ended_at, created_at)
-                VALUES ($1, $2, $3, 4, $4, $5, NOW())
+                    (id, venue_id, table_id, player_count, started_at, ended_at,
+                     total_rounds, billable_blocks, active_span_seconds,
+                     active_play_seconds, created_at)
+                VALUES ($1, $2, $3, 4, $4, $5, $6, $7, $8, $9, NOW())
                 """,
                 session_id, venue_id, table_id, started_at, ended_at,
+                total_rounds, billable_blocks, active_span_seconds, active_play_seconds,
             )
         finally:
             await conn.close()
@@ -411,7 +418,7 @@ def test_settings_patch_empty_body_400(client, api_key_header):
 # ---------------------------------------------------------------------------
 
 def test_billing_get_owner_200(client, api_key_header):
-    """Owner GET /billing -> 200 with correct full shape."""
+    """Owner GET /billing -> 200 with the block-based shape."""
     token = dev_login(client, api_key_header, OWNER_A_CLERK_ID)
     resp = client.get("/api/dashboard/billing",
                       headers={**api_key_header, **auth_header(token)})
@@ -419,34 +426,34 @@ def test_billing_get_owner_200(client, api_key_header):
     body = resp.json()
 
     assert body["is_estimate"] is True
-    assert body["payment_status"] == "not_connected"
-    assert body["invoice_history"] == []
+    assert isinstance(body["invoice_history"], list)
+    assert isinstance(body["is_test_venue"], bool)
 
     model = body["model"]
     assert isinstance(model["billing_unit"], str)
-    assert isinstance(model["nightly_cap_weekday"], str)
-    assert isinstance(model["nightly_cap_weekend"], str)
+    assert model["block_minutes"] == 15
+    assert isinstance(model["blocks_per_night_cap_weekday"], int)
+    assert isinstance(model["blocks_per_night_cap_weekend"], int)
     assert model["currency"] == "AUD"
-
-    # Monetary strings must be parseable
     float(model["billing_unit"])
     float(model["nightly_cap_weekday"])
-    float(model["nightly_cap_weekend"])
 
     tonight = body["tonight"]
-    assert isinstance(tonight["billable_tables"], int)
-    assert tonight["billable_tables"] >= 0
-    assert isinstance(tonight["total"], str)
+    assert isinstance(tonight["blocks_billed"], int)
+    assert tonight["blocks_billed"] >= 0
     assert isinstance(tonight["cap_applied"], bool)
-    assert isinstance(tonight["is_weekend"], bool)
     float(tonight["total"])
-    float(tonight["raw"])
-    float(tonight["cap"])
 
     month = body["month_estimate"]
-    assert isinstance(month["total"], str)
     float(month["total"])
+    assert isinstance(month["blocks_billed"], int)
     assert isinstance(month["nights"], list)
+
+    pa = body["play_analytics"]
+    assert isinstance(pa["billed_span_minutes"], (int, float))
+    assert isinstance(pa["actual_play_minutes"], (int, float))
+    assert isinstance(pa["billed_blocks"], int)
+    assert isinstance(pa["unbilled_remainder_minutes"], (int, float))
 
 
 def test_billing_get_staff_403(client, api_key_header):
@@ -466,65 +473,49 @@ def test_billing_get_admin_403(client, api_key_header):
 
 
 def test_billing_get_no_sessions_baseline(client, api_key_header, fresh_table):
-    """Baseline shape check: all monetary fields are valid decimal strings >= 0.
-
-    We cannot guarantee zero sessions tonight (other test data may exist),
-    so we only assert types and that values are non-negative.
-    """
+    """Baseline shape check: monetary fields valid and non-negative."""
     token = dev_login(client, api_key_header, OWNER_A_CLERK_ID)
     resp = client.get("/api/dashboard/billing",
                       headers={**api_key_header, **auth_header(token)})
     assert resp.status_code == 200
     body = resp.json()
 
-    assert body["tonight"]["billable_tables"] >= 0
+    assert body["tonight"]["blocks_billed"] >= 0
     assert float(body["tonight"]["total"]) >= 0.0
     assert float(body["month_estimate"]["total"]) >= 0.0
 
 
-def test_billing_tonight_distinct_tables(client, api_key_header, fresh_table):
-    """Sessions on a fresh table are counted in tonight.billable_tables."""
+def test_billing_only_counts_finalized_blocks(client, api_key_header, fresh_table):
+    """An in-progress session (no billable_blocks) contributes nothing; a finalized
+    session with blocks shows up in tonight + month totals."""
     table_id = fresh_table["table_id"]
-    session_id = _insert_session(table_id, VENUE_A_ID,
-                                 started_at=_utcnow(), ended_at=None)
+    in_progress = _insert_session(table_id, VENUE_A_ID, started_at=_utcnow(), ended_at=None)
+    finalized = _insert_session(table_id, VENUE_A_ID, started_at=_utcnow(),
+                                ended_at=_utcnow(), billable_blocks=3, total_rounds=5)
     try:
         token = dev_login(client, api_key_header, OWNER_A_CLERK_ID)
         resp = client.get("/api/dashboard/billing",
                           headers={**api_key_header, **auth_header(token)})
         assert resp.status_code == 200
-        assert resp.json()["tonight"]["billable_tables"] >= 1
+        tonight = resp.json()["tonight"]
+        # The 3 finalized blocks count; the in-progress session adds zero.
+        assert tonight["blocks_billed"] >= 3
     finally:
-        _delete_session(session_id)
+        _delete_session(in_progress)
+        _delete_session(finalized)
 
 
 def test_billing_tonight_cap_applied(client, api_key_header, fresh_table):
-    """When raw exceeds cap, cap_applied=True and total equals the cap."""
+    """Blocks beyond the per-table-per-night cap are not billed; cap_applied=True."""
     original = _get_venue_settings(VENUE_A_ID)
-    # Get the actual billing unit
-    billing_unit = float(original["billing_unit"])
-
-    # Set a cap lower than 2 * billing_unit so 2 tables trigger it
-    low_cap = billing_unit  # cap = cost of exactly 1 table
-
+    unit = float(original["billing_unit"])
     table_id = fresh_table["table_id"]
-    session_ids = []
+    session_id = None
     try:
-        _set_venue_caps(VENUE_A_ID, str(low_cap), str(low_cap))
-
-        # Insert 2 sessions on the same table to ensure table count is at
-        # least 1, then we need a 2nd table — use fresh_table + VENUE_A_TABLE_2_ID
-        # or just check that any existing session pushes raw over cap.
-        # Strategy: insert one session on fresh_table (1 table = billing_unit).
-        # Since cap = billing_unit, raw == cap -> cap_applied=False (strict ">").
-        # Insert a second session on the SAME table: still 1 distinct table -> raw = billing_unit.
-        # We need 2 DISTINCT tables to exceed a cap of 1*billing_unit.
-        from api.dev_fixtures import VENUE_A_TABLE_2_ID
-        s1 = _insert_session(table_id, VENUE_A_ID,
-                             started_at=_utcnow(), ended_at=None)
-        session_ids.append(s1)
-        s2 = _insert_session(VENUE_A_TABLE_2_ID, VENUE_A_ID,
-                             started_at=_utcnow(), ended_at=None)
-        session_ids.append(s2)
+        # cap of 2*unit dollars => 2 blocks/night. A session with 5 blocks is capped to 2.
+        _set_venue_caps(VENUE_A_ID, str(unit * 2), str(unit * 2))
+        session_id = _insert_session(table_id, VENUE_A_ID, started_at=_utcnow(),
+                                     ended_at=_utcnow(), billable_blocks=5, total_rounds=8)
 
         token = dev_login(client, api_key_header, OWNER_A_CLERK_ID)
         resp = client.get("/api/dashboard/billing",
@@ -533,55 +524,70 @@ def test_billing_tonight_cap_applied(client, api_key_header, fresh_table):
         tonight = resp.json()["tonight"]
 
         assert tonight["cap_applied"] is True
-        # Total must equal the cap
-        assert abs(float(tonight["total"]) - low_cap) < 0.001
-    finally:
-        for sid in session_ids:
-            _delete_session(sid)
-        _restore_venue_settings(VENUE_A_ID, original)
-
-
-def test_billing_cap_not_applied_when_equal(client, api_key_header, fresh_table):
-    """cap_applied=False when raw exactly equals the cap (strict > only)."""
-    original = _get_venue_settings(VENUE_A_ID)
-    billing_unit = float(original["billing_unit"])
-    table_id = fresh_table["table_id"]
-    session_id = None
-    try:
-        # Set cap to exactly billing_unit so 1 table -> raw == cap
-        _set_venue_caps(VENUE_A_ID, str(billing_unit), str(billing_unit))
-        session_id = _insert_session(table_id, VENUE_A_ID,
-                                     started_at=_utcnow(), ended_at=None)
-
-        token = dev_login(client, api_key_header, OWNER_A_CLERK_ID)
-        resp = client.get("/api/dashboard/billing",
-                          headers={**api_key_header, **auth_header(token)})
-        assert resp.status_code == 200
-        tonight = resp.json()["tonight"]
-
-        # With exactly 1 table's raw == cap, cap_applied must be False
-        # (only True when raw STRICTLY exceeds cap)
-        # Note: there may be other sessions on other tables tonight from
-        # other tests, so we can only assert the field is the correct type.
-        assert isinstance(tonight["cap_applied"], bool)
+        # This table is capped at 2 blocks; nothing else billable tonight in clean state.
+        assert tonight["blocks_billed"] >= 2
+        assert abs(float(tonight["total"]) - unit * 2) < 0.001
     finally:
         if session_id:
             _delete_session(session_id)
         _restore_venue_settings(VENUE_A_ID, original)
 
 
+def test_billing_play_analytics_remainder(client, api_key_header, fresh_table):
+    """play_analytics reports actual span/play minutes and the unbilled remainder
+    (your '1 block + 14 min' = 29 min span billed as 1 block)."""
+    original = _get_venue_settings(VENUE_A_ID)
+    table_id = fresh_table["table_id"]
+    session_id = None
+    try:
+        # 29 min of span (1740s), 25 min true play, 1 block billed.
+        session_id = _insert_session(
+            table_id, VENUE_A_ID, started_at=_utcnow(), ended_at=_utcnow(),
+            billable_blocks=1, total_rounds=4,
+            active_span_seconds=1740, active_play_seconds=1500)
+
+        token = dev_login(client, api_key_header, OWNER_A_CLERK_ID)
+        resp = client.get("/api/dashboard/billing",
+                          headers={**api_key_header, **auth_header(token)})
+        assert resp.status_code == 200
+        pa = resp.json()["play_analytics"]
+
+        assert pa["billed_blocks"] >= 1
+        assert pa["billed_span_minutes"] >= 29.0
+        assert pa["actual_play_minutes"] >= 25.0
+        # 29 min span, 1 block (15 min) billed -> at least 14 min unbilled remainder
+        assert pa["unbilled_remainder_minutes"] >= 14.0
+    finally:
+        if session_id:
+            _delete_session(session_id)
+        _restore_venue_settings(VENUE_A_ID, original)
+
+
+def test_billing_bola(client, api_key_header, fresh_table):
+    """Owner B's billing never includes Venue A's blocks (BOLA)."""
+    table_id = fresh_table["table_id"]  # a Venue A table
+    session_id = _insert_session(table_id, VENUE_A_ID, started_at=_utcnow(),
+                                 ended_at=_utcnow(), billable_blocks=7, total_rounds=9)
+    try:
+        token_b = dev_login(client, api_key_header, OWNER_B_CLERK_ID)
+        resp = client.get("/api/dashboard/billing",
+                          headers={**api_key_header, **auth_header(token_b)})
+        assert resp.status_code == 200
+        # Venue B owner must not see Venue A's 7 blocks. In clean state B has 0.
+        assert resp.json()["month_estimate"]["blocks_billed"] == 0
+    finally:
+        _delete_session(session_id)
+
+
 def test_billing_month_estimate_has_nights(client, api_key_header, fresh_table):
-    """Sessions on 2 distinct play-nights produce >= 2 night entries this month."""
+    """Finalized sessions on 2 distinct play-nights produce >= 2 night entries."""
     table_id = fresh_table["table_id"]
     boundary = _tonight_boundary()
 
-    # Session tonight (inside tonight's window)
-    s1 = _insert_session(table_id, VENUE_A_ID,
-                         started_at=_utcnow(), ended_at=None)
-    # Session yesterday evening (25 hours ago, same local play-night as yesterday)
-    s2 = _insert_session(table_id, VENUE_A_ID,
-                         started_at=boundary - timedelta(hours=25), ended_at=None)
-
+    s1 = _insert_session(table_id, VENUE_A_ID, started_at=_utcnow(),
+                         ended_at=_utcnow(), billable_blocks=2, total_rounds=3)
+    s2 = _insert_session(table_id, VENUE_A_ID, started_at=boundary - timedelta(hours=25),
+                         ended_at=boundary - timedelta(hours=24), billable_blocks=2, total_rounds=3)
     try:
         token = dev_login(client, api_key_header, OWNER_A_CLERK_ID)
         resp = client.get("/api/dashboard/billing",
@@ -589,20 +595,15 @@ def test_billing_month_estimate_has_nights(client, api_key_header, fresh_table):
         assert resp.status_code == 200
         month = resp.json()["month_estimate"]
 
-        # At least 2 distinct play-nights (tonight + yesterday)
         assert len(month["nights"]) >= 2
         assert float(month["total"]) > 0.0
 
-        # Validate night entry shape
         for night in month["nights"]:
-            assert "date" in night
-            assert "tables" in night
             assert isinstance(night["tables"], int)
-            assert "raw" in night
-            assert "capped" in night
-            assert "cap_applied" in night
-            float(night["raw"])
-            float(night["capped"])
+            assert isinstance(night["blocks_raw"], int)
+            assert isinstance(night["blocks_billed"], int)
+            assert isinstance(night["cap_applied"], bool)
+            float(night["amount"])
     finally:
         _delete_session(s1)
         _delete_session(s2)

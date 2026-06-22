@@ -498,6 +498,67 @@ async def migrate():
         """)
         print("OK venues address columns ready")
 
+        # Usage billing: per-session play measures, frozen at session end.
+        #  - active_play_seconds: true play time (idle gaps > 2 min excluded) -- analytics.
+        #  - active_span_seconds: started_at -> last_activity_at (the dead idle tail
+        #    before an auto-end is NOT counted) -- the billing basis.
+        #  - billable_blocks: floor(active_span / 15 min), but only if >=1 round was
+        #    actually played (resolved). One block = one billing_unit ($3).
+        #  - billing_finalized_at: set once when frozen -> makes finalize idempotent.
+        await conn.execute("""
+            ALTER TABLE game_sessions
+            ADD COLUMN IF NOT EXISTS active_play_seconds  INTEGER NOT NULL DEFAULT 0,
+            ADD COLUMN IF NOT EXISTS active_span_seconds  INTEGER,
+            ADD COLUMN IF NOT EXISTS billable_blocks      INTEGER,
+            ADD COLUMN IF NOT EXISTS billing_finalized_at TIMESTAMP
+        """)
+        print("OK game_sessions billing columns ready")
+
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_sessions_venue_started
+            ON game_sessions (venue_id, started_at)
+        """)
+        print("OK idx_sessions_venue_started index ready")
+
+        # Invoices: one per venue per billing period (month). Line items roll up
+        # per table per play-date (4am-boundary night), capped per table per night.
+        # is_test venues are excluded from invoices entirely (they never pay).
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS invoices (
+                id              UUID PRIMARY KEY,
+                venue_id        UUID NOT NULL REFERENCES venues(id),
+                period_start    DATE NOT NULL,
+                period_end      DATE NOT NULL,
+                total_amount    NUMERIC NOT NULL DEFAULT 0,
+                stripe_invoice_id TEXT,
+                status          TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'paid', 'failed')),
+                created_at      TIMESTAMP DEFAULT NOW(),
+                updated_at      TIMESTAMP DEFAULT NOW(),
+                UNIQUE (venue_id, period_start)
+            )
+        """)
+        print("OK invoices table ready")
+
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS invoice_line_items (
+                id            UUID PRIMARY KEY,
+                invoice_id    UUID NOT NULL REFERENCES invoices(id) ON DELETE CASCADE,
+                table_id      UUID NOT NULL REFERENCES tables(id),
+                play_date     DATE NOT NULL,
+                units_billed  INTEGER NOT NULL,
+                amount        NUMERIC NOT NULL,
+                cap_applied   BOOLEAN NOT NULL DEFAULT FALSE,
+                created_at    TIMESTAMP DEFAULT NOW()
+            )
+        """)
+        print("OK invoice_line_items table ready")
+
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_line_items_invoice
+            ON invoice_line_items (invoice_id)
+        """)
+        print("OK idx_line_items_invoice index ready")
+
         schema = await conn.fetch("""
             SELECT column_name, data_type, is_nullable, column_default
             FROM information_schema.columns

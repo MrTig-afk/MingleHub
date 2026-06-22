@@ -18,6 +18,7 @@ compute_retap_state: Pure helper: given how long a session has been idle and the
                     venue's threshold, returns {state, seconds_left} for overlay
                     rendering. No DB, no I/O.
 """
+from api.services.billing_service import finalize_session_billing
 from api.services.realtime_service import publish as rt_publish
 
 # Re-Tap to Continue: fixed constants (not venue-configurable).
@@ -87,6 +88,7 @@ async def end_game(conn, session_id: str, phone_id: str) -> dict:
         # Race: another call beat us -- return idempotent success
         return {"ended": True, "session_id": session_id}
 
+    await finalize_session_billing(conn, session_id)
     await rt_publish(_channel(table_id), "game_ended", {"session_id": session_id})
     return {"ended": True, "session_id": session_id}
 
@@ -276,6 +278,7 @@ async def migrate_host(conn, session_id: str, phone_id: str) -> dict:
             """,
             session_id,
         )
+        await finalize_session_billing(conn, session_id)
         await rt_publish(_channel(table_id), "game_ended", {"session_id": session_id})
         return {"ended": True, "session_id": session_id}
 
@@ -339,3 +342,4 @@ async def idle_end_session(conn, session_id: str, reason: str = 'idle_timeout') 
         """,
         session_id, reason,
     )
+    await finalize_session_billing(conn, session_id)

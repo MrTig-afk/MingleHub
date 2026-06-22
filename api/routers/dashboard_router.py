@@ -18,6 +18,7 @@ from api.security import limiter, verify_api_key
 from api.services.notify import notify_error
 from api.services.nfc_crypto import encrypt_tag_key
 from api.services.session_service import compute_retap_state
+from api.services.billing_service import cap_blocks, BLOCK_SECONDS
 
 router = APIRouter(prefix="/api/dashboard", dependencies=[Depends(verify_api_key)])
 
@@ -799,43 +800,10 @@ async def get_billing(
             venue_row = await conn.fetchrow(
                 """
                 SELECT billing_unit, nightly_cap_weekday, nightly_cap_weekend,
-                       stripe_customer_id
+                       stripe_customer_id, is_test
                 FROM venues WHERE id = $1
                 """,
                 current_user.venue_id,
-            )
-
-            # Tonight boundary: same "last 4am local -> UTC" Postgres computation
-            # used by the overview endpoint to keep DST handling in the DB.
-            tonight_boundary = await conn.fetchval(
-                """
-                SELECT (
-                    (date_trunc('day', (NOW() AT TIME ZONE $1) - INTERVAL '4 hours')
-                        + INTERVAL '4 hours')
-                    AT TIME ZONE $1
-                ) AT TIME ZONE 'UTC'
-                """,
-                VENUE_TIMEZONE,
-            )
-
-            # Day-of-week at tonight's local date (DOW: 0=Sunday, 6=Saturday).
-            dow = await conn.fetchval(
-                """
-                SELECT EXTRACT(DOW FROM (NOW() AT TIME ZONE $1) - INTERVAL '4 hours')::int
-                """,
-                VENUE_TIMEZONE,
-            )
-
-            billable_tables_row = await conn.fetchrow(
-                """
-                SELECT COUNT(DISTINCT gs.table_id) AS billable_tables
-                FROM game_sessions gs
-                WHERE gs.venue_id = $1
-                  AND gs.started_at >= $2
-                  AND gs.started_at IS NOT NULL
-                """,
-                current_user.venue_id,
-                tonight_boundary,
             )
 
             # Month start: first 4am of the current local calendar month, in UTC.
@@ -850,75 +818,132 @@ async def get_billing(
                 VENUE_TIMEZONE,
             )
 
-            night_rows = await conn.fetch(
-                """
-                SELECT
-                    date_trunc('day', (gs.started_at AT TIME ZONE 'UTC' AT TIME ZONE $3)
-                        - INTERVAL '4 hours')::date AS play_night,
-                    COUNT(DISTINCT gs.table_id) AS billable_tables,
-                    EXTRACT(DOW FROM date_trunc('day', (gs.started_at AT TIME ZONE 'UTC'
-                        AT TIME ZONE $3) - INTERVAL '4 hours'))::int AS dow
-                FROM game_sessions gs
-                WHERE gs.venue_id = $1
-                  AND gs.started_at >= $2
-                  AND gs.started_at IS NOT NULL
-                GROUP BY play_night, dow
-                ORDER BY play_night
-                """,
-                current_user.venue_id,
-                month_start,
+            # Tonight's play-date (4am-boundary local date) to pick out of the nights.
+            tonight_date = await conn.fetchval(
+                "SELECT (date_trunc('day', (NOW() AT TIME ZONE $1) - INTERVAL '4 hours'))::date",
                 VENUE_TIMEZONE,
             )
 
-        billing_unit_f = float(venue_row["billing_unit"])
-        cap_weekday_f = float(venue_row["nightly_cap_weekday"])
-        cap_weekend_f = float(venue_row["nightly_cap_weekend"])
+            # Per (table, night) sum of billable blocks from FINALIZED sessions.
+            # In-progress sessions aren't billed until they end (blocks NULL).
+            block_rows = await conn.fetch(
+                """
+                SELECT
+                    gs.table_id,
+                    date_trunc('day', (gs.started_at AT TIME ZONE 'UTC' AT TIME ZONE $3)
+                        - INTERVAL '4 hours')::date AS play_date,
+                    EXTRACT(DOW FROM date_trunc('day', (gs.started_at AT TIME ZONE 'UTC'
+                        AT TIME ZONE $3) - INTERVAL '4 hours'))::int AS dow,
+                    COALESCE(SUM(gs.billable_blocks), 0)::int AS raw_blocks
+                FROM game_sessions gs
+                WHERE gs.venue_id = $1
+                  AND gs.started_at >= $2
+                  AND gs.ended_at IS NOT NULL
+                GROUP BY gs.table_id, play_date, dow
+                """,
+                current_user.venue_id, month_start, VENUE_TIMEZONE,
+            )
 
-        is_weekend = dow in (0, 6)
-        tonight_cap = cap_weekend_f if is_weekend else cap_weekday_f
-        billable_tables = int(billable_tables_row["billable_tables"])
-        tonight_raw = billable_tables * billing_unit_f
-        tonight_total = min(tonight_raw, tonight_cap)
-        tonight_capped = tonight_raw > tonight_cap
+            # Play-time analytics: billed span vs true (idle-excluded) play.
+            stats_row = await conn.fetchrow(
+                """
+                SELECT
+                    COALESCE(SUM(active_span_seconds), 0)::int AS span_secs,
+                    COALESCE(SUM(active_play_seconds), 0)::int AS play_secs,
+                    COALESCE(SUM(billable_blocks), 0)::int AS blocks,
+                    COUNT(*) FILTER (WHERE billable_blocks > 0) AS billable_sessions
+                FROM game_sessions
+                WHERE venue_id = $1 AND started_at >= $2 AND ended_at IS NOT NULL
+                """,
+                current_user.venue_id, month_start,
+            )
 
-        month_total = 0.0
-        nights = []
-        for row in night_rows:
-            raw = int(row["billable_tables"]) * billing_unit_f
-            night_is_weekend = int(row["dow"]) in (0, 6)
-            cap = cap_weekend_f if night_is_weekend else cap_weekday_f
-            capped = min(raw, cap)
-            month_total += capped
-            nights.append({
-                "date": str(row["play_night"]),
-                "tables": int(row["billable_tables"]),
-                "raw": f"{raw:.2f}",
-                "capped": f"{capped:.2f}",
-                "cap_applied": raw > cap,
+            invoice_rows = await conn.fetch(
+                """
+                SELECT period_start, period_end, total_amount, status
+                FROM invoices WHERE venue_id = $1
+                ORDER BY period_start DESC LIMIT 12
+                """,
+                current_user.venue_id,
+            )
+
+        unit = venue_row["billing_unit"]
+        cap_wd = cap_blocks(venue_row["nightly_cap_weekday"], unit)   # blocks/night
+        cap_we = cap_blocks(venue_row["nightly_cap_weekend"], unit)
+        block_min = BLOCK_SECONDS // 60
+
+        # Aggregate per night (sum tables), applying the per-table-per-night cap.
+        nights: dict = {}
+        for r in block_rows:
+            cap = cap_we if r["dow"] in (0, 6) else cap_wd
+            raw = r["raw_blocks"]
+            billed = min(raw, cap)
+            n = nights.setdefault(r["play_date"], {
+                "date": str(r["play_date"]), "tables": 0,
+                "blocks_raw": 0, "blocks_billed": 0, "_amount": 0, "cap_applied": False,
             })
+            n["tables"] += 1
+            n["blocks_raw"] += raw
+            n["blocks_billed"] += billed
+            n["_amount"] += unit * billed
+            if raw > cap:
+                n["cap_applied"] = True
+
+        month_total = sum(n["_amount"] for n in nights.values())
+        tonight = nights.get(tonight_date)
+
+        span_min = round(stats_row["span_secs"] / 60.0, 1)
+        play_min = round(stats_row["play_secs"] / 60.0, 1)
+        billed_blocks = stats_row["blocks"]
+
+        def _night_out(n: dict) -> dict:
+            return {
+                "date": n["date"], "tables": n["tables"],
+                "blocks_raw": n["blocks_raw"], "blocks_billed": n["blocks_billed"],
+                "amount": f"{n['_amount']:.2f}", "cap_applied": n["cap_applied"],
+            }
 
         return {
             "is_estimate": True,
             "model": {
-                "billing_unit": str(venue_row["billing_unit"]),
+                "billing_unit": str(unit),
+                "block_minutes": block_min,
                 "nightly_cap_weekday": str(venue_row["nightly_cap_weekday"]),
                 "nightly_cap_weekend": str(venue_row["nightly_cap_weekend"]),
+                "blocks_per_night_cap_weekday": cap_wd,
+                "blocks_per_night_cap_weekend": cap_we,
                 "currency": "AUD",
             },
+            "is_test_venue": bool(venue_row["is_test"]),
             "tonight": {
-                "billable_tables": billable_tables,
-                "raw": f"{tonight_raw:.2f}",
-                "cap": f"{tonight_cap:.2f}",
-                "total": f"{tonight_total:.2f}",
-                "cap_applied": tonight_capped,
-                "is_weekend": is_weekend,
+                "date": str(tonight_date),
+                "blocks_billed": tonight["blocks_billed"] if tonight else 0,
+                "total": f"{(tonight['_amount'] if tonight else 0):.2f}",
+                "cap_applied": bool(tonight["cap_applied"]) if tonight else False,
             },
             "month_estimate": {
                 "total": f"{month_total:.2f}",
-                "nights": nights,
+                "blocks_billed": billed_blocks,
+                "nights": [_night_out(nights[d]) for d in sorted(nights)],
             },
-            "payment_status": "not_connected",
-            "invoice_history": [],
+            "play_analytics": {
+                "billable_sessions": int(stats_row["billable_sessions"]),
+                "billed_span_minutes": span_min,
+                "actual_play_minutes": play_min,
+                "billed_blocks": billed_blocks,
+                # billed-span minutes not captured by whole blocks (your "+14 min")
+                "unbilled_remainder_minutes": max(0.0, round(span_min - billed_blocks * block_min, 1)),
+            },
+            "payment_status": "connected" if venue_row["stripe_customer_id"] else "not_connected",
+            "invoice_history": [
+                {
+                    "period_start": str(iv["period_start"]),
+                    "period_end": str(iv["period_end"]),
+                    "total_amount": f"{iv['total_amount']:.2f}",
+                    "status": iv["status"],
+                }
+                for iv in invoice_rows
+            ],
         }
     except Exception:
         await notify_error("GET /dashboard/billing failed 🚨", traceback.format_exc()[:500])
