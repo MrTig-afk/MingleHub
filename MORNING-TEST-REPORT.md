@@ -195,6 +195,16 @@ Not urgent at current scale; **yes** before high scale. The plan, reusing what a
 
 Effort: roughly a **half-day**, single nightly function + a couple of indexes. Deliberately deferred — flagged here per your request, no code changed.
 
+### 6.4 Realtime channel lifecycle (not part of the reaper — and that's correct)
+The nightly reaper (§6.3) deliberately does **not** touch Supabase Realtime channels, because they aren't database rows — there's nothing for a SQL sweep to delete. Their cleanup runs on two separate paths, both **verified in the code**:
+
+1. **Client-side teardown** — `frontend/src/hooks/useSessionChannel.js` (lines 69–75) returns an effect cleanup that calls `supabase.removeChannel(channel)` on unmount / dependency change; `useMultiTouch.js` follows the same pattern. A phone leaving a table/session unsubscribes itself.
+2. **Server-side TTL** — Supabase reaps a Broadcast channel once it's empty, and the signed HS256 channel tokens self-expire via their `exp` claim.
+
+**Nothing accumulates in our database:** broadcast is ephemeral (FastAPI publishes, phones subscribe) — messages are not persisted, so there are no `realtime.messages` rows to sweep. *(If message persistence were ever enabled on `realtime.messages`, that table WOULD need a reaper entry — it currently is not.)*
+
+**One honest residual — flagged enhancement (not built):** there is no **server-initiated** channel teardown when a session idle-ends. Cleanup relies on clients dropping off, so when a patron simply locks their phone (no clean React unmount), `removeChannel` never fires and that subscription lingers until **Supabase's websocket heartbeat timeout** reaps it. That's Supabase-managed, not a leak in our DB. If we want belt-and-suspenders, the fix is an **event, not a reaper row**: on server-side session-end, publish a final `session_closed` broadcast so still-connected clients proactively unsubscribe instead of waiting out the heartbeat. Confirmed not currently implemented (no teardown publish in `api/services/realtime_service.py`). Small enhancement, deferred.
+
 ---
 
 ## 7. Bottom line
