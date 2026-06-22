@@ -559,6 +559,31 @@ async def migrate():
         """)
         print("OK idx_line_items_invoice index ready")
 
+        # Analytics rollup: one pre-aggregated row per venue per play-date (4am
+        # boundary). The nightly job recomputes recent days from game_sessions so
+        # the dashboard insights/overview can read tiny summaries instead of
+        # scanning raw sessions — keeps reads flat as data grows. Includes ALL
+        # venues (test + real); consumers filter is_test as needed.
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS venue_daily_stats (
+                venue_id             UUID NOT NULL REFERENCES venues(id),
+                stat_date            DATE NOT NULL,
+                session_count        INTEGER NOT NULL DEFAULT 0,
+                ended_count          INTEGER NOT NULL DEFAULT 0,
+                total_rounds         INTEGER NOT NULL DEFAULT 0,
+                sum_player_count     INTEGER NOT NULL DEFAULT 0,
+                sum_duration_seconds BIGINT  NOT NULL DEFAULT 0,
+                trivia_correct       INTEGER NOT NULL DEFAULT 0,
+                trivia_wrong         INTEGER NOT NULL DEFAULT 0,
+                cards_completed      INTEGER NOT NULL DEFAULT 0,
+                cards_skipped        INTEGER NOT NULL DEFAULT 0,
+                total_score          INTEGER NOT NULL DEFAULT 0,
+                updated_at           TIMESTAMP DEFAULT NOW(),
+                PRIMARY KEY (venue_id, stat_date)
+            )
+        """)
+        print("OK venue_daily_stats table ready")
+
         schema = await conn.fetch("""
             SELECT column_name, data_type, is_nullable, column_default
             FROM information_schema.columns
