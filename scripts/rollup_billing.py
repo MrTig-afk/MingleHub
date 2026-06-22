@@ -14,6 +14,7 @@ from dotenv import load_dotenv
 
 load_dotenv("api/.env")
 from api.services.billing_service import recompute_invoices  # noqa: E402
+from api.services.venue_lifecycle_service import check_dunning_suspensions  # noqa: E402
 
 
 async def main():
@@ -26,6 +27,8 @@ async def main():
             f"{summary['invoices']} invoice(s), {summary['line_items']} line item(s), "
             f"{summary['skipped_paid']} paid-skipped"
         )
+        suspended_count = await check_dunning_suspensions(conn)
+        print(f"Dunning sweep: {suspended_count} venue(s) newly suspended")
     finally:
         await conn.close()
 

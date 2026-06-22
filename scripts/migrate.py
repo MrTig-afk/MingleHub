@@ -675,6 +675,37 @@ async def migrate():
         await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS email TEXT")
         print("OK users.email column ready")
 
+        # Build #2: Billing lifecycle — venue cancellation/suspension tracking
+        await conn.execute("""
+            ALTER TABLE venues
+            ADD COLUMN IF NOT EXISTS cancelled_at TIMESTAMP,
+            ADD COLUMN IF NOT EXISTS suspended_at TIMESTAMP,
+            ADD COLUMN IF NOT EXISTS cancellation_reason TEXT,
+            ADD COLUMN IF NOT EXISTS suspension_reason TEXT
+        """)
+        print("OK venues lifecycle columns ready")
+
+        # Final-invoice sentinel: a snapshot invoice issued at cancellation so
+        # future nightly rollups do not overwrite the at-cancellation total.
+        await conn.execute("""
+            ALTER TABLE invoices ADD COLUMN IF NOT EXISTS is_final BOOLEAN NOT NULL DEFAULT FALSE
+        """)
+        print("OK invoices.is_final column ready")
+
+        # Payment method archival stub — no real Stripe call yet; archive is a
+        # status transition from 'active' -> 'archived' written on cancel.
+        # CREATE TABLE brings the status column for new deployments;
+        # ADD COLUMN IF NOT EXISTS is a no-op when the column already exists.
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS payment_methods (
+                id         UUID PRIMARY KEY,
+                venue_id   UUID NOT NULL REFERENCES venues(id),
+                status     TEXT NOT NULL DEFAULT 'active',
+                created_at TIMESTAMP DEFAULT NOW()
+            )
+        """)
+        print("OK payment_methods table ready")
+
         schema = await conn.fetch("""
             SELECT column_name, data_type, is_nullable, column_default
             FROM information_schema.columns

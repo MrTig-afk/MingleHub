@@ -158,12 +158,13 @@ async def recompute_invoices(conn, ref_ts=None) -> dict:
         cap_wd = cap_blocks(venue["nightly_cap_weekday"], unit)
         cap_we = cap_blocks(venue["nightly_cap_weekend"], unit)
 
-        # Never recompute an already-paid invoice.
+        # Never recompute a paid or final invoice. is_final marks the snapshot
+        # issued at cancellation; recomputing it would overwrite the at-cancel total.
         existing = await conn.fetchrow(
-            "SELECT id, status FROM invoices WHERE venue_id = $1 AND period_start = $2",
+            "SELECT id, status, is_final FROM invoices WHERE venue_id = $1 AND period_start = $2",
             venue_id, period_start,
         )
-        if existing and existing["status"] == "paid":
+        if existing and (existing["status"] == "paid" or existing.get("is_final")):
             summary["skipped_paid"] += 1
             continue
 
