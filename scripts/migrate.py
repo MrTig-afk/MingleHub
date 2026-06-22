@@ -584,6 +584,38 @@ async def migrate():
         """)
         print("OK venue_daily_stats table ready")
 
+        # Theme system: weighted round-type / card-category recipes (gamespec
+        # "Theme System"). weighting JSON = {"round_types": {...}, "card_categories": {...}}.
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS themes (
+                id                   UUID PRIMARY KEY,
+                theme_key            TEXT UNIQUE NOT NULL,
+                display_name         TEXT NOT NULL,
+                weighting            JSONB NOT NULL,
+                trivia_category_bias JSONB,
+                is_test              BOOLEAN NOT NULL DEFAULT FALSE,
+                created_at           TIMESTAMP DEFAULT NOW()
+            )
+        """)
+        print("OK themes table ready")
+
+        # Per venue per night: which theme is active. No selection -> default 'random'.
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS nightly_theme_selections (
+                id            UUID PRIMARY KEY,
+                venue_id      UUID NOT NULL REFERENCES venues(id),
+                selected_date DATE NOT NULL,
+                theme_key     TEXT NOT NULL,
+                created_at    TIMESTAMP DEFAULT NOW(),
+                UNIQUE (venue_id, selected_date)
+            )
+        """)
+        print("OK nightly_theme_selections table ready")
+
+        from scripts.seed_themes import seed as seed_themes  # noqa: E402
+        await seed_themes(conn)
+        print("OK themes seeded")
+
         schema = await conn.fetch("""
             SELECT column_name, data_type, is_nullable, column_default
             FROM information_schema.columns
