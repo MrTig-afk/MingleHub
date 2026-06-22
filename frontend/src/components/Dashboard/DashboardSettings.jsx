@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { fetchSettings, patchSettings } from '../../services/dashboardApi'
 import { buttonStyle, cardStyle, formatMoney, labelStyle, selectStyle } from './dashboardStyles'
+import ThemePicker from './ThemePicker'
 
 const shimmerCard = (height = 80) => ({
   ...cardStyle,
@@ -121,6 +122,8 @@ export default function DashboardSettings({ token, user }) {
 
   return (
     <div>
+      <ThemePicker token={token} />
+
       {/* Editable settings card */}
       <div style={cardStyle}>
         <div style={{ ...labelStyle, marginBottom: '4px' }}>Venue Name</div>

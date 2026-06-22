@@ -100,6 +100,28 @@ export const fetchBilling = (token) =>
     return r.json()
   })
 
+export const fetchThemes = (token) =>
+  fetch(`${BASE}/api/dashboard/themes`, { headers: h(token) }).then(async (r) => {
+    if (!r.ok) throw new Error((await r.json()).detail || r.status)
+    return r.json()
+  })
+
+export const fetchActiveTheme = (token) =>
+  fetch(`${BASE}/api/dashboard/theme`, { headers: h(token) }).then(async (r) => {
+    if (!r.ok) throw new Error((await r.json()).detail || r.status)
+    return r.json()
+  })
+
+export const setTheme = (token, themeKey) =>
+  fetch(`${BASE}/api/dashboard/theme`, {
+    method: 'POST',
+    headers: h(token),
+    body: JSON.stringify({ theme_key: themeKey }),
+  }).then(async (r) => {
+    if (!r.ok) throw new Error((await r.json()).detail || r.status)
+    return r.json()
+  })
+
 // First-run venue setup for a newly-provisioned owner with no venue yet.
 export const setupVenue = (token, body) =>
   fetch(`${BASE}/api/dashboard/setup-venue`, {

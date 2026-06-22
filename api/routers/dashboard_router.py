@@ -21,6 +21,7 @@ from api.services.nfc_crypto import encrypt_tag_key
 from api.services.session_service import compute_retap_state
 from api.services.billing_service import cap_blocks, BLOCK_SECONDS
 from api.services.analytics_service import range_totals
+from api.services.theme_service import resolve_active_theme
 
 router = APIRouter(prefix="/api/dashboard", dependencies=[Depends(verify_api_key)])
 
@@ -902,6 +903,67 @@ async def get_billing(
     except Exception:
         await notify_error("GET /dashboard/billing failed 🚨", traceback.format_exc()[:500])
         raise HTTPException(status_code=500, detail="Internal error")
+
+
+@router.get("/themes")
+@limiter.limit("60/minute")
+async def list_themes(
+    request: Request,
+    current_user: CurrentUser = Depends(require_role("venue_owner", "venue_staff")),
+):
+    """Available themes for the picker. Test themes (is_test) force a single
+    round type — handy for isolating a game while testing/billing."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT theme_key, display_name, is_test FROM themes ORDER BY is_test, display_name")
+    return {"themes": [
+        {"theme_key": r["theme_key"], "display_name": r["display_name"], "is_test": r["is_test"]}
+        for r in rows
+    ]}
+
+
+@router.get("/theme")
+@limiter.limit("60/minute")
+async def get_active_theme(
+    request: Request,
+    current_user: CurrentUser = Depends(require_role("venue_owner", "venue_staff")),
+):
+    """The venue's theme for tonight (or the 'random' default)."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        theme = await resolve_active_theme(conn, current_user.venue_id)
+    return {"theme_key": theme["theme_key"], "display_name": theme["display_name"]}
+
+
+class SetThemeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    theme_key: str = Field(min_length=1, max_length=64)
+
+
+@router.post("/theme")
+@limiter.limit("30/minute")
+async def set_theme(
+    request: Request,
+    body: SetThemeRequest,
+    current_user: CurrentUser = Depends(require_role("venue_owner")),
+):
+    """Set tonight's theme (owner only). Upserts the venue's selection for the
+    current 4am-boundary play-date."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        exists = await conn.fetchval("SELECT 1 FROM themes WHERE theme_key = $1", body.theme_key)
+        if not exists:
+            raise HTTPException(status_code=404, detail="Unknown theme")
+        await conn.execute(
+            """
+            INSERT INTO nightly_theme_selections (id, venue_id, selected_date, theme_key)
+            VALUES (gen_random_uuid(), $1,
+                (date_trunc('day', (NOW() AT TIME ZONE $2) - INTERVAL '4 hours'))::date, $3)
+            ON CONFLICT (venue_id, selected_date) DO UPDATE SET theme_key = $3
+            """,
+            current_user.venue_id, VENUE_TIMEZONE, body.theme_key)
+    return {"theme_key": body.theme_key}
 
 
 class PairTagRequest(BaseModel):

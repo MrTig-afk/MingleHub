@@ -13,6 +13,7 @@ from api.services import (
     roulette_service, session_service, trivia_service,
 )
 from api.services.session_service import compute_retap_state
+from api.services.theme_service import resolve_active_theme
 from api.services.notify import notify_error
 from api.services.nfc_crypto import decrypt_tag_key
 from api.services.nfc_verify import verify_signature
@@ -895,7 +896,7 @@ async def current_round(request: Request, session_id: str):
         async with pool.acquire() as conn:
             row = await conn.fetchrow(
                 """
-                SELECT gs.current_round_number, gs.ended_at, gs.id,
+                SELECT gs.current_round_number, gs.ended_at, gs.id, gs.venue_id,
                        EXTRACT(EPOCH FROM NOW() - COALESCE(gs.last_activity_at, gs.created_at))
                            AS idle_seconds,
                        COALESCE(v.retap_interval_minutes, 15) * 60
@@ -913,6 +914,12 @@ async def current_round(request: Request, session_id: str):
                 "WHERE session_id = $1 AND left_early = FALSE",
                 session_id,
             )
+            # Theme-weighted round selection: the origin phone picks each round's
+            # type from these weights (deterministic per round). Resolved here so
+            # the whole session uses the venue's theme for tonight.
+            theme = await resolve_active_theme(conn, row["venue_id"])
+            theme_key = theme.get("theme_key")
+            round_type_weights = (theme.get("weighting") or {}).get("round_types", {})
             retap = compute_retap_state(
                 float(row["idle_seconds"]),
                 int(row["threshold_seconds"]),
@@ -928,6 +935,8 @@ async def current_round(request: Request, session_id: str):
                     "active_count": int(active_count),
                     "ended": True,
                     "retap": retap,
+                    "theme_key": theme_key,
+                    "round_type_weights": round_type_weights,
                 }
     except HTTPException:
         raise
@@ -943,4 +952,6 @@ async def current_round(request: Request, session_id: str):
         "active_count": int(active_count),
         "ended": row["ended_at"] is not None,
         "retap": retap,
+        "theme_key": theme_key,
+        "round_type_weights": round_type_weights,
     }

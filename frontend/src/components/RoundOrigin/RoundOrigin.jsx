@@ -16,21 +16,47 @@ import {
   rejoinSession,
 } from '../../services/patronApi'
 
-// Round cadence: Chooser -> Roulette -> Trivia -> Chooser -> Roulette -> Trivia …
-// Falls back to Chooser when a round type needs >= 2 active players and there
-// aren't enough at the table (Roulette and Trivia both require at least 2).
-const ROUND_CADENCE = ['chooser', 'roulette', 'trivia']
+// Theme-weighted round selection: the origin phone draws each round's type from
+// the venue's theme weights (served by /current-round as round_type_weights).
+// The draw is DETERMINISTIC per (session, round) so it never flickers across
+// re-renders/polls. Falls back to Chooser when no eligible weighted type remains
+// (Roulette/Trivia need >= 2 active players; a test theme can zero a type out).
+const DEFAULT_WEIGHTS = { chooser: 1, roulette: 1, trivia: 1 }
 
 // When a game drops below 2 active players it parks on "Waiting"; if no one
 // rejoins within this window it auto-ends (a 1-player social game is pointless).
 // A re-tap/rejoin before it expires cancels the countdown and resumes play.
 const SOLO_TIMEOUT_SECONDS = 60
 
-function decideRoundType(roundNumber, activeCount) {
-  const type = ROUND_CADENCE[(roundNumber - 1) % 3]
-  if (type === 'roulette' && activeCount < 2) return 'chooser'
-  if (type === 'trivia' && activeCount < 2) return 'chooser'
-  return type
+// Stable [0,1) fraction from a string (FNV-1a) — same role as the server's seed,
+// but only the origin computes round types so they need not match byte-for-byte.
+function seedFraction(str) {
+  let h = 2166136261
+  for (let i = 0; i < str.length; i += 1) {
+    h ^= str.charCodeAt(i)
+    h = Math.imul(h, 16777619)
+  }
+  return ((h >>> 0) % 1000000) / 1000000
+}
+
+function decideRoundType(roundNumber, activeCount, weights, sessionId) {
+  const w = weights || DEFAULT_WEIGHTS
+  const eligible = {}
+  for (const [type, val] of Object.entries(w)) {
+    if (!val || val <= 0) continue
+    if ((type === 'roulette' || type === 'trivia') && activeCount < 2) continue
+    eligible[type] = val
+  }
+  const keys = Object.keys(eligible).sort()
+  if (keys.length === 0) return 'chooser'
+  const total = keys.reduce((s, k) => s + eligible[k], 0)
+  const target = seedFraction(`${sessionId}:${roundNumber}`) * total
+  let cum = 0
+  for (const k of keys) {
+    cum += eligible[k]
+    if (target < cum) return k
+  }
+  return keys[keys.length - 1]
 }
 
 // gamespec.md Step 5 — Round Flow, on the session-origin (table) phone. The round
@@ -66,6 +92,7 @@ export default function RoundOrigin({
   const [gameEnded, setGameEnded] = useState(false)
   const [hostLeft, setHostLeft] = useState(false)
   const [retap, setRetap] = useState(null)
+  const [roundWeights, setRoundWeights] = useState(DEFAULT_WEIGHTS)
   const toastTimer = useRef(null)
 
   // roundNumber is null only when we need to fetch it from the server (no prop provided).
@@ -83,6 +110,7 @@ export default function RoundOrigin({
         // must drop below 2 so the "Waiting for players" screen shows instead of a
         // finger picker that waits forever for a 2nd finger.
         if (data.active_count) setActiveCount(data.active_count)
+        if (data.round_type_weights) setRoundWeights(data.round_type_weights)
       })
       .catch(() => {
         if (!cancelled) setRoundNumber(1) // safe fallback
@@ -90,8 +118,22 @@ export default function RoundOrigin({
     return () => { cancelled = true }
   }, [sessionId, roundNumber])
 
+  // Theme weights: fetched once on mount, independent of the round-number
+  // bootstrap above (which is skipped on resume when initialRoundNumber is set).
+  useEffect(() => {
+    let cancelled = false
+    fetchCurrentRound(sessionId)
+      .then((data) => {
+        if (!cancelled && data.round_type_weights) setRoundWeights(data.round_type_weights)
+      })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [sessionId])
+
   // roundType is only meaningful once roundNumber is loaded.
-  const roundType = roundNumber !== null ? decideRoundType(roundNumber, activeCount) : null
+  const roundType = roundNumber !== null
+    ? decideRoundType(roundNumber, activeCount, roundWeights, sessionId)
+    : null
 
   const showToast = useCallback((msg) => {
     setToast(msg)
