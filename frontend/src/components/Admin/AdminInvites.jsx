@@ -196,7 +196,18 @@ export default function AdminInvites({ token }) {
         <h2 style={{ fontFamily: 'var(--font-headline)', fontSize: '18px', marginTop: 0, marginBottom: '16px' }}>
           Invite Generated
         </h2>
-        <div style={{ ...cardStyle, maxWidth: '480px', textAlign: 'center' }}>
+        <div style={{ ...cardStyle, maxWidth: '480px', textAlign: 'center', position: 'relative' }}>
+          <button
+            onClick={() => setCreated(null)}
+            aria-label="Close"
+            style={{
+              position: 'absolute', top: '10px', right: '12px',
+              background: 'transparent', border: 'none', cursor: 'pointer',
+              color: 'var(--on-surface-dim)', fontSize: '22px', lineHeight: 1, padding: '4px',
+            }}
+          >
+            &times;
+          </button>
           <p style={{ marginBottom: '16px', fontWeight: 700 }}>{created.venue_name}</p>
           <p style={{ fontSize: '13px', color: 'var(--on-surface-dim)', marginBottom: '16px' }}>
             {created.invited_email}

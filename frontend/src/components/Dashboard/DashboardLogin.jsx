@@ -5,10 +5,11 @@ import { buttonStyle, selectStyle } from './dashboardStyles'
 // Must match clerk_user_id values seeded by scripts/seed_platform.py.
 // Expanded beyond PairTags' owner-only list to cover all roles for testing.
 const DEV_USERS = [
-  { id: 'dev_owner_a', label: "Owner A -- Fifty Five Bar" },
-  { id: 'dev_staff_a', label: "Staff A -- Fifty Five Bar" },
-  { id: 'dev_owner_b', label: 'Owner B -- The Last Chance' },
-  { id: 'dev_admin',   label: 'Admin (no venue)' },
+  { id: 'dev_owner_a',     label: "Owner A -- Fifty Five Bar" },
+  { id: 'dev_staff_a',     label: "Staff A -- Fifty Five Bar" },
+  { id: 'dev_owner_b',     label: 'Owner B -- The Last Chance' },
+  { id: 'dev_owner_noven', label: 'Owner (no venue) -- invite/gate tests' },
+  { id: 'dev_admin',       label: 'Admin (no venue)' },
 ]
 
 export default function DashboardLogin({ onLoginSuccess }) {

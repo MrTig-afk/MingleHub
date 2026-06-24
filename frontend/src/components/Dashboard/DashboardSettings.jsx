@@ -18,6 +18,7 @@ export default function DashboardSettings({ token, user }) {
   const [editRestrict, setEditRestrict] = useState(false)
   const [saving, setSaving] = useState(false)
   const [saveMsg, setSaveMsg] = useState(null)
+  const [cancelStarted, setCancelStarted] = useState(false)
   const [cancelReason, setCancelReason] = useState('')
   const [cancelConfirm, setCancelConfirm] = useState(false)
   const [cancelBusy, setCancelBusy] = useState(false)
@@ -144,6 +145,7 @@ export default function DashboardSettings({ token, user }) {
     try {
       await cancelVenue(token, cancelReason.trim())
       setCancelConfirm(false)
+      setCancelStarted(false)
       setCancelReason('')
       setReloadKey((k) => k + 1)
     } catch (e) {
@@ -298,10 +300,29 @@ export default function DashboardSettings({ token, user }) {
           <div style={{ fontWeight: 700, fontSize: '14px', marginBottom: '8px', color: 'var(--tertiary)' }}>
             Cancel Account
           </div>
-          {!cancelConfirm ? (
+          {!cancelStarted ? (
+            // Step 1 — intent only. The reason box appears after the owner
+            // commits to cancelling, not before.
             <>
               <div style={labelStyle}>
                 Cancelling stops new games immediately. You have 7 days to reactivate.
+              </div>
+              <button
+                onClick={() => setCancelStarted(true)}
+                style={{
+                  ...buttonStyle,
+                  background: 'var(--tertiary)',
+                  marginTop: '12px',
+                }}
+              >
+                Cancel Account
+              </button>
+            </>
+          ) : !cancelConfirm ? (
+            // Step 2 — collect the reason.
+            <>
+              <div style={labelStyle}>
+                Tell us why you&rsquo;re cancelling (required), then continue.
               </div>
               <textarea
                 value={cancelReason}
@@ -309,26 +330,35 @@ export default function DashboardSettings({ token, user }) {
                 placeholder="Reason for cancelling (required)"
                 maxLength={500}
                 rows={3}
+                autoFocus
                 style={{
                   ...selectStyle,
                   marginTop: '12px',
                   resize: 'vertical',
                 }}
               />
-              <button
-                onClick={() => { if (cancelReason.trim().length > 0) setCancelConfirm(true) }}
-                disabled={cancelReason.trim().length === 0}
-                style={{
-                  ...buttonStyle,
-                  background: 'var(--tertiary)',
-                  marginTop: '12px',
-                  opacity: cancelReason.trim().length === 0 ? 0.5 : 1,
-                }}
-              >
-                Cancel My Account
-              </button>
+              <div style={{ display: 'flex', gap: '8px', marginTop: '12px' }}>
+                <button
+                  onClick={() => { if (cancelReason.trim().length > 0) setCancelConfirm(true) }}
+                  disabled={cancelReason.trim().length === 0}
+                  style={{
+                    ...buttonStyle,
+                    background: 'var(--tertiary)',
+                    opacity: cancelReason.trim().length === 0 ? 0.5 : 1,
+                  }}
+                >
+                  Continue
+                </button>
+                <button
+                  onClick={() => { setCancelStarted(false); setCancelReason(''); setCancelError(null) }}
+                  style={{ ...buttonStyle, background: 'var(--bg-surface)', color: 'var(--on-surface)' }}
+                >
+                  Go Back
+                </button>
+              </div>
             </>
           ) : (
+            // Step 3 — final confirm.
             <>
               <div style={{ ...labelStyle, marginBottom: '12px' }}>
                 Are you sure? Your tags will stop working immediately. You have 7 days to reactivate.
