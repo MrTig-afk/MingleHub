@@ -168,9 +168,13 @@ This is where the rigor lives. A sample of what's explicitly handled and tested:
 
 ## 7. Future scope
 
-**NFC — signed tags (security upgrade, optional for launch):**
-- Today's **plain NFC tags work and are cheap.** They lack only *cryptographic proof of physical presence* (someone could share a table's URL and "play" remotely). Because billing is duration-based and capped, the abuse upside is minimal — so we can **launch on plain tags**.
-- Upgrading to **signed (NTAG 424 DNA) tags** is a **contained ~1-day code change** — the entire verification framework (key storage, replay protection) is already built; only the crypto algorithm swaps in. The catch: it needs real tags in hand to validate against, so it's a deliberate later pass, not a launch blocker. **Recommendation: don't buy the pricier signed tags for launch.**
+**NFC tags — how they actually get written, and the one real gap:**
+
+*Launch = plain tags, and writing them is trivial.* A launch tag is a cheap NTAG (213/215) holding **one static URL** — `https://<our-domain>/<venue-slug>/<table-number>` (e.g. `https://minglehub.com/fifty-five-bar/3`). Writing it takes ~30 seconds with any free NFC-writer phone app (e.g. NXP **TagWriter**): pick "write URL", type it, hold the phone to the sticker — done. No keys, no special hardware, no PC. So the realistic workflow is either **we pre-write + ship the tags per venue** (one batch, label them table 1..N), or an **owner writes their own** from a one-line instruction. Then the dashboard's **Tag Pairing** step binds each `tag_uid → table` so the system knows which sticker is which table. **This path is fully built and launch-ready** — the backend tap route accepts the unsigned URL and resolves the table directly. So: *the owner never deals with a URL by hand beyond, at most, typing it once into a writer app — and ideally not even that, because we ship pre-written tags.*
+
+*Signed tags (NTAG 424 DNA) are the upgrade — and here's the honest gap.* A signed tag is programmed once with the URL **template** + **SDM/SUN config** (so the chip appends `tag_uid/counter/sig` on every tap) + its **AES keys**. The backend **verification** side already exists (signature check, strictly-increasing counter / replay protection, encrypted key storage). The missing piece is **not the crypto — it's provisioning**: today the "pair tag" endpoint mints a **random placeholder AES key** (the code says so explicitly), which is fine for our dev simulator but can never verify a *real* chip, because the chip's burned-in key ≠ our placeholder. To make signed tags real we need (1) an **admin provisioning import** that loads each tag's real `(uid, AES key)` into the DB encrypted at rest, (2) swapping the placeholder branch to **bind an already-provisioned tag**, and (3) a **programming recipe** (URL template + SDM mirror offsets + key-set) for whoever burns the chips — or simply **order pre-programmed 424 DNA tags from the vendor** and import their key file. Roughly **a day once tags are in hand**. Crucially, **the owner still never programs keys** — that's a manufacturing/ops step; the owner only ever tap-to-pairs.
+
+*Recommendation (unchanged): launch on plain tags.* They're cheap and owner- or ops-writable in seconds. The only thing a signed tag buys is *cryptographic proof of physical presence* (stopping someone who shares a table's URL from "playing" remotely) — low-value here because billing is duration-based and capped. Move to signed tags only if remote-play freeloading actually shows up.
 
 **Other roadmap items (all scoped, none blocking launch):**
 - **QR fallback** (`/play` + daily codes) for the ~5% of phones without NFC.
@@ -194,7 +198,7 @@ This is where the rigor lives. A sample of what's explicitly handled and tested:
 
 **Soon-after hardening (not blockers):**
 - [ ] Redis (distributed rate limiting/caching)
-- [ ] Signed NFC tags (only if/when we want physical-presence proof)
+- [ ] Signed NFC tags — needs a **provisioning import** (load real chip AES keys) + pre-programmed 424 DNA tags, not just a crypto swap; only if/when we want physical-presence proof (see §7)
 - [ ] Rotate the development secret key before real users
 
 **The headline:** the *product* is done — onboarding, isolation, games, dashboards, billing, theming, controlled-invite onboarding, admin audit trail, and a complete billing lifecycle (cancel/suspend/reactivate/dunning) — all tested and CI-green. What remains between here and a live, multi-venue platform is **configuration and a domain purchase**, not feature development. We're clear to move on the domain.
