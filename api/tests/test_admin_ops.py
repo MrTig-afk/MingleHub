@@ -89,7 +89,7 @@ def _get_venue_fields(venue_id):
         try:
             return await conn.fetchrow(
                 """
-                SELECT billing_unit, retap_interval_minutes, nightly_cap_weekday,
+                SELECT name, billing_unit, retap_interval_minutes, nightly_cap_weekday,
                        nightly_cap_weekend, restrict_adult_content, is_test, status
                 FROM venues WHERE id = $1
                 """,
@@ -109,12 +109,12 @@ def _restore_venue(venue_id, fields):
             await conn.execute(
                 """
                 UPDATE venues SET
-                    billing_unit = $1, retap_interval_minutes = $2,
-                    nightly_cap_weekday = $3, nightly_cap_weekend = $4,
-                    restrict_adult_content = $5, is_test = $6, status = $7
-                WHERE id = $8
+                    name = $1, billing_unit = $2, retap_interval_minutes = $3,
+                    nightly_cap_weekday = $4, nightly_cap_weekend = $5,
+                    restrict_adult_content = $6, is_test = $7, status = $8
+                WHERE id = $9
                 """,
-                fields["billing_unit"], fields["retap_interval_minutes"],
+                fields["name"], fields["billing_unit"], fields["retap_interval_minutes"],
                 fields["nightly_cap_weekday"], fields["nightly_cap_weekend"],
                 fields["restrict_adult_content"], fields["is_test"], fields["status"],
                 venue_id,
@@ -346,6 +346,54 @@ def test_admin_override_billing_and_is_test(client, api_key_header):
     _ = created_lead_ids  # suppress unused-variable warning
 
 
+def test_admin_override_name(client, api_key_header):
+    """Admin PATCH name -> 200; venue renamed; audit row written. Owners cannot do this."""
+    original = _get_venue_fields(VENUE_A_ID)
+    try:
+        token = dev_login(client, api_key_header, ADMIN_CLERK_ID)
+        headers = {**api_key_header, **auth_header(token)}
+
+        new_name = "Admin Renamed Venue"
+        resp = client.patch(
+            f"/api/admin/venues/{VENUE_A_ID}",
+            headers=headers,
+            json={"reason": "Owner requested rename", "name": new_name},
+        )
+        assert resp.status_code == 200
+        assert "name" in resp.json()["updated_fields"]
+
+        after = _get_venue_fields(VENUE_A_ID)
+        assert after["name"] == new_name
+
+        override_rows = _fetch_config_overrides(VENUE_A_ID)
+        name_row = next(r for r in override_rows if r["field_name"] == "name")
+        assert name_row["old_value"] == original["name"]
+        assert name_row["new_value"] == new_name
+        assert name_row["reason"] == "Owner requested rename"
+    finally:
+        _restore_venue(VENUE_A_ID, original)
+        _delete_config_overrides(VENUE_A_ID)
+        assert _get_venue_fields(VENUE_A_ID)["name"] == original["name"]
+        assert _count_config_overrides(VENUE_A_ID) == 0
+
+
+def test_admin_override_name_whitespace_422(client, api_key_header):
+    """Admin PATCH name='   ' -> 422 (blank after strip); venue unchanged."""
+    original = _get_venue_fields(VENUE_A_ID)
+    token = dev_login(client, api_key_header, ADMIN_CLERK_ID)
+    headers = {**api_key_header, **auth_header(token)}
+
+    resp = client.patch(
+        f"/api/admin/venues/{VENUE_A_ID}",
+        headers=headers,
+        json={"reason": "blank rename", "name": "   "},
+    )
+    assert resp.status_code == 422
+
+    after = _get_venue_fields(VENUE_A_ID)
+    assert after["name"] == original["name"]
+
+
 def test_admin_override_reason_missing_422(client, api_key_header):
     """PATCH without reason key -> 422 (Pydantic required field)."""
     token = dev_login(client, api_key_header, ADMIN_CLERK_ID)
@@ -385,12 +433,12 @@ def test_admin_override_reason_whitespace_422(client, api_key_header):
 
 
 def test_admin_override_extra_field_422(client, api_key_header):
-    """PATCH with non-whitelisted field (name) -> 422 (extra=forbid)."""
+    """PATCH with non-whitelisted field (slug) -> 422 (extra=forbid)."""
     token = dev_login(client, api_key_header, ADMIN_CLERK_ID)
     resp = client.patch(
         f"/api/admin/venues/{VENUE_A_ID}",
         headers={**api_key_header, **auth_header(token)},
-        json={"reason": "test", "name": "Hacked"},
+        json={"reason": "test", "slug": "hacked-slug"},
     )
     assert resp.status_code == 422
 

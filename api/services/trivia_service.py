@@ -14,12 +14,15 @@ questions, advances between them, and finishes. Each question's correct_option
 is checked SERVER-SIDE only and is never sent to a browser before that phone
 has answered (security.md / coding-practices MingleHub Rules).
 """
+import logging
 import uuid
 
 import asyncpg
 
 from api.services.realtime_service import publish as rt_publish
 from api.services.session_service import compute_retap_state, idle_end_session
+
+logger = logging.getLogger(__name__)
 
 NUM_QUESTIONS = 5
 QUESTION_TIMER_SECONDS = 20
@@ -221,6 +224,12 @@ async def start_trivia(conn, session_id: str, phone_id: str) -> dict:
         )
 
     joined_count = len(members)
+    # DIAG (§8.7 participant-drop): snapshot exactly which phones were enrolled at
+    # round start, so a later "join next round" complaint can be cross-checked.
+    logger.warning(
+        "trivia.enroll session=%s round=%s enrolled_phones=%s",
+        session_id, trivia_round_id, [str(m["phone_id"]) for m in members],
+    )
     await conn.execute(
         "UPDATE game_sessions SET last_activity_at = NOW() WHERE id = $1",
         session_id,
@@ -749,6 +758,19 @@ async def get_current_state(conn, session_id: str, phone_id: str) -> dict | None
         "SELECT 1 FROM trivia_participants WHERE trivia_round_id = $1 AND phone_id = $2",
         active["id"], phone_id,
     ))
+    if not is_participant:
+        # DIAG (§8.7 participant-drop): a phone seeing "join next round". Capture its
+        # game_players membership — left_early=TRUE means it explicitly left (correct
+        # behaviour); a MISSING row or left_early=FALSE-but-not-enrolled is a real bug.
+        member = await conn.fetchrow(
+            "SELECT left_early FROM game_players WHERE session_id = $1 AND phone_id = $2",
+            session_id, phone_id,
+        )
+        membership = "no_game_players_row" if member is None else f"left_early={member['left_early']}"
+        logger.warning(
+            "trivia.not_participant session=%s round=%s status=%s phone=%s membership=%s",
+            session_id, trivia_round_id, active["status"], str(phone_id), membership,
+        )
     base.update({
         "trivia_round_id": trivia_round_id,
         "is_participant": is_participant,

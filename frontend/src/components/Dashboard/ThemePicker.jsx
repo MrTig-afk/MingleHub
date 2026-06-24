@@ -9,7 +9,8 @@ export default function ThemePicker({ token }) {
   const [themes, setThemes] = useState([])
   const [active, setActive] = useState(null)
   const [saving, setSaving] = useState(false)
-  const [error, setError] = useState(null)
+  const [saveMsg, setSaveMsg] = useState(null) // 'Saved' | error string | null
+  const [error, setError] = useState(null)     // initial-load error only
 
   useEffect(() => {
     let cancelled = false
@@ -26,13 +27,15 @@ export default function ThemePicker({ token }) {
   const onChange = async (key) => {
     const prev = active
     setSaving(true)
-    setError(null)
+    setSaveMsg(null)
     setActive(key)
     try {
       await setTheme(token, key)
+      setSaveMsg('Saved')
+      setTimeout(() => setSaveMsg(null), 3000)
     } catch (e) {
-      setError(e.message || 'Could not set theme')
       setActive(prev)
+      setSaveMsg(e.message || 'Could not set theme')
     } finally {
       setSaving(false)
     }
@@ -43,7 +46,17 @@ export default function ThemePicker({ token }) {
 
   return (
     <div style={{ ...cardStyle, marginBottom: '12px' }}>
-      <div style={{ fontWeight: 700, fontSize: '14px', marginBottom: '8px' }}>Tonight&rsquo;s Theme</div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '8px' }}>
+        <div style={{ fontWeight: 700, fontSize: '14px' }}>Tonight&rsquo;s Theme</div>
+        {saveMsg !== null && (
+          <span style={{
+            fontSize: '12px',
+            color: saveMsg === 'Saved' ? 'var(--secondary)' : 'var(--tertiary)',
+          }}>
+            {saveMsg === 'Saved' ? 'Saved ✓' : saveMsg}
+          </span>
+        )}
+      </div>
       <p style={{ fontSize: '13px', color: 'var(--on-surface-dim)', margin: '0 0 10px' }}>
         Sets the mix of round types &amp; cards for tonight. <strong>Test</strong> themes force a single
         game type &mdash; handy for isolating a game and watching the billing counters.
@@ -69,9 +82,6 @@ export default function ThemePicker({ token }) {
           </optgroup>
         )}
       </select>
-      {saving && (
-        <p style={{ fontSize: '12px', color: 'var(--on-surface-dim)', marginTop: '6px' }}>Saving&hellip;</p>
-      )}
       {error && (
         <p style={{ color: 'var(--tertiary)', fontSize: '12px', marginTop: '6px', fontFamily: 'var(--font-mono)' }}>
           {error}

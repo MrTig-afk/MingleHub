@@ -231,6 +231,7 @@ class AdminVenueOverride(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     reason: str = Field(..., min_length=1, max_length=500)
+    name: Optional[str] = Field(None, min_length=1, max_length=120)
     billing_unit: Optional[float] = Field(None, ge=0)
     retap_interval_minutes: Optional[int] = Field(None, gt=0)
     nightly_cap_weekday: Optional[float] = Field(None, ge=0)
@@ -363,6 +364,7 @@ async def admin_venue_detail(
 # Static per-field UPDATE SQL. Column names are string literals -- never interpolated.
 # Values are parameterised ($1/$2) so no injection is possible.
 FIELD_UPDATES = {
+    "name": "UPDATE venues SET name = $1, updated_at = NOW() WHERE id = $2",
     "billing_unit": "UPDATE venues SET billing_unit = $1, updated_at = NOW() WHERE id = $2",
     "retap_interval_minutes": "UPDATE venues SET retap_interval_minutes = $1, updated_at = NOW() WHERE id = $2",
     "nightly_cap_weekday": "UPDATE venues SET nightly_cap_weekday = $1, updated_at = NOW() WHERE id = $2",
@@ -392,6 +394,7 @@ async def admin_venue_override(
             raise HTTPException(status_code=422, detail="Reason must not be blank")
 
         overridable = {
+            "name": body.name,
             "billing_unit": body.billing_unit,
             "retap_interval_minutes": body.retap_interval_minutes,
             "nightly_cap_weekday": body.nightly_cap_weekday,
@@ -405,12 +408,19 @@ async def admin_venue_override(
         if len(provided) == 0:
             raise HTTPException(status_code=400, detail="No overridable fields provided")
 
+        # Name is free text — strip and reject a whitespace-only rename (min_length=1
+        # alone would let "   " through).
+        if "name" in provided:
+            provided["name"] = provided["name"].strip()
+            if not provided["name"]:
+                raise HTTPException(status_code=422, detail="Name must not be blank")
+
         pool = await get_pool()
         async with pool.acquire() as conn:
             async with conn.transaction():
                 current = await conn.fetchrow(
                     """
-                    SELECT billing_unit, retap_interval_minutes, nightly_cap_weekday,
+                    SELECT name, billing_unit, retap_interval_minutes, nightly_cap_weekday,
                            nightly_cap_weekend, restrict_adult_content, is_test, status
                     FROM venues WHERE id = $1 FOR UPDATE
                     """,

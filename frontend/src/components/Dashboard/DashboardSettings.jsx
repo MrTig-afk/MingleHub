@@ -14,7 +14,6 @@ export default function DashboardSettings({ token, user }) {
   const [data, setData] = useState(null)
   const [fetchError, setFetchError] = useState(null)
   const [reloadKey, setReloadKey] = useState(0)
-  const [editName, setEditName] = useState('')
   const [editRestrict, setEditRestrict] = useState(false)
   const [saving, setSaving] = useState(false)
   const [saveMsg, setSaveMsg] = useState(null)
@@ -36,7 +35,6 @@ export default function DashboardSettings({ token, user }) {
         const d = await fetchSettings(token)
         if (cancelled) return
         setData(d)
-        setEditName(d.editable.name)
         setEditRestrict(d.editable.restrict_adult_content)
         setFetchError(null)
         // Compute days remaining outside render to satisfy react-hooks/purity.
@@ -62,22 +60,6 @@ export default function DashboardSettings({ token, user }) {
     run()
     return () => { cancelled = true }
   }, [token, reloadKey])
-
-  // Guard against accidental navigation when there are unsaved changes.
-  // hasChanges is derived from state so React sees it update correctly as a dep.
-  const hasChanges = data && (
-    editName.trim() !== data.editable.name ||
-    editRestrict !== data.editable.restrict_adult_content
-  )
-  useEffect(() => {
-    if (!hasChanges) return
-    const handler = (e) => {
-      e.preventDefault()
-      e.returnValue = ''
-    }
-    window.addEventListener('beforeunload', handler)
-    return () => window.removeEventListener('beforeunload', handler)
-  }, [hasChanges])
 
   // Owner-only guard — checked after all hooks.
   if (user.role !== 'venue_owner') {
@@ -116,23 +98,21 @@ export default function DashboardSettings({ token, user }) {
     )
   }
 
-  const nameValid = editName.trim().length > 0
-  const saveDisabled = !hasChanges || !nameValid || saving
-
-  const handleSave = async () => {
+  // Auto-save the adult-content toggle on change. Optimistic: flip the UI first,
+  // then persist; revert if the PATCH fails. Mirrors the ThemePicker pattern.
+  const handleToggleRestrict = async (next) => {
+    const prev = editRestrict
+    setEditRestrict(next)
     setSaving(true)
     setSaveMsg(null)
     try {
-      const updated = await patchSettings(token, {
-        name: editName.trim(),
-        restrict_adult_content: editRestrict,
-      })
+      const updated = await patchSettings(token, { restrict_adult_content: next })
       setData(updated)
-      setEditName(updated.editable.name)
       setEditRestrict(updated.editable.restrict_adult_content)
       setSaveMsg('Saved')
       setTimeout(() => setSaveMsg(null), 3000)
     } catch (e) {
+      setEditRestrict(prev)
       setSaveMsg(e.message || 'Save failed')
     } finally {
       setSaving(false)
@@ -210,28 +190,27 @@ export default function DashboardSettings({ token, user }) {
 
       <ThemePicker token={token} />
 
-      {/* Editable settings card */}
+      {/* Editable settings card — auto-saves on change (no Save button) */}
       <div style={cardStyle}>
-        <div style={{ ...labelStyle, marginBottom: '4px' }}>Venue Name</div>
-        <input
-          type="text"
-          value={editName}
-          onChange={(e) => setEditName(e.target.value)}
-          maxLength={120}
-          style={selectStyle}
-        />
-        {editName.trim() === '' && (
-          <div style={{ color: 'var(--tertiary)', fontSize: '12px', marginTop: '4px' }}>
-            Name cannot be empty
-          </div>
-        )}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+          <div style={{ fontWeight: 700, fontSize: '14px' }}>Content</div>
+          {saveMsg !== null && (
+            <span style={{
+              fontSize: '12px',
+              color: saveMsg === 'Saved' ? 'var(--secondary)' : 'var(--tertiary)',
+            }}>
+              {saveMsg === 'Saved' ? 'Saved ✓' : saveMsg}
+            </span>
+          )}
+        </div>
 
-        <div style={{ marginTop: '16px' }}>
-          <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
+        <div style={{ marginTop: '12px' }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: saving ? 'wait' : 'pointer' }}>
             <input
               type="checkbox"
               checked={editRestrict}
-              onChange={(e) => setEditRestrict(e.target.checked)}
+              disabled={saving}
+              onChange={(e) => handleToggleRestrict(e.target.checked)}
             />
             <span> Restrict adult content</span>
           </label>
@@ -240,24 +219,6 @@ export default function DashboardSettings({ token, user }) {
             Changes apply to new games only -- active sessions are not affected.
           </div>
         </div>
-
-        <button
-          onClick={handleSave}
-          disabled={saveDisabled}
-          style={{ ...buttonStyle, opacity: saveDisabled ? 0.5 : 1, marginTop: '16px' }}
-        >
-          {saving ? 'Saving...' : 'Save Settings'}
-        </button>
-
-        {saveMsg !== null && (
-          <div style={{
-            marginTop: '8px',
-            fontSize: '13px',
-            color: saveMsg === 'Saved' ? 'var(--secondary)' : 'var(--tertiary)',
-          }}>
-            {saveMsg === 'Saved' ? 'Saved ✓' : saveMsg}
-          </div>
-        )}
       </div>
 
       {/* Read-only admin-managed settings card */}
@@ -269,6 +230,7 @@ export default function DashboardSettings({ token, user }) {
           Contact support to change these.
         </div>
         {[
+          ['Venue name', data.read_only.name],
           ['Re-tap interval', `${data.read_only.retap_interval_minutes} min`],
           ['Billing unit', `${formatMoney(data.read_only.billing_unit)} / table / night`],
           ['Nightly cap (weekday)', formatMoney(data.read_only.nightly_cap_weekday)],

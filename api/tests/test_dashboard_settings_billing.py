@@ -163,10 +163,12 @@ def test_settings_get_owner_200(client, api_key_header):
     assert "read_only" in body
 
     editable = body["editable"]
-    assert isinstance(editable["name"], str)
     assert isinstance(editable["restrict_adult_content"], bool)
+    # Name is no longer owner-editable — it moved to read_only (admin-managed).
+    assert "name" not in editable
 
     read_only = body["read_only"]
+    assert isinstance(read_only["name"], str)
     assert isinstance(read_only["retap_interval_minutes"], int)
     assert isinstance(read_only["billing_unit"], str)
     assert isinstance(read_only["nightly_cap_weekday"], str)
@@ -211,25 +213,20 @@ def test_settings_get_invalid_token_401(client, api_key_header):
 # Settings PATCH tests
 # ---------------------------------------------------------------------------
 
-def test_settings_patch_name(client, api_key_header):
-    """Owner PATCH name -> 200; re-GET confirms the change; venue restored in finally."""
+def test_settings_patch_name_rejected(client, api_key_header):
+    """Owner PATCH name -> 422 (name is admin-managed, not owner-editable); row unchanged."""
     original = _get_venue_settings(VENUE_A_ID)
-    try:
-        token = dev_login(client, api_key_header, OWNER_A_CLERK_ID)
-        headers = {**api_key_header, **auth_header(token)}
+    token = dev_login(client, api_key_header, OWNER_A_CLERK_ID)
+    headers = {**api_key_header, **auth_header(token)}
 
-        resp = client.patch("/api/dashboard/settings",
-                            headers=headers,
-                            json={"name": "New Name Test"})
-        assert resp.status_code == 200
-        assert resp.json()["editable"]["name"] == "New Name Test"
+    resp = client.patch("/api/dashboard/settings",
+                        headers=headers,
+                        json={"name": "New Name Test"})
+    assert resp.status_code == 422
 
-        # Confirm persistence via re-GET
-        resp2 = client.get("/api/dashboard/settings", headers=headers)
-        assert resp2.status_code == 200
-        assert resp2.json()["editable"]["name"] == "New Name Test"
-    finally:
-        _restore_venue_settings(VENUE_A_ID, original)
+    # Venue name must be completely unchanged
+    after = _get_venue_settings(VENUE_A_ID)
+    assert after["name"] == original["name"]
 
 
 def test_settings_patch_restrict_adult_content(client, api_key_header):
@@ -245,31 +242,19 @@ def test_settings_patch_restrict_adult_content(client, api_key_header):
                             headers=headers,
                             json={"restrict_adult_content": new_value})
         assert resp.status_code == 200
-        assert resp.json()["editable"]["restrict_adult_content"] == new_value
+        body = resp.json()
+        assert body["editable"]["restrict_adult_content"] == new_value
+        # PATCH must return the FULL settings shape (incl. venue_status) — the
+        # Settings page rebuilds its state from this response and the
+        # cancel/reactivate sections vanish if venue_status is missing.
+        assert "venue_status" in body
+        assert "status" in body["venue_status"]
+        assert "name" in body["read_only"]
 
         # Confirm persistence via re-GET
         resp2 = client.get("/api/dashboard/settings", headers=headers)
         assert resp2.status_code == 200
         assert resp2.json()["editable"]["restrict_adult_content"] == new_value
-    finally:
-        _restore_venue_settings(VENUE_A_ID, original)
-
-
-def test_settings_patch_both_fields(client, api_key_header):
-    """Owner PATCH both name + restrict_adult_content -> 200; both changed."""
-    original = _get_venue_settings(VENUE_A_ID)
-    try:
-        token = dev_login(client, api_key_header, OWNER_A_CLERK_ID)
-        headers = {**api_key_header, **auth_header(token)}
-
-        new_restrict = not original["restrict_adult_content"]
-        resp = client.patch("/api/dashboard/settings",
-                            headers=headers,
-                            json={"name": "Both Fields Test", "restrict_adult_content": new_restrict})
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["editable"]["name"] == "Both Fields Test"
-        assert body["editable"]["restrict_adult_content"] == new_restrict
     finally:
         _restore_venue_settings(VENUE_A_ID, original)
 
@@ -330,10 +315,10 @@ def test_settings_patch_bola(client, api_key_header):
         token_b = dev_login(client, api_key_header, OWNER_B_CLERK_ID)
         headers_b = {**api_key_header, **auth_header(token_b)}
 
-        # owner_b changes their own venue name — this should succeed (200)
+        # owner_b changes their own venue's adult-content setting — should succeed (200)
         resp = client.patch("/api/dashboard/settings",
                             headers=headers_b,
-                            json={"name": "Hacked B"})
+                            json={"restrict_adult_content": not original_b["restrict_adult_content"]})
         assert resp.status_code == 200
 
         # Venue A must be completely untouched
@@ -341,64 +326,26 @@ def test_settings_patch_bola(client, api_key_header):
         headers_a = {**api_key_header, **auth_header(token_a)}
         resp_a = client.get("/api/dashboard/settings", headers=headers_a)
         assert resp_a.status_code == 200
-        assert resp_a.json()["editable"]["name"] == original_a["name"]
+        assert resp_a.json()["editable"]["restrict_adult_content"] == original_a["restrict_adult_content"]
     finally:
         _restore_venue_settings(VENUE_A_ID, original_a)
         _restore_venue_settings(VENUE_B_ID, original_b)
 
 
 def test_settings_patch_staff_403(client, api_key_header):
-    """Staff PATCH /settings -> 403; venue row unchanged."""
+    """Staff PATCH /settings -> 403 (owner-only); venue row unchanged."""
     original = _get_venue_settings(VENUE_A_ID)
     token = dev_login(client, api_key_header, STAFF_A_CLERK_ID)
     headers = {**api_key_header, **auth_header(token)}
 
     resp = client.patch("/api/dashboard/settings",
                         headers=headers,
-                        json={"name": "Staff Hack"})
+                        json={"restrict_adult_content": True})
     assert resp.status_code == 403
 
-    # Confirm name unchanged
+    # Confirm setting unchanged
     after = _get_venue_settings(VENUE_A_ID)
-    assert after["name"] == original["name"]
-
-
-def test_settings_patch_empty_name_422(client, api_key_header):
-    """PATCH with empty string or whitespace-only name -> 422."""
-    original = _get_venue_settings(VENUE_A_ID)
-    token = dev_login(client, api_key_header, OWNER_A_CLERK_ID)
-    headers = {**api_key_header, **auth_header(token)}
-
-    # Empty string
-    resp = client.patch("/api/dashboard/settings",
-                        headers=headers,
-                        json={"name": ""})
-    assert resp.status_code == 422
-
-    # Whitespace only
-    resp2 = client.patch("/api/dashboard/settings",
-                         headers=headers,
-                         json={"name": "   "})
-    assert resp2.status_code == 422
-
-    # Venue row must be completely unchanged
-    after = _get_venue_settings(VENUE_A_ID)
-    assert after["name"] == original["name"]
-
-
-def test_settings_patch_name_too_long(client, api_key_header):
-    """PATCH with name > 120 chars -> 422."""
-    original = _get_venue_settings(VENUE_A_ID)
-    token = dev_login(client, api_key_header, OWNER_A_CLERK_ID)
-    headers = {**api_key_header, **auth_header(token)}
-
-    resp = client.patch("/api/dashboard/settings",
-                        headers=headers,
-                        json={"name": "x" * 121})
-    assert resp.status_code == 422
-
-    after = _get_venue_settings(VENUE_A_ID)
-    assert after["name"] == original["name"]
+    assert after["restrict_adult_content"] == original["restrict_adult_content"]
 
 
 def test_settings_patch_empty_body_400(client, api_key_header):

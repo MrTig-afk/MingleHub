@@ -643,8 +643,44 @@ async def overview(
 class PatchSettingsRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    name: Optional[str] = None
+    # Venue name is intentionally NOT editable here — it is admin-managed
+    # (renamed only via the admin venue-config override). Owners get a
+    # read-only name; the only owner-editable setting is adult-content.
     restrict_adult_content: Optional[bool] = None
+
+
+def _build_settings_response(row) -> dict:
+    """Shared shape for GET + PATCH /settings. PATCH MUST return venue_status too:
+    the Settings page rebuilds its whole state from the PATCH response, and the
+    cancel/reactivate/suspended sections key off venue_status — omitting it makes
+    them vanish after an auto-save. Row must carry status/cancelled_at/suspended_at.
+    """
+    cancelled_at = row["cancelled_at"]
+    can_reactivate = (
+        row["status"] == "cancelled"
+        and cancelled_at is not None
+        and (datetime.now(timezone.utc).replace(tzinfo=None) - cancelled_at.replace(tzinfo=None)).days < 7
+    )
+    return {
+        "editable": {
+            "restrict_adult_content": row["restrict_adult_content"],
+        },
+        "read_only": {
+            # Name is admin-managed (read-only to owners) — only an admin
+            # override can rename a venue.
+            "name": row["name"],
+            "retap_interval_minutes": int(row["retap_interval_minutes"]),
+            "billing_unit": str(row["billing_unit"]),
+            "nightly_cap_weekday": str(row["nightly_cap_weekday"]),
+            "nightly_cap_weekend": str(row["nightly_cap_weekend"]),
+        },
+        "venue_status": {
+            "status": row["status"],
+            "cancelled_at": cancelled_at.isoformat() if cancelled_at else None,
+            "suspended_at": row["suspended_at"].isoformat() if row["suspended_at"] else None,
+            "can_reactivate": can_reactivate,
+        },
+    }
 
 
 @router.get("/settings")
@@ -670,30 +706,7 @@ async def get_settings(
             )
         if not row:
             raise HTTPException(status_code=404, detail="Venue not found")
-        cancelled_at = row["cancelled_at"]
-        can_reactivate = (
-            row["status"] == "cancelled"
-            and cancelled_at is not None
-            and (datetime.now(timezone.utc).replace(tzinfo=None) - cancelled_at.replace(tzinfo=None)).days < 7
-        )
-        return {
-            "editable": {
-                "name": row["name"],
-                "restrict_adult_content": row["restrict_adult_content"],
-            },
-            "read_only": {
-                "retap_interval_minutes": int(row["retap_interval_minutes"]),
-                "billing_unit": str(row["billing_unit"]),
-                "nightly_cap_weekday": str(row["nightly_cap_weekday"]),
-                "nightly_cap_weekend": str(row["nightly_cap_weekend"]),
-            },
-            "venue_status": {
-                "status": row["status"],
-                "cancelled_at": cancelled_at.isoformat() if cancelled_at else None,
-                "suspended_at": row["suspended_at"].isoformat() if row["suspended_at"] else None,
-                "can_reactivate": can_reactivate,
-            },
-        }
+        return _build_settings_response(row)
     except HTTPException:
         raise
     except Exception:
@@ -710,68 +723,28 @@ async def patch_settings(
 ):
     # venue_id always comes from the authenticated user — never from the request (BOLA).
     # Only venue_owner role may edit settings; venue_staff gets 403.
+    # Name is intentionally not owner-editable — it is admin-managed (see PatchSettingsRequest).
     try:
-        if body.name is None and body.restrict_adult_content is None:
+        if body.restrict_adult_content is None:
             raise HTTPException(status_code=400, detail="No fields to update")
-
-        if body.name is not None:
-            stripped = body.name.strip()
-            if len(stripped) == 0 or len(stripped) > 120:
-                raise HTTPException(status_code=422, detail="Name must be 1-120 characters")
-            body.name = stripped
 
         pool = await get_pool()
         async with pool.acquire() as conn:
-            # Static queries per field combination — no f-string SQL.
-            # Column names are hardcoded string literals; values are $N parameters.
-            if body.name is not None and body.restrict_adult_content is not None:
-                row = await conn.fetchrow(
-                    """
-                    UPDATE venues SET name=$1, restrict_adult_content=$2, updated_at=NOW()
-                    WHERE id=$3
-                    RETURNING name, restrict_adult_content,
-                              retap_interval_minutes, billing_unit,
-                              nightly_cap_weekday, nightly_cap_weekend
-                    """,
-                    body.name, body.restrict_adult_content, current_user.venue_id,
-                )
-            elif body.name is not None:
-                row = await conn.fetchrow(
-                    """
-                    UPDATE venues SET name=$1, updated_at=NOW()
-                    WHERE id=$2
-                    RETURNING name, restrict_adult_content,
-                              retap_interval_minutes, billing_unit,
-                              nightly_cap_weekday, nightly_cap_weekend
-                    """,
-                    body.name, current_user.venue_id,
-                )
-            else:
-                # restrict_adult_content only
-                # restrict_adult_content change applies to NEW sessions only
-                row = await conn.fetchrow(
-                    """
-                    UPDATE venues SET restrict_adult_content=$1, updated_at=NOW()
-                    WHERE id=$2
-                    RETURNING name, restrict_adult_content,
-                              retap_interval_minutes, billing_unit,
-                              nightly_cap_weekday, nightly_cap_weekend
-                    """,
-                    body.restrict_adult_content, current_user.venue_id,
-                )
+            # Parameterized — column name is a literal, value is $N.
+            # restrict_adult_content change applies to NEW sessions only.
+            row = await conn.fetchrow(
+                """
+                UPDATE venues SET restrict_adult_content=$1, updated_at=NOW()
+                WHERE id=$2
+                RETURNING name, restrict_adult_content,
+                          retap_interval_minutes, billing_unit,
+                          nightly_cap_weekday, nightly_cap_weekend,
+                          status, cancelled_at, suspended_at
+                """,
+                body.restrict_adult_content, current_user.venue_id,
+            )
 
-        return {
-            "editable": {
-                "name": row["name"],
-                "restrict_adult_content": row["restrict_adult_content"],
-            },
-            "read_only": {
-                "retap_interval_minutes": int(row["retap_interval_minutes"]),
-                "billing_unit": str(row["billing_unit"]),
-                "nightly_cap_weekday": str(row["nightly_cap_weekday"]),
-                "nightly_cap_weekend": str(row["nightly_cap_weekend"]),
-            },
-        }
+        return _build_settings_response(row)
     except HTTPException:
         raise
     except Exception:

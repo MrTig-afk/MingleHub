@@ -40,6 +40,7 @@ const inputStyle = {
 }
 
 const EMPTY_FORM = {
+  name: '',
   billing_unit: '',
   retap_interval_minutes: '',
   nightly_cap_weekday: '',
@@ -55,6 +56,7 @@ const HIGH_IMPACT = ['billing_unit', 'status', 'is_test']
 
 function venueToForm(venue) {
   return {
+    name: venue.name ?? '',
     billing_unit: venue.billing_unit ?? '',
     retap_interval_minutes: String(venue.retap_interval_minutes ?? ''),
     nightly_cap_weekday: venue.nightly_cap_weekday ?? '',
@@ -122,6 +124,8 @@ export default function AdminVenueDetail({ token, venueId, navigate }) {
   // Build the list of changed fields for the current form vs saved venue values.
   function buildChanges() {
     const changes = []
+    if (form.name.trim() !== (venue.name ?? ''))
+      changes.push({ field: 'name', oldVal: venue.name, newVal: form.name.trim() })
     if (parseFloat(form.billing_unit) !== parseFloat(venue.billing_unit))
       changes.push({ field: 'billing_unit', oldVal: venue.billing_unit, newVal: form.billing_unit })
     if (parseInt(form.retap_interval_minutes, 10) !== venue.retap_interval_minutes)
@@ -147,6 +151,8 @@ export default function AdminVenueDetail({ token, venueId, navigate }) {
     setSaveSuccess(null)
 
     const body = { reason: form.reason }
+    if (form.name.trim() !== (venue.name ?? ''))
+      body.name = form.name.trim()
     if (parseFloat(form.billing_unit) !== parseFloat(venue.billing_unit))
       body.billing_unit = parseFloat(form.billing_unit)
     if (parseInt(form.retap_interval_minutes, 10) !== venue.retap_interval_minutes)
@@ -286,6 +292,23 @@ export default function AdminVenueDetail({ token, venueId, navigate }) {
               Currently: {venue.is_test ? 'ON' : 'OFF'}
             </span>
           </div>
+        </div>
+
+        {/* Venue name — admin-only rename (owners see this read-only) */}
+        <div style={{ marginBottom: '12px' }}>
+          <label style={{ ...labelStyle, display: 'block', marginBottom: '4px' }}>
+            Venue Name
+            <span style={{ marginLeft: '8px', color: 'var(--on-surface-dim)' }}>
+              (current: {venue.name})
+            </span>
+          </label>
+          <input
+            type="text"
+            maxLength={120}
+            value={form.name}
+            onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+            style={inputStyle}
+          />
         </div>
 
         {/* Field rows — each shows current value beside the label */}

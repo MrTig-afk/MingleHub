@@ -36,10 +36,10 @@ Grouped by area. Each: *what it is · why · how.*
 ### Venue dashboard (owner + staff)
 - **What:** Home (live tables tonight), Tables (per-table drill-down + NFC status), Insights (sessions/rounds/trivia/round-mix/trend), Settings, Billing, Tag pairing.
 - **Why:** The owner's daily control surface + the reason they'd pay.
-- **How:** Every screen is scoped to the signed-in user's venue (see §4 isolation). Staff see operations but **never billing or dollar figures**.
+- **How:** Every screen is scoped to the signed-in user's venue (see §4 isolation). Staff see operations but **never billing or dollar figures**. **Settings auto-saves** — every editable field commits on change (no Save button); the venue **name is read-only to owners** (admin-managed, renamed only via an admin override) so a venue's identity can't drift accidentally.
 
 ### Admin dashboard (us)
-- **What:** Cross-venue analytics, a clickable per-venue breakdown, config overrides with an audit trail, support inbox, leads, team, and **venue invite management** (create/QR/revoke).
+- **What:** Cross-venue analytics, a clickable per-venue breakdown, config overrides with an audit trail (including **venue rename**), support inbox, leads, team, and **venue invite management** (create/QR/revoke).
 - **Why:** Operate the platform across all venues.
 - **How:** Admin routes are role-gated and see all venues (no venue filter), distinct from the owner surface.
 
