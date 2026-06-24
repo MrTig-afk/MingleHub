@@ -1,39 +1,51 @@
 :root {
+  /* ===== After Dark ===== (redesign: token values only — names unchanged) */
+
   /* backgrounds */
-  --bg-floor:              #0A0A0C;
-  --bg-surface:            #131315;
-  --bg-container:          #201f21;
-  --bg-container-high:     #2a2a2c;
+  --bg-floor:              #0B0B0F;
+  --bg-surface:            #16151A;
+  --bg-container:          #1F1D24;
+  --bg-container-high:     #26242E;
 
-  /* brand */
-  --primary:               #ecb2ff;
-  --primary-glow:          #bd00ff;
-  --secondary:             #00eefc;
-  --tertiary:              #e7006e;
-  --on-surface:            #e5e1e4;
-  --on-surface-dim:        #9d8ba0;
-  --outline:               rgba(255, 255, 255, 0.12);
+  /* brand — magenta hero accent, cyan signal */
+  --primary:               #FF2D78;
+  --primary-glow:          #FF2D78;
+  --secondary:             #2DE2E6;
+  --tertiary:              #FF5C6C;
+  --on-surface:            #ECE8EE;
+  --on-surface-dim:        #7C7689;
+  --outline:               rgba(255, 255, 255, 0.10);
 
-  /* category accents */
-  --accent-icebreakers:    #00eefc;
-  --accent-truth:          #FFD700;
-  --accent-dares:          #e7006e;
+  /* After Dark extras (used by reworked components) */
+  --line:                  #2A2832;
+  --gold:                  #FFC857;
+  --correct:               #39E08B;
+  --silver:                #E9EEF8;
+  --bronze:                #C77B4A;
+  --surface-2:             #1F1D24;
+  --surface-3:             #26242E;
+
+  /* category accents — aligned to After Dark, variety kept for game cards */
+  --accent-icebreakers:    #2DE2E6;
+  --accent-truth:          #FFC857;
+  --accent-dares:          #FF2D78;
   --accent-compliments:    #ffb1c3;
   --accent-dirty:          #ecb2ff;
   --accent-deep:           #4169E1;
   --accent-party:          #FF6B35;
 
   /* glass */
-  --glass-bg:              rgba(32, 31, 33, 0.6);
-  --glass-border:          rgba(255, 255, 255, 0.12);
+  --glass-bg:              rgba(31, 29, 36, 0.6);
+  --glass-border:          rgba(255, 255, 255, 0.10);
   --glass-blur:            24px;
 
   /* spacing */
   --safe-margin:           20px;
   --thumb-zone:            env(safe-area-inset-bottom, 20px);
 
-  /* typography */
-  --font-headline:         'Montserrat', sans-serif;
-  --font-body:             'DM Sans', sans-serif;
-  --font-mono:             'Space Mono', monospace;
+  /* typography — After Dark */
+  --font-display:          'Anton', sans-serif;
+  --font-headline:         'Archivo', sans-serif;
+  --font-body:             'Inter', sans-serif;
+  --font-mono:             'JetBrains Mono', monospace;
 }
