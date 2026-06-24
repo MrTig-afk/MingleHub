@@ -94,11 +94,11 @@ export default function AnswerTiles({ question, reveal, onAnswer, disabled, phon
         {order.map((trueLetter, pos) => {
           const isMine = reveal?.selected_option === trueLetter
           const isCorrect = reveal?.correct_option === trueLetter
-          let background = 'var(--glass-bg)'
-          let borderColor = 'var(--outline)'
+          let background = 'var(--bg-surface)'
+          let borderColor = 'var(--line)'
           if (answered) {
-            if (isCorrect) { background = 'rgba(102, 187, 106, 0.25)'; borderColor = '#66bb6a' }
-            else if (isMine) { background = 'rgba(239, 83, 80, 0.22)'; borderColor = '#ef5350' }
+            if (isCorrect) { background = 'rgba(57, 224, 139, 0.10)'; borderColor = 'var(--correct)' }
+            else if (isMine) { background = 'rgba(255, 92, 108, 0.12)'; borderColor = 'var(--tertiary)' }
           }
           return (
             <button
@@ -109,8 +109,8 @@ export default function AnswerTiles({ question, reveal, onAnswer, disabled, phon
             >
               <span style={letterBadgeStyle}>{LETTERS[pos]}</span>
               <span style={{ flex: 1, textAlign: 'left' }}>{question.options[trueLetter]}</span>
-              {answered && isCorrect && <span>✅</span>}
-              {answered && isMine && !isCorrect && <span>❌</span>}
+              {answered && isCorrect && <span style={{ color: 'var(--correct)', fontWeight: 700, fontSize: '17px' }}>✓</span>}
+              {answered && isMine && !isCorrect && <span style={{ color: 'var(--tertiary)', fontWeight: 700, fontSize: '16px' }}>✕</span>}
             </button>
           )
         })}
@@ -119,8 +119,8 @@ export default function AnswerTiles({ question, reveal, onAnswer, disabled, phon
       {answered && (
         <p style={revealStyle}>
           {reveal.is_correct
-            ? `Correct! +${reveal.score_awarded} pts`
-            : `Not quite — +${reveal.score_awarded} pts. Take a sip 🍺`}
+            ? `Nice — that's right. +${reveal.score_awarded} pts`
+            : `Not quite — +${reveal.score_awarded} pts. Take a sip.`}
         </p>
       )}
       {!answered && expired && (
@@ -145,10 +145,13 @@ const countdownRowStyle = { display: 'flex', justifyContent: 'space-between', al
 
 const questionStyle = {
   fontFamily: 'var(--font-headline)',
-  fontSize: '20px',
-  lineHeight: 1.4,
+  fontWeight: 700,
+  fontSize: '25px',
+  letterSpacing: '-0.015em',
+  lineHeight: 1.18,
   margin: 0,
-  textAlign: 'center',
+  textAlign: 'left',
+  color: 'var(--on-surface)',
 }
 
 const tilesStyle = { display: 'flex', flexDirection: 'column', gap: '10px' }
@@ -156,28 +159,32 @@ const tilesStyle = { display: 'flex', flexDirection: 'column', gap: '10px' }
 const tileStyle = {
   display: 'flex',
   alignItems: 'center',
-  gap: '12px',
-  padding: '16px',
-  borderRadius: '12px',
-  border: '1px solid var(--outline)',
+  gap: '13px',
+  padding: '15px',
+  borderRadius: '13px',
+  border: '1.5px solid var(--line)',
   color: 'var(--on-surface)',
-  fontSize: '15px',
-  fontFamily: 'var(--font-body)',
+  fontSize: '16.5px',
+  fontWeight: 600,
+  fontFamily: 'var(--font-headline)',
   cursor: 'pointer',
   width: '100%',
 }
 
 const letterBadgeStyle = {
   fontFamily: 'var(--font-mono)',
-  fontWeight: 700,
-  fontSize: '14px',
-  width: '24px',
-  height: '24px',
+  fontWeight: 500,
+  fontSize: '13px',
+  width: '30px',
+  height: '30px',
+  flex: 'none',
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'center',
-  borderRadius: '6px',
-  background: 'var(--bg-surface)',
+  borderRadius: '8px',
+  border: '1px solid var(--line)',
+  color: 'var(--on-surface-dim)',
+  background: 'var(--bg-container)',
 }
 
 const revealStyle = {

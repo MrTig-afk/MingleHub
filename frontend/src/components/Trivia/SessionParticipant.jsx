@@ -207,13 +207,13 @@ export default function SessionParticipant({ venueName, sessionId, phoneId, tabl
     // Brief Roulette result flash (overrides the poll's between_rounds for ~3.5s).
     if (rouletteResult) {
       if (rouletteResult.skipped) {
-        return <Screen><p style={{ fontSize: '48px', margin: 0 }}>⏭️</p><h2 style={headlineStyle}>Skipped</h2></Screen>
+        return <Screen><div style={{ fontFamily: 'var(--font-display)', fontSize: '42px', color: 'var(--on-surface-dim)', letterSpacing: '0.04em' }}>SKIPPED</div></Screen>
       }
       const losers = rouletteResult.losers || []
       const names = losers.map((l) => l.name).join(', ')
       return (
         <Screen>
-          <p style={{ fontSize: '48px', margin: 0 }}>🎰</p>
+          <div style={{ fontFamily: 'var(--font-display)', fontSize: '13px', letterSpacing: '0.22em', color: 'var(--primary)', textShadow: '0 0 12px rgba(255,45,120,0.5)' }}>ROULETTE</div>
           <h2 style={headlineStyle}>{losers.length > 0 ? `${names} lost!` : 'All tied!'}</h2>
           {losers.length > 0 && rouletteResult.drink_consequence && (
             <p style={dimMono}>{rouletteResult.drink_consequence}</p>
@@ -230,8 +230,7 @@ export default function SessionParticipant({ venueName, sessionId, phoneId, tabl
       // Active Roulette round -- show vote UI if not yet voted, progress if already voted.
       return (
         <Screen>
-          <p style={{ fontSize: '44px', margin: 0 }}>🎰</p>
-          <h1 style={headlineStyle}>Roulette!</h1>
+          <div style={{ fontFamily: 'var(--font-display)', fontSize: '54px', color: 'var(--primary)', letterSpacing: '0.02em', lineHeight: 1, textShadow: '0 0 26px rgba(255,45,120,0.5)' }}>ROULETTE</div>
           <p style={{ ...dimMono, fontSize: '16px', margin: '0 0 8px' }}>{state.prompt}</p>
           <p style={dimMono}>{state.drink_consequence}</p>
 
@@ -260,8 +259,7 @@ export default function SessionParticipant({ venueName, sessionId, phoneId, tabl
     if (state.phase === 'gather') {
       return (
         <Screen>
-          <p style={{ fontSize: '44px', margin: 0 }}>🧠</p>
-          <h1 style={headlineStyle}>Trivia round!</h1>
+          <div style={{ fontFamily: 'var(--font-display)', fontSize: '54px', color: 'var(--primary)', letterSpacing: '0.02em', lineHeight: 1, textShadow: '0 0 26px rgba(255,45,120,0.5)' }}>TRIVIA</div>
           <p style={dimMono}>Get ready — answer on your own phone, at your own pace</p>
           <p style={dimMono}>[{state.joined_count} playing]</p>
           <button onClick={handleLeave} style={leaveButton}>Leave game</button>
@@ -285,8 +283,7 @@ export default function SessionParticipant({ venueName, sessionId, phoneId, tabl
       if (done) {
         return (
           <Screen>
-            <p style={{ fontSize: '28px', margin: 0 }}>✅</p>
-            <h1 style={headlineStyle}>All done!</h1>
+            <div style={{ fontFamily: 'var(--font-display)', fontSize: '40px', color: 'var(--correct)', letterSpacing: '0.03em', textShadow: '0 0 22px rgba(57,224,139,0.4)' }}>ALL DONE</div>
             <Leaderboard rows={state.leaderboard} title="Scoreboard" />
             <p style={dimMono}>Others are still playing…</p>
             <button onClick={handleLeave} style={leaveButton}>Leave game</button>
@@ -315,7 +312,7 @@ export default function SessionParticipant({ venueName, sessionId, phoneId, tabl
     // between_rounds (default) — live leaderboard + leave.
     return (
       <Screen>
-        <p style={dimMono}>Playing at {venueName} 🍺</p>
+        <p style={dimMono}>Playing at {venueName}</p>
         <Leaderboard rows={state.leaderboard} title="Scoreboard" />
         <p style={dimMono}>Round in progress on the table phone…</p>
         <button onClick={handleLeave} style={leaveButton}>Leave game</button>
