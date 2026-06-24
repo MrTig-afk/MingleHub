@@ -11,6 +11,12 @@ import { VitePWA } from 'vite-plugin-pwa'
 // comes straight from Vite. apply:'serve' keeps it out of production builds,
 // where vite-plugin-pwa still generates the real service worker.
 function devKillStaleServiceWorker() {
+  // NOTE: this worker clears caches and unregisters itself, but must NOT force-
+  // reload the page. An earlier version called client.navigate(client.url) on
+  // activate, which created an infinite dev reload loop (leftover SW -> update
+  // check -> activate -> reload -> re-register -> reload...), wiping any form
+  // input mid-type. main.jsx already unregisters SWs + clears caches on load,
+  // so the forced reload was redundant; dropping it stops the loop.
   const body = `
 self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', (event) => {
@@ -20,10 +26,6 @@ self.addEventListener('activate', (event) => {
       await Promise.all(keys.map((k) => caches.delete(k)));
     } catch (_) { /* ignore */ }
     try { await self.registration.unregister(); } catch (_) { /* ignore */ }
-    const clients = await self.clients.matchAll({ type: 'window' });
-    for (const client of clients) {
-      try { client.navigate(client.url); } catch (_) { /* ignore */ }
-    }
   })());
 });
 `
@@ -45,7 +47,7 @@ self.addEventListener('activate', (event) => {
   }
 }
 
-export default defineConfig({
+export default defineConfig(({ command }) => ({
   server: {
     https: {
       cert: '../192.168.1.108.pem',
@@ -58,7 +60,10 @@ export default defineConfig({
     devKillStaleServiceWorker(),
     react(),
     tailwindcss(),
-    VitePWA({
+    // PWA service worker is generated ONLY for production builds. In dev a
+    // registered SW caused reload loops + stale-code headaches, so dev stays
+    // SW-free (devKillStaleServiceWorker above cleans up any leftover worker).
+    ...(command === 'build' ? [VitePWA({
       // Self-destroying worker: the precaching PWA kept serving stale bundles on
       // phones (an NFC tap loaded the OLD app until the SW updated on a LATER
       // load). This app is online-only (needs the backend) and is reached by tap,
@@ -95,6 +100,6 @@ export default defineConfig({
           },
         ],
       },
-    }),
+    })] : []),
   ],
-})
+}))
