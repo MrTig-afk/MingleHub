@@ -156,7 +156,7 @@ function DevAuthed() {
 // The dashboard itself, given an already-resolved bearer token.
 // ---------------------------------------------------------------------------
 function DashboardInner({ token, onLogout, renderUnauth }) {
-  const [authState, setAuthState] = useState('loading') // loading | ok | setup | no_invite | invite_error | admin_wrong_surface | unauth | error
+  const [authState, setAuthState] = useState('loading') // loading | ok | setup | no_invite | invite_error | unauth | error
   const [user, setUser] = useState(null)
   const [venue, setVenue] = useState(null)
   const [error, setError] = useState(null)
@@ -173,8 +173,17 @@ function DashboardInner({ token, onLogout, renderUnauth }) {
       const me = await fetchMe(token)
       didInitialAuth.current = true
       if (me.role === 'admin') {
-        setUser(me)
-        setAuthState('admin_wrong_surface')
+        // Admin landed on the venue dashboard — route to the admin surface
+        // automatically instead of dead-ending. main.jsx selects the surface from
+        // the URL at page-load time, so this needs a full navigation, not SPA
+        // pushState. In dev the same identity token works on both surfaces, so
+        // hand it to the admin key; under Clerk the session cookie is shared, so
+        // a plain navigation is enough.
+        if (!CLERK_KEY) {
+          const t = localStorage.getItem('mh_dashboard_token')
+          if (t) localStorage.setItem('mh_admin_token', t)
+        }
+        window.location.assign('/admin')
         return
       }
       if (!me.venue_id) {
@@ -235,17 +244,6 @@ function DashboardInner({ token, onLogout, renderUnauth }) {
   if (authState === 'loading') return <LoadingShimmer />
   if (authState === 'unauth') return renderUnauth()
   if (authState === 'setup') return <VenueSetup token={token} onDone={checkAuth} navigate={navigate} prefill={prefill} />
-
-  if (authState === 'admin_wrong_surface') {
-    return (
-      <Centered>
-        <div style={{ ...cardStyle, maxWidth: '480px', textAlign: 'center' }}>
-          <p style={{ marginBottom: '16px' }}>Admin accounts use /admin. This dashboard is for venue owners and staff.</p>
-          <button onClick={onLogout} style={buttonStyle}>Log out / use a different account</button>
-        </div>
-      </Centered>
-    )
-  }
 
   if (authState === 'error') {
     return (

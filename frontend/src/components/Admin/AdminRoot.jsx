@@ -121,7 +121,7 @@ function DevAuthed() {
 }
 
 function AdminInner({ token, onLogout, renderUnauth }) {
-  const [authState, setAuthState] = useState('loading') // loading | ok | venue_wrong_surface | unauth | error
+  const [authState, setAuthState] = useState('loading') // loading | ok | unauth | error
   const [user, setUser] = useState(null)
   const [error, setError] = useState(null)
   const [path, setPath] = useState(window.location.pathname)
@@ -135,8 +135,15 @@ function AdminInner({ token, onLogout, renderUnauth }) {
     try {
       const me = await fetchAdminMe(token)
       if (me.role !== 'admin') {
-        setUser(me)
-        setAuthState('venue_wrong_surface')
+        // Venue account landed on the admin surface — route it to the dashboard
+        // automatically (full navigation; main.jsx picks the surface from the URL
+        // at load time). Dev tokens work on both surfaces, so hand it to the
+        // dashboard key; Clerk shares its session cookie.
+        if (!CLERK_KEY) {
+          const t = localStorage.getItem('mh_admin_token')
+          if (t) localStorage.setItem('mh_dashboard_token', t)
+        }
+        window.location.assign('/dashboard')
         return
       }
       setUser(me)
@@ -165,17 +172,6 @@ function AdminInner({ token, onLogout, renderUnauth }) {
 
   if (authState === 'loading') return <LoadingShimmer />
   if (authState === 'unauth') return renderUnauth()
-
-  if (authState === 'venue_wrong_surface') {
-    return (
-      <Centered>
-        <div style={{ ...cardStyle, maxWidth: '480px', textAlign: 'center' }}>
-          <p>This is the admin area. Venue accounts use /dashboard.</p>
-          <button onClick={onLogout} style={{ ...buttonStyle, marginTop: '12px' }}>Log out / use a different account</button>
-        </div>
-      </Centered>
-    )
-  }
 
   if (authState === 'error') {
     return (
