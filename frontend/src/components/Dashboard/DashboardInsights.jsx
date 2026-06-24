@@ -28,12 +28,12 @@ function StatCard({ value, label }) {
 }
 
 const ROUND_TYPE_COLORS = {
-  chooser: 'rgba(236, 178, 255, 0.35)',
-  roulette: 'rgba(231, 0, 110, 0.25)',
-  trivia: 'rgba(0, 238, 252, 0.25)',
+  chooser: 'rgba(255, 45, 120, 0.35)',
+  roulette: 'rgba(255, 45, 120, 0.25)',
+  trivia: 'rgba(45, 226, 230, 0.25)',
 }
 
-function ProportionalBar({ count, maxCount, color = 'rgba(151, 71, 255, 0.2)' }) {
+function ProportionalBar({ count, maxCount, color = 'rgba(255, 45, 120, 0.2)' }) {
   const pct = maxCount > 0 ? Math.round((count / maxCount) * 100) : 0
   return (
     <div style={{ position: 'relative', height: '20px', borderRadius: '4px', background: 'var(--bg-container)', overflow: 'hidden' }}>

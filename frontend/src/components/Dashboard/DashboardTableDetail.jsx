@@ -18,8 +18,8 @@ const shimmerCard = (height = 100) => ({
   marginBottom: '12px',
 })
 
-const PAIRED_CHIP = { background: 'rgba(0,238,252,0.15)', color: 'var(--secondary)' }
-const UNPAIRED_CHIP = { background: 'rgba(255,215,0,0.15)', color: '#FFD700' }
+const PAIRED_CHIP = { background: 'rgba(45,226,230,0.15)', color: 'var(--secondary)' }
+const UNPAIRED_CHIP = { background: 'rgba(255,200,87,0.15)', color: 'var(--gold)' }
 
 const smallChip = (extra) => ({
   fontSize: '11px',
@@ -128,7 +128,7 @@ function SessionCard({ session }) {
             <span>{round.result}</span>
             {round.score_awarded > 0 && (
               <span style={{
-                background: 'rgba(0,238,252,0.15)',
+                background: 'rgba(45,226,230,0.15)',
                 color: 'var(--secondary)',
                 fontSize: '11px',
                 padding: '1px 6px',

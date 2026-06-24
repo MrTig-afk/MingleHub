@@ -157,19 +157,19 @@ export default function DashboardSettings({ token, user }) {
       {venueStatus === 'suspended' && (
         <div style={{
           ...cardStyle,
-          background: 'rgba(255, 215, 0, 0.15)',
-          border: '1px solid rgba(255, 215, 0, 0.5)',
+          background: 'rgba(255, 200, 87, 0.15)',
+          border: '1px solid rgba(255, 200, 87, 0.5)',
           marginBottom: '12px',
         }}>
-          <span style={{ color: '#FFD700', fontWeight: 700 }}>Account suspended</span>
+          <span style={{ color: 'var(--gold)', fontWeight: 700 }}>Account suspended</span>
           {' -- '}unpaid invoice. Go to Billing to settle.
         </div>
       )}
       {venueStatus === 'cancelled' && canReactivate && (
         <div style={{
           ...cardStyle,
-          background: 'rgba(231, 0, 110, 0.12)',
-          border: '1px solid rgba(231, 0, 110, 0.4)',
+          background: 'rgba(255, 92, 108, 0.12)',
+          border: '1px solid rgba(255, 92, 108, 0.4)',
           marginBottom: '12px',
         }}>
           <span style={{ color: 'var(--tertiary)', fontWeight: 700 }}>Account cancelled.</span>
@@ -257,7 +257,7 @@ export default function DashboardSettings({ token, user }) {
         <div style={{
           ...cardStyle,
           marginTop: '20px',
-          border: '1px solid rgba(231, 0, 110, 0.4)',
+          border: '1px solid rgba(255, 92, 108, 0.4)',
         }}>
           <div style={{ fontWeight: 700, fontSize: '14px', marginBottom: '8px', color: 'var(--tertiary)' }}>
             Cancel Account
@@ -355,7 +355,7 @@ export default function DashboardSettings({ token, user }) {
         <div style={{
           ...cardStyle,
           marginTop: '20px',
-          border: '1px solid rgba(0, 238, 100, 0.4)',
+          border: '1px solid rgba(57, 224, 139, 0.4)',
         }}>
           <div style={{ fontWeight: 700, fontSize: '14px', marginBottom: '8px', color: 'var(--secondary)' }}>
             Reactivate Account
@@ -392,10 +392,10 @@ export default function DashboardSettings({ token, user }) {
         <div style={{
           ...cardStyle,
           marginTop: '20px',
-          background: 'rgba(255, 215, 0, 0.1)',
-          border: '1px solid rgba(255, 215, 0, 0.4)',
+          background: 'rgba(255, 200, 87, 0.1)',
+          border: '1px solid rgba(255, 200, 87, 0.4)',
         }}>
-          <div style={{ color: '#FFD700', fontWeight: 700, marginBottom: '4px' }}>
+          <div style={{ color: 'var(--gold)', fontWeight: 700, marginBottom: '4px' }}>
             Account Suspended
           </div>
           <div style={labelStyle}>

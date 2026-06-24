@@ -14,13 +14,13 @@ import { completeRound, drawCard, redrawRound, skipRound } from '../../services/
 // is true; dismissing it reveals the card beneath.
 
 const CARD_TYPE_META = {
-  icebreaker: { icon: '\u{1F30A}', label: 'Icebreaker', color: '#4fc3f7' },
-  truth:      { icon: '\u{1F50D}', label: 'Truth',      color: '#ce93d8' },
-  dare:       { icon: '\u{1F525}', label: 'Dare',       color: '#ff7043' },
-  compliment: { icon: '❤️',  label: 'Compliment', color: '#f48fb1' },
-  challenge:  { icon: '⚡',    label: 'Challenge',  color: '#fff176' },
-  drink:      { icon: '\u{1F37A}', label: 'Drink',      color: '#a5d6a7' },
-  flirty:     { icon: '✨',    label: 'Flirty',     color: '#f8bbd0' },
+  icebreaker: { icon: '', label: 'Icebreaker', color: '#4fc3f7' },
+  truth:      { icon: '', label: 'Truth',      color: '#ce93d8' },
+  dare:       { icon: '', label: 'Dare',       color: '#ff7043' },
+  compliment: { icon: '', label: 'Compliment', color: '#f48fb1' },
+  challenge:  { icon: '', label: 'Challenge',  color: '#fff176' },
+  drink:      { icon: '', label: 'Drink',      color: '#a5d6a7' },
+  flirty:     { icon: '', label: 'Flirty',     color: '#f8bbd0' },
 }
 
 // adultsOnly is intentionally not destructured -- card filtering is enforced

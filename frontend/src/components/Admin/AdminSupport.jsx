@@ -10,8 +10,8 @@ const shimmerCard = (height = 80) => ({
   marginBottom: '12px',
 })
 
-const OPEN_CHIP = { background: 'rgba(0,238,252,0.15)', color: 'var(--secondary)' }
-const RESOLVED_CHIP = { background: 'rgba(0,200,100,0.15)', color: '#00C864' }
+const OPEN_CHIP = { background: 'rgba(45,226,230,0.15)', color: 'var(--secondary)' }
+const RESOLVED_CHIP = { background: 'rgba(57,224,139,0.15)', color: 'var(--correct)' }
 const statusChip = (s) => ({
   fontSize: '11px',
   padding: '2px 8px',

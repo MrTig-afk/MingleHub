@@ -91,13 +91,13 @@ export default function DashboardBilling({ token, user }) {
       {/* Estimate disclaimer badge — stronger styling */}
       <div style={{
         ...cardStyle,
-        background: 'rgba(255, 215, 0, 0.2)',
-        border: '2px solid rgba(255, 215, 0, 0.5)',
+        background: 'rgba(255, 200, 87, 0.2)',
+        border: '2px solid rgba(255, 200, 87, 0.5)',
         textAlign: 'center',
         marginBottom: '16px',
         padding: '12px 16px',
       }}>
-        <span style={{ color: '#FFD700', fontWeight: 700, fontSize: '14px', letterSpacing: '0.5px' }}>
+        <span style={{ color: 'var(--gold)', fontWeight: 700, fontSize: '14px', letterSpacing: '0.5px' }}>
           ESTIMATE -- NOT A REAL CHARGE
         </span>
       </div>
@@ -137,7 +137,7 @@ export default function DashboardBilling({ token, user }) {
           <div style={{
             display: 'inline-block',
             marginTop: '6px',
-            background: 'rgba(231, 0, 110, 0.15)',
+            background: 'rgba(255, 92, 108, 0.15)',
             color: 'var(--tertiary)',
             fontSize: '11px',
             padding: '2px 8px',

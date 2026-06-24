@@ -20,7 +20,7 @@ const shimmerCard = (height = 80) => ({
   marginBottom: '12px',
 })
 
-const TEST_CHIP = { background: 'rgba(255,215,0,0.15)', color: '#FFD700' }
+const TEST_CHIP = { background: 'rgba(255,200,87,0.15)', color: 'var(--gold)' }
 const smallChip = (extra) => ({
   fontSize: '11px',
   padding: '2px 8px',
@@ -279,7 +279,7 @@ export default function AdminVenueDetail({ token, venueId, navigate }) {
         {/* Test Mode highlight */}
         <div style={{
           ...cardStyle,
-          background: venue.is_test ? 'rgba(255,215,0,0.08)' : 'var(--bg-surface)',
+          background: venue.is_test ? 'rgba(255,200,87,0.08)' : 'var(--bg-surface)',
           marginBottom: '16px',
           padding: '12px',
         }}>
@@ -288,7 +288,7 @@ export default function AdminVenueDetail({ token, venueId, navigate }) {
               <span style={{ fontWeight: 700 }}>Test Mode</span>
               <span style={{ ...labelStyle, marginLeft: '8px' }}>(Skips billing and excludes from analytics)</span>
             </div>
-            <span style={{ ...labelStyle, fontWeight: 700, color: venue.is_test ? '#FFD700' : 'var(--on-surface-dim)' }}>
+            <span style={{ ...labelStyle, fontWeight: 700, color: venue.is_test ? 'var(--gold)' : 'var(--on-surface-dim)' }}>
               Currently: {venue.is_test ? 'ON' : 'OFF'}
             </span>
           </div>
@@ -427,7 +427,7 @@ export default function AdminVenueDetail({ token, venueId, navigate }) {
         {pendingConfirm && (
           <div style={{
             ...cardStyle,
-            background: 'rgba(231, 0, 110, 0.08)',
+            background: 'rgba(255, 92, 108, 0.08)',
             border: '2px solid var(--tertiary)',
             marginTop: '12px',
             padding: '16px',

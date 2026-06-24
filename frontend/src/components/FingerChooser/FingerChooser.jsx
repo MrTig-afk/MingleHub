@@ -1,7 +1,7 @@
 import { useRef, useEffect } from 'react'
 import { useMultiTouch, STATES } from '../../hooks/useMultiTouch'
 
-const ACCENT_COLORS = ['#ecb2ff', '#00eefc', '#e7006e', '#FFD700', '#FF6B35', '#4169E1', '#ffb1c3']
+const ACCENT_COLORS = ['#FF2D78', '#2DE2E6', '#FF2D78', '#FFC857', '#FF6B35', '#4169E1', '#ffb1c3']
 
 export default function FingerChooser({
   packAccent, onCardDraw, onBack, hideBack = false, requiredFingers = 2,
@@ -46,7 +46,7 @@ export default function FingerChooser({
   }, [phase, onCardDraw, reset])
 
   const fingerList = [...fingers.entries()]
-  const accent = packAccent ?? '#ecb2ff'
+  const accent = packAccent ?? '#FF2D78'
 
   const statusText = (() => {
     if (phase === STATES.WAITING) {

@@ -10,9 +10,9 @@ const shimmerCard = (height = 64) => ({
   marginBottom: '12px',
 })
 
-const PAIRED_CHIP = { background: 'rgba(0,238,252,0.15)', color: 'var(--secondary)' }
-const UNPAIRED_CHIP = { background: 'rgba(255,215,0,0.15)', color: '#FFD700' }
-const LIVE_CHIP = { background: 'rgba(0,238,252,0.15)', color: 'var(--secondary)' }
+const PAIRED_CHIP = { background: 'rgba(45,226,230,0.15)', color: 'var(--secondary)' }
+const UNPAIRED_CHIP = { background: 'rgba(255,200,87,0.15)', color: 'var(--gold)' }
+const LIVE_CHIP = { background: 'rgba(45,226,230,0.15)', color: 'var(--secondary)' }
 const IDLE_CHIP = { color: 'var(--on-surface-dim)' }
 
 const smallChip = (extra) => ({

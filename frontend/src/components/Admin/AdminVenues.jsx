@@ -10,9 +10,9 @@ const shimmerCard = (height = 64) => ({
   marginBottom: '12px',
 })
 
-const ACTIVE_CHIP = { background: 'rgba(0,238,252,0.15)', color: 'var(--secondary)' }
+const ACTIVE_CHIP = { background: 'rgba(45,226,230,0.15)', color: 'var(--secondary)' }
 const DIM_CHIP = { color: 'var(--on-surface-dim)' }
-const TEST_CHIP = { background: 'rgba(255,215,0,0.15)', color: '#FFD700' }
+const TEST_CHIP = { background: 'rgba(255,200,87,0.15)', color: 'var(--gold)' }
 
 const smallChip = (extra) => ({
   fontSize: '11px',
@@ -152,7 +152,7 @@ export default function AdminVenues({ token, navigate }) {
           onClick={() => setTestFilter(testFilter === 'test' ? 'all' : 'test')}
           style={{
             ...(testFilter === 'test'
-              ? { ...buttonStyle, background: '#FFD700', color: '#0A0A0C' }
+              ? { ...buttonStyle, background: 'var(--gold)', color: '#0A0A0C' }
               : buttonSecondaryStyle),
             padding: '6px 12px',
             fontSize: '12px',

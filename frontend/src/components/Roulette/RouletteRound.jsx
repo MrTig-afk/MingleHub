@@ -241,7 +241,7 @@ export default function RouletteRound({ sessionId, phoneId, tableId, onDone }) {
     if (result.skipped) {
       return (
         <div style={overlayStyle}>
-          <p style={{ fontSize: '48px', margin: 0 }}>⏭️</p>
+          <div style={{ fontFamily: 'var(--font-display)', fontSize: '46px', color: 'var(--primary)', letterSpacing: '0.02em', textShadow: '0 0 24px rgba(255,45,120,0.5)' }}>SKIPPED</div>
           <h2 style={headlineStyle}>Skipped</h2>
         </div>
       )
