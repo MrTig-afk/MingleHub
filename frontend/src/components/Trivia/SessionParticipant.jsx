@@ -38,6 +38,9 @@ export default function SessionParticipant({ venueName, sessionId, phoneId, tabl
   const [promoted, setPromoted] = useState(false)
   const pollRef = useRef(null)
   const roundRef = useRef(null)
+  // The patron's own name (saved when they set it in the lobby) — highlights
+  // their row on the leaderboard as "You". Best-effort; null if unknown.
+  const meName = (() => { try { return localStorage.getItem('mh_player_name') } catch { return null } })()
   const toastTimer = useRef(null)
   const rouletteTimer = useRef(null)
   const rouletteRoundRef = useRef(null) // which roulette round the read timer is armed for
@@ -198,7 +201,7 @@ export default function SessionParticipant({ venueName, sessionId, phoneId, tabl
         <Screen>
           <h1 style={headlineStyle}>You left the game</h1>
           <p style={dimMono}>Tap rejoin to come back — your score is saved.</p>
-          <Leaderboard rows={state?.leaderboard || []} title="Scoreboard" />
+          <Leaderboard rows={state?.leaderboard || []} title="Scoreboard" meName={meName} />
           <button onClick={handleRejoin} style={primaryButton}>Rejoin game</button>
           {error && <p style={errStyle}>{error}</p>}
         </Screen>
@@ -275,7 +278,7 @@ export default function SessionParticipant({ venueName, sessionId, phoneId, tabl
         return (
           <Screen>
             <p style={dimMono}>A round's in progress — you'll join the next one</p>
-            <Leaderboard rows={state.leaderboard} title="Scoreboard" />
+            <Leaderboard rows={state.leaderboard} title="Scoreboard" meName={meName} />
             <button onClick={handleLeave} style={leaveButton}>Leave game</button>
           </Screen>
         )
@@ -284,7 +287,7 @@ export default function SessionParticipant({ venueName, sessionId, phoneId, tabl
         return (
           <Screen>
             <div style={{ fontFamily: 'var(--font-display)', fontSize: '40px', color: 'var(--correct)', letterSpacing: '0.03em', textShadow: '0 0 22px rgba(57,224,139,0.4)' }}>ALL DONE</div>
-            <Leaderboard rows={state.leaderboard} title="Scoreboard" />
+            <Leaderboard rows={state.leaderboard} title="Scoreboard" meName={meName} />
             <p style={dimMono}>Others are still playing…</p>
             <button onClick={handleLeave} style={leaveButton}>Leave game</button>
           </Screen>
@@ -313,7 +316,7 @@ export default function SessionParticipant({ venueName, sessionId, phoneId, tabl
     return (
       <Screen>
         <p style={dimMono}>Playing at {venueName}</p>
-        <Leaderboard rows={state.leaderboard} title="Scoreboard" />
+        <Leaderboard rows={state.leaderboard} title="Scoreboard" meName={meName} />
         <p style={dimMono}>Round in progress on the table phone…</p>
         <button onClick={handleLeave} style={leaveButton}>Leave game</button>
         {error && <p style={errStyle}>{error}</p>}

@@ -33,7 +33,10 @@ export default function Lobby({ venueName, lobbyId, phoneId, tableId, adultsOnly
         // Re-tap / page reload: detect own name already stored in lobby.
         if (!hasSetName && result.phones) {
           const mine = result.phones.find((p) => p.is_self)
-          if (mine?.name) setHasSetName(true)
+          if (mine?.name) {
+            try { localStorage.setItem('mh_player_name', mine.name) } catch { /* ignore */ }
+            setHasSetName(true)
+          }
         }
         if (result.status === 'converted' && !startedRef.current) {
           startedRef.current = true
@@ -74,6 +77,7 @@ export default function Lobby({ venueName, lobbyId, phoneId, tableId, adultsOnly
     setError(null)
     try {
       await setLobbyName(lobbyId, phoneId, trimmed)
+      try { localStorage.setItem('mh_player_name', trimmed) } catch { /* ignore */ }
       setHasSetName(true)
     } catch (e) {
       setError(e.message)

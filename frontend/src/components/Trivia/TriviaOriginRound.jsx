@@ -33,6 +33,7 @@ export default function TriviaOriginRound({ sessionId, phoneId, onDone }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
   const roundIdRef = useRef(null)
+  const meName = (() => { try { return localStorage.getItem('mh_player_name') } catch { return null } })()
   const startingRef = useRef(false)
   const startedRef = useRef(false)
 
@@ -187,7 +188,7 @@ export default function TriviaOriginRound({ sessionId, phoneId, onDone }) {
         <div style={{ width: '12px', height: '12px', borderRadius: '50%', background: 'var(--primary)', boxShadow: '0 0 16px var(--primary)', animation: 'pulse-dot 1.4s infinite' }} />
         <h1 style={headlineStyle}>Waiting for players</h1>
         <p style={dimMono}>Need at least 2 players for a new round. Others can tap the tag to join.</p>
-        <Leaderboard rows={leaderboard} title="Who's here" />
+        <Leaderboard rows={leaderboard} title="Who's here" meName={meName} />
       </Screen>
     )
   }
@@ -196,7 +197,7 @@ export default function TriviaOriginRound({ sessionId, phoneId, onDone }) {
     return (
       <Screen>
         <div style={{ fontFamily: 'var(--font-display)', fontSize: '13px', letterSpacing: '0.22em', color: 'var(--gold)', textShadow: '0 0 12px rgba(255,200,87,0.4)' }}>RESULTS</div>
-        <Leaderboard rows={leaderboard} title="Trivia results" />
+        <Leaderboard rows={leaderboard} title="Trivia results" meName={meName} />
         <button onClick={handleBackToGame} style={primaryButton}>Back to the game</button>
       </Screen>
     )

@@ -9,6 +9,7 @@ export default function Recap({ sessionId, venueName }) {
   const [recap, setRecap] = useState(null)
   const [error, setError] = useState(null)
   const [copied, setCopied] = useState(false)
+  const meName = (() => { try { return localStorage.getItem('mh_player_name') } catch { return null } })()
 
   // Standard React 18 fetch pattern: a no-op-guard ref would deadlock under
   // StrictMode (the first fetch resolves after cleanup set cancelled=true, and
@@ -63,7 +64,7 @@ export default function Recap({ sessionId, venueName }) {
       <p style={{ fontSize: '48px', margin: 0 }}>&#x1F3C6;</p>
       <h1 style={headlineStyle}>Game Over &mdash; {recap.venue_name}</h1>
 
-      <Leaderboard rows={recap.leaderboard} title="Final Scores" />
+      <Leaderboard rows={recap.leaderboard} title="Final Scores" meName={meName} />
 
       <div style={statsCardStyle}>
         <StatRow label="Most Picked Player" value={
