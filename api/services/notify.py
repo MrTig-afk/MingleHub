@@ -1,21 +1,40 @@
-import httpx
+"""Alerting transport.
+
+Two channels, by design (see COFOUNDER-REPORT / the alerting plan):
+  - **Errors** -> Sentry. `notify_error` captures the live exception (full
+    traceback + request context, grouped/deduped) on top of a Slack ping.
+  - **Curated events** (security / payments / premium-interest) -> Slack.
+
+Slack delivery uses incoming webhooks: one default sink for everything, with
+optional per-category overrides so each kind can fan out to its own channel.
+A category falls back to SLACK_WEBHOOK_URL; if neither is set the alert is
+silently dropped (same fail-soft contract as before -- a notification must
+never break the request flow).
+"""
 import os
 import sys
 import time
 from datetime import datetime, timezone
 
-NTFY = "https://ntfy.sh"
-ERRORS = os.getenv("NTFY_ERRORS_TOPIC", "")
-SECURITY = os.getenv("NTFY_SECURITY_TOPIC", "")
-PAYMENTS = os.getenv("NTFY_PAYMENTS_TOPIC", "")
-INTEREST = os.getenv("NTFY_INTEREST_TOPIC", "")
+import httpx
 
-if not ERRORS:
-    print("WARNING: NTFY_ERRORS_TOPIC not set — error alerts will be silently dropped", file=sys.stderr)
-if not SECURITY:
-    print("WARNING: NTFY_SECURITY_TOPIC not set — security alerts will be silently dropped", file=sys.stderr)
-if not PAYMENTS:
-    print("WARNING: NTFY_PAYMENTS_TOPIC not set — payment alerts will be silently dropped", file=sys.stderr)
+# Sentry is optional at import time: a missing package leaves this None and the
+# capture calls become no-ops, so local dev runs fine without it installed.
+try:
+    import sentry_sdk
+except ImportError:  # pragma: no cover - only when sentry-sdk isn't installed
+    sentry_sdk = None
+
+_DEFAULT_WEBHOOK = os.getenv("SLACK_WEBHOOK_URL", "")
+_WEBHOOKS = {
+    "errors": os.getenv("SLACK_WEBHOOK_ERRORS", "") or _DEFAULT_WEBHOOK,
+    "security": os.getenv("SLACK_WEBHOOK_SECURITY", "") or _DEFAULT_WEBHOOK,
+    "payments": os.getenv("SLACK_WEBHOOK_PAYMENTS", "") or _DEFAULT_WEBHOOK,
+    "interest": os.getenv("SLACK_WEBHOOK_INTEREST", "") or _DEFAULT_WEBHOOK,
+}
+
+if not any(_WEBHOOKS.values()):
+    print("WARNING: no SLACK_WEBHOOK_URL set -- Slack alerts will be silently dropped", file=sys.stderr)
 
 _first_request_today = {"date": None}
 _security_cooldown: dict[str, float] = {}
@@ -24,7 +43,13 @@ _MAX_COOLDOWN_ENTRIES = 1000
 
 
 async def notify_error(title: str, body: str, priority: str = "high"):
-    await _post(ERRORS, title, body, priority)
+    # Sentry owns errors. capture_exception() with no arg grabs the exception
+    # currently being handled -- every notify_error call site is inside an
+    # `except` block -- so Sentry gets the real exception object + traceback,
+    # grouped and deduped. No-op when sentry-sdk is absent or SENTRY_DSN unset.
+    if sentry_sdk is not None:
+        sentry_sdk.capture_exception()
+    await _post("errors", title, body)
 
 
 async def notify_security(title: str, body: str, ip: str = ""):
@@ -35,42 +60,39 @@ async def notify_security(title: str, body: str, ip: str = ""):
     if len(_security_cooldown) >= _MAX_COOLDOWN_ENTRIES:
         _security_cooldown.clear()
     _security_cooldown[ip] = now
-    await _post(SECURITY, title, f"{body}\nIP: {ip}", "default")
+    await _post("security", title, f"{body}\nIP: {ip}")
 
 
 async def notify_payment(title: str, body: str):
-    await _post(PAYMENTS, title, body, "high")
+    await _post("payments", title, body)
 
 
 async def notify_interest(email: str, mode: str, trigger: str):
     await _post(
-        INTEREST,
+        "interest",
         "💰 Premium interest!",
         f"Email: {email}\nMode: {mode}\nTrigger: {trigger}",
-        "default",
     )
 
 
 async def notify_cold_start():
-    await _post(ERRORS, "Cold start", "FirstMove serverless function woke up", "low")
+    await _post("errors", "Cold start", "MingleHub serverless function woke up")
 
 
 async def notify_daily_alive():
     today = datetime.now(timezone.utc).date().isoformat()
     if _first_request_today["date"] != today:
         _first_request_today["date"] = today
-        await _post(ERRORS, "Daily alive", f"FirstMove active — {today}", "low")
+        await _post("errors", "Daily alive", f"MingleHub active -- {today}")
 
 
-async def _post(topic: str, title: str, body: str, priority: str):
-    if not topic:
+async def _post(category: str, title: str, body: str):
+    """Post one Slack message for a category. Fail-soft: never raises."""
+    url = _WEBHOOKS.get(category, "")
+    if not url:
         return
     try:
         async with httpx.AsyncClient(timeout=3) as c:
-            await c.post(
-                f"{NTFY}/{topic}",
-                content=body,
-                headers={"Title": title, "Priority": priority, "Content-Type": "text/plain"},
-            )
+            await c.post(url, json={"text": f"*{title}*\n{body}"})
     except Exception:
         pass

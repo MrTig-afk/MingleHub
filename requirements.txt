@@ -8,4 +8,5 @@ python-dotenv
 slowapi
 stripe
 cryptography
+sentry-sdk[fastapi]
 pytest

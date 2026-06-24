@@ -6,6 +6,36 @@ from dotenv import load_dotenv
 load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 sys.path.insert(0, os.path.dirname(__file__))
 
+# --- Error monitoring (Sentry) — optional; fully skipped when SENTRY_DSN unset.
+# Initialised before the app + routers so it instruments everything.
+_sentry_dsn = os.getenv("SENTRY_DSN", "")
+if _sentry_dsn:
+    try:
+        import sentry_sdk
+        from sentry_sdk.integrations.starlette import StarletteIntegration
+        from sentry_sdk.integrations.fastapi import FastApiIntegration
+
+        def _scrub_event(event, hint):
+            # Never ship auth tokens, API keys, or cookies to Sentry (security.md).
+            req = event.get("request") or {}
+            headers = req.get("headers")
+            if isinstance(headers, dict):
+                for h in list(headers):
+                    if h.lower() in ("authorization", "x-api-key", "cookie"):
+                        headers[h] = "[scrubbed]"
+            return event
+
+        sentry_sdk.init(
+            dsn=_sentry_dsn,
+            environment="development" if os.getenv("DEV_MODE") == "true" else "production",
+            integrations=[StarletteIntegration(), FastApiIntegration()],
+            traces_sample_rate=float(os.getenv("SENTRY_TRACES_SAMPLE_RATE", "0.1")),
+            send_default_pii=False,
+            before_send=_scrub_event,
+        )
+    except ImportError:
+        print("WARNING: SENTRY_DSN set but sentry-sdk not installed — error monitoring disabled", file=sys.stderr)
+
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
