@@ -175,7 +175,7 @@ export default function RouletteRound({ sessionId, phoneId, tableId, onDone }) {
   if (phase === 'spin') {
     return (
       <div style={overlayStyle}>
-        <p style={{ fontSize: '56px', margin: 0, animation: 'spin 0.6s linear infinite' }}>🎰</p>
+        <div style={{ width: '46px', height: '46px', borderRadius: '50%', border: '3px solid var(--line)', borderTopColor: 'var(--primary)', boxShadow: '0 0 18px rgba(255,45,120,0.35)', animation: 'spin 0.6s linear infinite' }} />
         <h1 style={headlineStyle}>Roulette!</h1>
         <p style={dimMonoStyle}>Picking a challenge…</p>
         <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
@@ -187,7 +187,7 @@ export default function RouletteRound({ sessionId, phoneId, tableId, onDone }) {
   if (phase === 'card') {
     return (
       <div style={overlayStyle}>
-        <p style={{ fontSize: '44px', margin: 0 }}>🎰</p>
+        <div style={{ fontFamily: 'var(--font-display)', fontSize: '13px', letterSpacing: '0.22em', color: 'var(--primary)', textShadow: '0 0 12px rgba(255,45,120,0.5)' }}>ROULETTE</div>
         <h1 style={headlineStyle}>Challenge!</h1>
         <div style={cardStyle}>
           <p style={{ fontSize: '18px', fontFamily: 'var(--font-headline)', lineHeight: 1.4, margin: 0 }}>
@@ -207,7 +207,7 @@ export default function RouletteRound({ sessionId, phoneId, tableId, onDone }) {
   if (phase === 'voting') {
     return (
       <div style={overlayStyle}>
-        <p style={{ fontSize: '44px', margin: 0 }}>🗳️</p>
+        <div style={{ fontFamily: 'var(--font-display)', fontSize: '13px', letterSpacing: '0.22em', color: 'var(--primary)', textShadow: '0 0 12px rgba(255,45,120,0.5)' }}>ROULETTE</div>
         <h1 style={headlineStyle}>Vote for the loser</h1>
         <p style={dimMonoStyle}>{votedCount}/{activeTotal} voted</p>
         {myVote ? (
@@ -249,7 +249,7 @@ export default function RouletteRound({ sessionId, phoneId, tableId, onDone }) {
     const loserNames = result.losers.map((l) => l.name).join(', ') || 'Nobody'
     return (
       <div style={overlayStyle}>
-        <p style={{ fontSize: '48px', margin: 0 }}>🎰</p>
+        <div style={{ fontFamily: 'var(--font-display)', fontSize: '13px', letterSpacing: '0.22em', color: 'var(--primary)', textShadow: '0 0 12px rgba(255,45,120,0.5)' }}>ROULETTE</div>
         <h2 style={headlineStyle}>
           {result.losers.length > 0 ? `${loserNames} lost!` : 'All tied!'}
         </h2>

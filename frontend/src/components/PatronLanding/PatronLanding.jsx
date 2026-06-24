@@ -258,7 +258,7 @@ export default function PatronLanding() {
     }}>
       {status === 'loading' && (
         <>
-          <span style={{ fontSize: '36px' }}>🍺</span>
+          <div style={{ width: '12px', height: '12px', borderRadius: '50%', background: 'var(--primary)', boxShadow: '0 0 16px var(--primary)', animation: 'pulse-dot 1.4s infinite' }} />
           <h1 className="headline" style={{ fontFamily: 'var(--font-headline)', fontSize: '22px', margin: 0 }}>
             Setting up the game…
           </h1>
@@ -270,7 +270,7 @@ export default function PatronLanding() {
 
       {status === 'success' && (
         <h1 className="headline" style={{ fontFamily: 'var(--font-headline)' }}>
-          Playing at {venue.venue_name} 🍺
+          Playing at {venue.venue_name}
         </h1>
       )}
 

@@ -109,7 +109,6 @@ export default function ChooserRound({ sessionId, phoneId, hotSeat, onRoundCompl
     return (
       <div style={overlayStyle}>
         <div style={glassCardStyle}>
-          <p style={{ fontSize: '28px', margin: '0 0 12px' }}>🍺</p>
           <h2 style={{ fontFamily: 'var(--font-headline)', fontSize: '20px', margin: '0 0 12px' }}>
             Responsible Drinking
           </h2>
@@ -152,10 +151,7 @@ export default function ChooserRound({ sessionId, phoneId, hotSeat, onRoundCompl
     const won = resultData.result === 'completed'
     return (
       <div style={overlayStyle}>
-        <p style={{ fontSize: '48px', margin: 0 }}>{won ? '✅' : '⏭️'}</p>
-        <h2 style={{ fontFamily: 'var(--font-headline)', fontSize: '28px', margin: '12px 0 0' }}>
-          {won ? 'Done!' : 'Skipped'}
-        </h2>
+        <div style={{ fontFamily: 'var(--font-display)', fontSize: '46px', color: won ? 'var(--correct)' : 'var(--on-surface-dim)', letterSpacing: '0.03em', textShadow: won ? '0 0 24px rgba(57,224,139,0.4)' : 'none' }}>{won ? 'DONE' : 'SKIPPED'}</div>
       </div>
     )
   }
