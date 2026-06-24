@@ -153,8 +153,7 @@ export default function TriviaOriginRound({ sessionId, phoneId, onDone }) {
   if (phase === 'getready') {
     return (
       <Screen>
-        <p style={{ fontSize: '44px', margin: 0 }}>🧠</p>
-        <h1 style={headlineStyle}>Trivia round!</h1>
+        <div style={{ fontFamily: 'var(--font-display)', fontSize: '54px', color: 'var(--primary)', letterSpacing: '0.02em', lineHeight: 1, textShadow: '0 0 26px rgba(255,45,120,0.5)' }}>TRIVIA</div>
         <p style={dimMono}>Get ready — answer on your own phone, at your own pace</p>
       </Screen>
     )
@@ -185,7 +184,7 @@ export default function TriviaOriginRound({ sessionId, phoneId, onDone }) {
   if (phase === 'waiting') {
     return (
       <Screen>
-        <p style={{ fontSize: '32px', margin: 0 }}>⏳</p>
+        <div style={{ width: '12px', height: '12px', borderRadius: '50%', background: 'var(--primary)', boxShadow: '0 0 16px var(--primary)', animation: 'pulse-dot 1.4s infinite' }} />
         <h1 style={headlineStyle}>Waiting for players</h1>
         <p style={dimMono}>Need at least 2 players for a new round. Others can tap the tag to join.</p>
         <Leaderboard rows={leaderboard} title="Who's here" />
@@ -196,7 +195,7 @@ export default function TriviaOriginRound({ sessionId, phoneId, onDone }) {
   if (phase === 'leaderboard') {
     return (
       <Screen>
-        <p style={{ fontSize: '32px', margin: 0 }}>🏆</p>
+        <div style={{ fontFamily: 'var(--font-display)', fontSize: '13px', letterSpacing: '0.22em', color: 'var(--gold)', textShadow: '0 0 12px rgba(255,200,87,0.4)' }}>RESULTS</div>
         <Leaderboard rows={leaderboard} title="Trivia results" />
         <button onClick={handleBackToGame} style={primaryButton}>Back to the game</button>
       </Screen>

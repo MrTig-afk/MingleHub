@@ -155,7 +155,7 @@ export default function VenueSetup({ token, onDone, navigate, prefill }) {
     return (
       <div style={fullScreen}>
         <div style={{ ...cardStyle, maxWidth: '440px', width: '100%', textAlign: 'center' }}>
-          <div style={{ fontSize: '40px', lineHeight: 1 }}>🎉</div>
+          <div style={{ width: '52px', height: '52px', borderRadius: '50%', margin: '0 auto', display: 'grid', placeItems: 'center', background: 'rgba(57,224,139,0.12)', border: '1.5px solid var(--correct)', color: 'var(--correct)', fontSize: '24px', fontWeight: 700 }}>✓</div>
           <h1 style={{ fontFamily: 'var(--font-headline)', fontSize: '22px', margin: '10px 0 4px' }}>
             {name.trim()} is set up
           </h1>

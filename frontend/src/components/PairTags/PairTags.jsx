@@ -217,7 +217,7 @@ export default function PairTags() {
           fontFamily: 'var(--font-mono)',
           fontSize: '13px',
         }}>
-          <div style={{ color: 'var(--secondary)', marginBottom: '6px' }}>Paired ✅</div>
+          <div style={{ color: 'var(--secondary)', marginBottom: '6px' }}>✓ Paired</div>
           <pre style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
             {JSON.stringify(lastPaired, null, 2)}
           </pre>

@@ -134,13 +134,13 @@ export default function FingerChooser({
             gap: '20px',
             padding: '0 32px',
           }}>
-            <span style={{
-              fontSize: 'clamp(72px, 22vw, 110px)',
-              opacity: 0.12,
-              lineHeight: 1,
-            }}>
-              ✋
-            </span>
+            <div style={{
+              width: 'clamp(72px, 22vw, 110px)',
+              height: 'clamp(72px, 22vw, 110px)',
+              borderRadius: '50%',
+              border: '3px solid var(--primary)',
+              opacity: 0.18,
+            }} />
             <p style={{
               fontFamily: 'var(--font-headline)',
               fontWeight: 800,
