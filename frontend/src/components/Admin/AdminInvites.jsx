@@ -4,6 +4,10 @@ import { createInvite, fetchInvites, revokeInvite, geoAutocomplete } from '../..
 import { cardStyle, buttonStyle } from '../Dashboard/dashboardStyles'
 
 const inputStyle = {
+  // display:block so width:100% reliably fills the card. A bare <input> defaults to
+  // inline-block and (unlike the <div>-wrapped name/address fields) wasn't stretching,
+  // leaving the email box ~200px wide and cutting off long addresses.
+  display: 'block',
   padding: '10px 12px',
   borderRadius: '8px',
   background: 'var(--bg-surface)',
@@ -234,7 +238,9 @@ export default function AdminInvites({ token }) {
 
         <label style={labelStyle}>Invited email</label>
         <input
-          type="email"
+          type="text"
+          inputMode="email"
+          autoComplete="off"
           value={form.invited_email}
           onChange={(e) => setForm((f) => ({ ...f, invited_email: e.target.value }))}
           placeholder="owner@venue.com"
