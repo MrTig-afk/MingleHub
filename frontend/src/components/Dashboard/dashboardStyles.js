@@ -2,36 +2,39 @@
 // Follows the same CSS-var idiom as PairTags.jsx — no separate CSS modules.
 
 export const buttonStyle = {
-  padding: '12px',
-  borderRadius: '8px',
+  padding: '12px 16px',
+  borderRadius: '10px',
   background: 'var(--primary)',
   color: 'var(--bg-floor)',
+  fontFamily: 'var(--font-headline)',
   fontWeight: 700,
   border: 'none',
   cursor: 'pointer',
+  boxShadow: '0 0 22px rgba(255, 45, 120, 0.32)',
 }
 
 export const buttonSecondaryStyle = {
   ...buttonStyle,
   background: 'var(--bg-surface)',
   color: 'var(--on-surface)',
-  border: '1px solid var(--outline)',
+  border: '1.5px solid var(--line)',
+  boxShadow: 'none',
 }
 
 export const selectStyle = {
-  padding: '12px',
-  borderRadius: '8px',
-  background: 'var(--bg-surface)',
+  padding: '12px 14px',
+  borderRadius: '10px',
+  background: 'var(--bg-container)',
   color: 'var(--on-surface)',
-  border: '1px solid var(--outline)',
+  border: '1.5px solid var(--line)',
   width: '100%',
 }
 
 export const cardStyle = {
-  background: 'var(--glass-bg)',
-  border: '1px solid var(--glass-border)',
-  borderRadius: '12px',
-  padding: '16px',
+  background: 'var(--bg-surface)',
+  border: '1.5px solid var(--line)',
+  borderRadius: '16px',
+  padding: '18px',
 }
 
 export const labelStyle = {
@@ -41,18 +44,21 @@ export const labelStyle = {
 
 // Session status chip colours — shared by DashboardHome and DashboardTableDetail.
 export const STATUS_CHIP = {
-  active: { background: 'rgba(0, 238, 252, 0.15)', color: 'var(--secondary)' },
-  idle:   { background: 'rgba(255, 215, 0, 0.15)',  color: '#FFD700' },
-  paused: { background: 'rgba(231, 0, 110, 0.15)',  color: 'var(--tertiary)' },
-  lobby:  { background: 'rgba(236, 178, 255, 0.15)', color: 'var(--primary)' },
+  active: { background: 'rgba(57, 224, 139, 0.12)', color: 'var(--correct)',  border: '1px solid rgba(57, 224, 139, 0.35)' },
+  idle:   { background: 'rgba(255, 200, 87, 0.12)', color: 'var(--gold)',     border: '1px solid rgba(255, 200, 87, 0.35)' },
+  paused: { background: 'rgba(255, 92, 108, 0.12)', color: 'var(--tertiary)', border: '1px solid rgba(255, 92, 108, 0.35)' },
+  lobby:  { background: 'rgba(255, 45, 120, 0.12)', color: 'var(--primary)',  border: '1px solid rgba(255, 45, 120, 0.35)' },
 }
 
 export const chipStyle = (status) => ({
   ...(STATUS_CHIP[status] || STATUS_CHIP.active),
-  fontSize: '11px',
-  padding: '2px 8px',
-  borderRadius: '10px',
-  fontWeight: 700,
+  fontFamily: 'var(--font-mono)',
+  fontSize: '10px',
+  letterSpacing: '0.06em',
+  textTransform: 'uppercase',
+  padding: '3px 9px',
+  borderRadius: '6px',
+  fontWeight: 500,
 })
 
 export function formatDuration(seconds) {
