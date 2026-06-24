@@ -55,11 +55,25 @@ async def tap(
         pool = await get_pool()
         async with pool.acquire() as conn:
             venue = await conn.fetchrow(
-                "SELECT id, name, slug, restrict_adult_content FROM venues WHERE slug = $1 AND status = 'active'",
+                "SELECT id, name, slug, status, restrict_adult_content FROM venues WHERE slug = $1",
                 venue_slug,
             )
             if not venue:
                 raise HTTPException(status_code=404, detail="Not found")
+
+            # Venue exists but isn't active (cancelled / suspended): surface the
+            # informative "venue not active" screen instead of a generic 404
+            # "tap didn't go through". Short-circuit here so the result is the
+            # same with or without a phone_id, and so we skip the tag crypto and
+            # presence logging that only matter for live play. (resolve_table_state
+            # carries the same gate, but it only runs when phone_id is present.)
+            if venue["status"] != "active":
+                return {
+                    "venue_name": venue["name"],
+                    "venue_slug": venue["slug"],
+                    "table_number": table_number,
+                    "table_state": {"phase": "venue_inactive", "venue_status": venue["status"]},
+                }
 
             table = await conn.fetchrow(
                 "SELECT id, content_ceiling FROM tables WHERE venue_id = $1 AND table_number = $2",

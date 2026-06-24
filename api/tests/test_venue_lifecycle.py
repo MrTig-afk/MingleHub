@@ -670,8 +670,11 @@ class TestBOLA:
 
 class TestNewGameBlocking:
 
-    def test_tap_returns_404_when_cancelled(self, client, api_key_header):
-        """#31 — GET /patron/tap with cancelled venue slug -> 404."""
+    def test_tap_surfaces_venue_inactive_when_cancelled(self, client, api_key_header):
+        """#31 — GET /patron/tap with cancelled venue slug -> 200 + venue_inactive.
+        The venue resolves (it exists) so the patron sees the informative
+        "venue not active" screen rather than a generic 404 "tap didn't go
+        through"; new play is still blocked downstream."""
         _set_venue_status(VENUE_A_ID, "cancelled",
                           cancelled_at=datetime.now(timezone.utc).replace(tzinfo=None))
         try:
@@ -681,12 +684,14 @@ class TestNewGameBlocking:
                 params={"venue_slug": "fifty-five-bar", "table_number": 1,
                         "phone_id": "test-phone-blocked"},
             )
-            assert resp.status_code == 404
+            assert resp.status_code == 200
+            assert resp.json()["table_state"]["phase"] == "venue_inactive"
+            assert resp.json()["table_state"]["venue_status"] == "cancelled"
         finally:
             _restore_venue_status(VENUE_A_ID)
 
-    def test_tap_returns_404_when_suspended(self, client, api_key_header):
-        """#32 — GET /patron/tap with suspended venue slug -> 404."""
+    def test_tap_surfaces_venue_inactive_when_suspended(self, client, api_key_header):
+        """#32 — GET /patron/tap with suspended venue slug -> 200 + venue_inactive."""
         _set_venue_status(VENUE_A_ID, "suspended", suspension_reason="dunning",
                           suspended_at=datetime.now(timezone.utc).replace(tzinfo=None))
         try:
@@ -696,7 +701,9 @@ class TestNewGameBlocking:
                 params={"venue_slug": "fifty-five-bar", "table_number": 1,
                         "phone_id": "test-phone-susp"},
             )
-            assert resp.status_code == 404
+            assert resp.status_code == 200
+            assert resp.json()["table_state"]["phase"] == "venue_inactive"
+            assert resp.json()["table_state"]["venue_status"] == "suspended"
         finally:
             _restore_venue_status(VENUE_A_ID)
 
