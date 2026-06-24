@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ClerkProvider, SignedIn, SignedOut, SignIn, useAuth, useClerk } from '@clerk/clerk-react'
 import { fetchAdminMe } from '../../services/adminApi'
 import AdminLogin from './AdminLogin.jsx'
@@ -125,9 +125,13 @@ function AdminInner({ token, onLogout, renderUnauth }) {
   const [user, setUser] = useState(null)
   const [error, setError] = useState(null)
   const [path, setPath] = useState(window.location.pathname)
+  // Once we've authed successfully, a periodic token refresh (Clerk re-issues the
+  // JWT every 30s) must NOT flip back to the loading screen — that unmounts the
+  // routed page and wipes its in-progress state (e.g. a just-generated invite QR).
+  const didInitialAuth = useRef(false)
 
   const checkAuth = async () => {
-    setAuthState('loading')
+    if (!didInitialAuth.current) setAuthState('loading')
     try {
       const me = await fetchAdminMe(token)
       if (me.role !== 'admin') {
@@ -136,6 +140,7 @@ function AdminInner({ token, onLogout, renderUnauth }) {
         return
       }
       setUser(me)
+      didInitialAuth.current = true
       if (window.location.pathname === '/admin/login') navigate('/admin')
       setAuthState('ok')
     } catch (e) {

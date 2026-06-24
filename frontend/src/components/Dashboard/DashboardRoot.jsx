@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ClerkProvider, SignedIn, SignedOut, SignIn, useAuth, useClerk } from '@clerk/clerk-react'
 import { fetchMe, fetchVenue, redeemInvite } from '../../services/dashboardApi'
 import PairTags from '../PairTags/PairTags.jsx'
@@ -65,6 +65,14 @@ function Centered({ children }) {
 // Gate: Clerk if configured, else the dev-login flow.
 // ---------------------------------------------------------------------------
 export default function DashboardRoot() {
+  // Stash an invite code BEFORE Clerk's OAuth round-trip — the Google sign-in
+  // redirect lands back on a bare /dashboard and drops the ?invite= query string,
+  // so a brand-new owner who scans the QR would otherwise lose the invite. sessionStorage
+  // survives the same-tab redirect; DashboardInner reads it back after sign-in.
+  const inviteParam = new URLSearchParams(window.location.search).get('invite')
+  if (inviteParam) {
+    try { sessionStorage.setItem('mh_pending_invite', inviteParam) } catch { /* ignore */ }
+  }
   if (CLERK_KEY) {
     return (
       <ClerkProvider publishableKey={CLERK_KEY} afterSignOutUrl="/dashboard">
@@ -154,11 +162,16 @@ function DashboardInner({ token, onLogout, renderUnauth }) {
   const [error, setError] = useState(null)
   const [path, setPath] = useState(window.location.pathname)
   const [prefill, setPrefill] = useState(null)
+  // Once authed, a periodic Clerk token refresh (every 30s) must NOT flip back to
+  // the loading screen — that unmounts the current page and wipes in-progress
+  // state (a half-typed cancel reason, the setup wizard, etc.).
+  const didInitialAuth = useRef(false)
 
   const checkAuth = async () => {
-    setAuthState('loading')
+    if (!didInitialAuth.current) setAuthState('loading')
     try {
       const me = await fetchMe(token)
+      didInitialAuth.current = true
       if (me.role === 'admin') {
         setUser(me)
         setAuthState('admin_wrong_surface')
@@ -166,17 +179,20 @@ function DashboardInner({ token, onLogout, renderUnauth }) {
       }
       if (!me.venue_id) {
         setUser(me)
-        // Check for ?invite=CODE in the URL
+        // Check for ?invite=CODE in the URL, falling back to one stashed before a
+        // Clerk OAuth sign-in (that redirect drops the query string).
         const params = new URLSearchParams(window.location.search)
-        const inviteCode = params.get('invite')
+        const inviteCode = params.get('invite') || sessionStorage.getItem('mh_pending_invite')
         if (inviteCode) {
           try {
             const { invite } = await redeemInvite(token, inviteCode)
+            sessionStorage.removeItem('mh_pending_invite')
             // Clean the URL (remove ?invite=...)
             window.history.replaceState({}, '', '/dashboard')
             setPrefill(invite)
             setAuthState('setup')
           } catch (e) {
+            sessionStorage.removeItem('mh_pending_invite') // don't re-loop on a bad code
             setError(e.message || 'Invalid or expired invite')
             setAuthState('invite_error')
           }
