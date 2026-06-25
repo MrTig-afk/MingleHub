@@ -13,14 +13,16 @@ import { completeRound, drawCard, redrawRound, skipRound } from '../../services/
 // The disclaimer overlay is rendered before the card if show_drink_disclaimer
 // is true; dismissing it reveals the card beneath.
 
+// One luminous accent per card type — distinct hues in the After Dark family
+// (categories must stay tellable apart, so per-type color is the right call here).
 const CARD_TYPE_META = {
-  icebreaker: { icon: '', label: 'Icebreaker', color: '#4fc3f7' },
-  truth:      { icon: '', label: 'Truth',      color: '#ce93d8' },
-  dare:       { icon: '', label: 'Dare',       color: '#ff7043' },
-  compliment: { icon: '', label: 'Compliment', color: '#f48fb1' },
-  challenge:  { icon: '', label: 'Challenge',  color: '#fff176' },
-  drink:      { icon: '', label: 'Drink',      color: '#a5d6a7' },
-  flirty:     { icon: '', label: 'Flirty',     color: '#f8bbd0' },
+  icebreaker: { label: 'Icebreaker', color: '#2DE2E6' },
+  truth:      { label: 'Truth',      color: '#B98CFF' },
+  dare:       { label: 'Dare',       color: '#FF8A4C' },
+  compliment: { label: 'Compliment', color: '#FF6FA5' },
+  challenge:  { label: 'Challenge',  color: '#FFC857' },
+  drink:      { label: 'Drink',      color: '#39E08B' },
+  flirty:     { label: 'Flirty',     color: '#FF5C9E' },
 }
 
 // adultsOnly is intentionally not destructured -- card filtering is enforced
@@ -224,8 +226,8 @@ const overlayStyle = {
 }
 
 const glassCardStyle = {
-  background: 'var(--glass-bg)',
-  border: '1px solid var(--glass-border)',
+  background: 'var(--bg-surface)',
+  border: '1.5px solid var(--line)',
   borderRadius: '16px',
   padding: '28px 24px',
   maxWidth: '360px',

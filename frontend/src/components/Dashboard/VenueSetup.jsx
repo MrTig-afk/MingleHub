@@ -17,10 +17,10 @@ const fullScreen = {
 
 const inputStyle = {
   width: '100%',
-  padding: '10px 12px',
-  borderRadius: '8px',
-  border: '1px solid rgba(255,255,255,0.14)',
-  background: 'var(--bg-floor)',
+  padding: '11px 13px',
+  borderRadius: '10px',
+  border: '1.5px solid var(--line)',
+  background: 'var(--bg-container)',
   color: 'var(--on-surface)',
   fontFamily: 'var(--font-body)',
   fontSize: '15px',
@@ -39,8 +39,8 @@ function Dropdown({ items, onPick }) {
   return (
     <div style={{
       position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 10,
-      background: 'var(--bg-container)', border: '1px solid rgba(255,255,255,0.14)',
-      borderRadius: '8px', marginTop: '4px', maxHeight: '220px', overflowY: 'auto',
+      background: 'var(--bg-container)', border: '1.5px solid var(--line)',
+      borderRadius: '10px', marginTop: '4px', maxHeight: '220px', overflowY: 'auto',
     }}>
       {items.map((s, i) => (
         <div
@@ -48,7 +48,7 @@ function Dropdown({ items, onPick }) {
           onMouseDown={() => onPick(s)}
           style={{
             padding: '10px 12px', cursor: 'pointer', fontSize: '14px',
-            borderBottom: i < items.length - 1 ? '1px solid var(--bg-floor)' : 'none',
+            borderBottom: i < items.length - 1 ? '1px solid var(--line)' : 'none',
           }}
         >
           {s.label}
