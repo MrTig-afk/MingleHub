@@ -100,6 +100,21 @@ export const fetchBilling = (token) =>
     return r.json()
   })
 
+/**
+ * Push the venue's latest invoice to Stripe for payment.
+ * Calls POST /api/dashboard/billing/sync (auth-gated, venue_owner only).
+ * Returns { customer_id, stripe_invoice_id, line_items, mode, skipped? }.
+ * Throws on network error (fetch rejects) or HTTP error (non-2xx).
+ */
+export const syncBillingToStripe = (token) =>
+  fetch(`${BASE}/api/dashboard/billing/sync`, {
+    method: 'POST',
+    headers: h(token),
+  }).then(async (r) => {
+    if (!r.ok) throw new Error((await r.json()).detail || r.status)
+    return r.json()
+  })
+
 export const fetchThemes = (token) =>
   fetch(`${BASE}/api/dashboard/themes`, { headers: h(token) }).then(async (r) => {
     if (!r.ok) throw new Error((await r.json()).detail || r.status)
