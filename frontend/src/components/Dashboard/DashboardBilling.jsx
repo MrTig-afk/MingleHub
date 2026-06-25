@@ -235,7 +235,7 @@ export default function DashboardBilling({ token, user }) {
       {/* Tonight card */}
       <div style={{ ...cardStyle, marginBottom: '12px' }}>
         <div style={{ fontWeight: 700, fontSize: '14px', marginBottom: '8px' }}>Tonight</div>
-        <div style={{ fontFamily: 'var(--font-headline)', fontSize: '28px' }}>
+        <div style={{ fontFamily: 'var(--font-display)', fontSize: '37px', letterSpacing: '0.01em', lineHeight: 1.05 }}>
           {formatMoney(data.tonight.total)}
         </div>
         <div style={{ fontSize: '13px', color: 'var(--on-surface-dim)', marginTop: '4px' }}>
@@ -283,7 +283,7 @@ export default function DashboardBilling({ token, user }) {
       {/* Month estimate card */}
       <div style={{ ...cardStyle, marginBottom: '12px' }}>
         <div style={{ fontWeight: 700, fontSize: '14px', marginBottom: '8px' }}>Month to Date</div>
-        <div style={{ fontFamily: 'var(--font-headline)', fontSize: '28px' }}>
+        <div style={{ fontFamily: 'var(--font-display)', fontSize: '37px', letterSpacing: '0.01em', lineHeight: 1.05 }}>
           {formatMoney(data.month_estimate.total)}
         </div>
         <div style={{ fontSize: '13px', color: 'var(--on-surface-dim)', marginTop: '2px' }}>

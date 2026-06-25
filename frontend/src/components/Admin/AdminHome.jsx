@@ -85,7 +85,7 @@ export default function AdminHome({ token, navigate }) {
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
         {platformCards.map(({ value, label }) => (
           <div key={label} style={cardStyle}>
-            <div style={{ fontFamily: 'var(--font-headline)', fontSize: '28px', color: 'var(--on-surface)' }}>
+            <div style={{ fontFamily: 'var(--font-display)', fontSize: '37px', letterSpacing: '0.01em', lineHeight: 1.05, color: 'var(--on-surface)' }}>
               {value ?? 0}
             </div>
             <div style={{ fontSize: '13px', color: 'var(--on-surface-dim)' }}>{label}</div>

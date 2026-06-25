@@ -19,7 +19,7 @@ const RANGE_LABELS = {
 function StatCard({ value, label }) {
   return (
     <div style={cardStyle}>
-      <div style={{ fontFamily: 'var(--font-headline)', fontSize: '28px', color: 'var(--on-surface)' }}>
+      <div style={{ fontFamily: 'var(--font-display)', fontSize: '37px', letterSpacing: '0.01em', lineHeight: 1.05, color: 'var(--on-surface)' }}>
         {value ?? 0}
       </div>
       <div style={{ fontSize: '13px', color: 'var(--on-surface-dim)' }}>{label}</div>
@@ -235,13 +235,13 @@ export default function DashboardInsights({ token }) {
         {trivia.accuracy == null
           ? (
             <>
-              <div style={{ fontFamily: 'var(--font-headline)', fontSize: '28px' }}>--</div>
+              <div style={{ fontFamily: 'var(--font-display)', fontSize: '37px', letterSpacing: '0.01em', lineHeight: 1.05 }}>--</div>
               <div style={{ fontSize: '13px', color: 'var(--on-surface-dim)' }}>No trivia played</div>
             </>
           )
           : (
             <>
-              <div style={{ fontFamily: 'var(--font-headline)', fontSize: '28px' }}>
+              <div style={{ fontFamily: 'var(--font-display)', fontSize: '37px', letterSpacing: '0.01em', lineHeight: 1.05 }}>
                 {Math.round(trivia.accuracy * 100)}%
               </div>
               <div style={{ fontSize: '13px', color: 'var(--on-surface-dim)' }}>
