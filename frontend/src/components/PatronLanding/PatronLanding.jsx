@@ -52,6 +52,32 @@ function parseTapFromLocation() {
 
 const initialTap = parseTapFromLocation()
 
+// Neon table tag — the After Dark signature, fixed top-right across every game
+// phase so a patron always knows which table they're on. Cyan = the live/signal color.
+function TableTag({ n }) {
+  return (
+    <div style={{
+      position: 'fixed',
+      top: 'calc(env(safe-area-inset-top, 0px) + 12px)',
+      right: 'calc(env(safe-area-inset-right, 0px) + 14px)',
+      zIndex: 60,
+      fontFamily: 'var(--font-mono)',
+      fontSize: '12px',
+      fontWeight: 700,
+      letterSpacing: '0.08em',
+      color: 'var(--secondary)',
+      background: 'rgba(45, 226, 230, 0.10)',
+      border: '1px solid rgba(45, 226, 230, 0.45)',
+      borderRadius: '7px',
+      padding: '4px 9px',
+      boxShadow: '0 0 16px rgba(45, 226, 230, 0.30)',
+      pointerEvents: 'none',
+    }}>
+      T{n}
+    </div>
+  )
+}
+
 export default function PatronLanding() {
   const [status, setStatus] = useState('loading') // loading | error | <table_state.phase> | joined | started
   const [venue, setVenue] = useState(null)
@@ -102,6 +128,10 @@ export default function PatronLanding() {
     return () => { cancelled = true }
   }, [])
 
+  // Neon table tag overlay — rendered alongside every game-phase view below.
+  const tn = initialTap.tableNumber
+  const tag = Number.isFinite(tn) && tn > 0 ? <TableTag n={tn} /> : null
+
   // Venue inactive: the venue has been cancelled or suspended — no new games.
   if (status === 'venue_inactive') {
     return (
@@ -125,6 +155,8 @@ export default function PatronLanding() {
 
   if (status === 'lobby') {
     return (
+      <>
+      {tag}
       <Lobby
         venueName={venue.venue_name}
         lobbyId={tableState.lobby_id}
@@ -142,11 +174,14 @@ export default function PatronLanding() {
           setStatus('started')
         }}
       />
+      </>
     )
   }
 
   if (status === 'join_or_new' || status === 'table_full') {
     return (
+      <>
+      {tag}
       <JoinOrNewChooser
         tableNumber={initialTap.tableNumber}
         tableId={tableState.table_id}
@@ -155,6 +190,7 @@ export default function PatronLanding() {
         onJoined={(result) => { setJoinedInfo(result); setStatus('joined') }}
         onNewGroup={(lobby) => { setTableState({ phase: 'lobby', ...lobby }); setStatus('lobby') }}
       />
+      </>
     )
   }
 
@@ -164,6 +200,8 @@ export default function PatronLanding() {
     const ts = tableState
     if (ts.is_origin) {
       return (
+        <>
+        {tag}
         <RoundOrigin
           venueName={venue.venue_name}
           sessionId={ts.session_id}
@@ -177,23 +215,27 @@ export default function PatronLanding() {
               : undefined
           }
         />
+        </>
       )
     }
     // Non-origin participant resuming — back into the between-rounds / Trivia view.
     return (
+      <>
+      {tag}
       <SessionParticipant
         venueName={venue.venue_name}
         sessionId={ts.session_id}
         phoneId={initialTap.phoneId}
         tableId={venue.table_id}
       />
+      </>
     )
   }
 
   // Re-tap on a recently-ended session (within retap_interval_minutes) or an
   // idle-expired session: show the Recap screen instead of lobby.
   if (status === 'recap') {
-    return <Recap sessionId={tableState.session_id} venueName={venue.venue_name} />
+    return <>{tag}<Recap sessionId={tableState.session_id} venueName={venue.venue_name} /></>
   }
 
   // gamespec: "Players place fingers on session-origin phone" — only the
@@ -205,6 +247,8 @@ export default function PatronLanding() {
   // response (name/session_id) for 'joined' — never both, so this is safe.
   if (status === 'started' && joinedInfo.is_host) {
     return (
+      <>
+      {tag}
       <RoundOrigin
         venueName={venue.venue_name}
         sessionId={joinedInfo.converted_session_id}
@@ -213,6 +257,7 @@ export default function PatronLanding() {
         adultsOnly={sessionAdultsOnly}
         playerCount={sessionPlayerCount}
       />
+      </>
     )
   }
 
@@ -222,23 +267,29 @@ export default function PatronLanding() {
   // in-progress group via Join-or-New.
   if (status === 'started') {
     return (
+      <>
+      {tag}
       <SessionParticipant
         venueName={venue.venue_name}
         sessionId={joinedInfo.converted_session_id}
         phoneId={initialTap.phoneId}
         tableId={venue.table_id}
       />
+      </>
     )
   }
 
   if (status === 'joined') {
     return (
+      <>
+      {tag}
       <SessionParticipant
         venueName={venue.venue_name}
         sessionId={joinedInfo.session_id}
         phoneId={initialTap.phoneId}
         tableId={venue.table_id}
       />
+      </>
     )
   }
 
