@@ -39,7 +39,7 @@ export default function Recap({ sessionId, venueName }) {
   if (error) {
     return (
       <Screen>
-        <h1 style={headlineStyle}>Game Over &mdash; {venueName}</h1>
+        <GameOverTitle venue={venueName} />
         <p style={dimMono}>{error}</p>
       </Screen>
     )
@@ -48,7 +48,7 @@ export default function Recap({ sessionId, venueName }) {
   if (!recap) {
     return (
       <Screen>
-        <h1 style={headlineStyle}>Game Over &mdash; {venueName}</h1>
+        <GameOverTitle venue={venueName} />
         <p style={dimMono}>Loading recap…</p>
       </Screen>
     )
@@ -61,8 +61,7 @@ export default function Recap({ sessionId, venueName }) {
 
   return (
     <Screen>
-      <p style={{ fontSize: '48px', margin: 0 }}>&#x1F3C6;</p>
-      <h1 style={headlineStyle}>Game Over &mdash; {recap.venue_name}</h1>
+      <GameOverTitle venue={recap.venue_name} />
 
       <Leaderboard rows={recap.leaderboard} title="Final Scores" meName={meName} />
 
@@ -100,6 +99,28 @@ function StatRow({ label, value }) {
   )
 }
 
+// Gold "GAME OVER" wordmark with the venue as a mono eyebrow — gold is the
+// winner/results color in After Dark. Shared by the loading, error, and recap views.
+function GameOverTitle({ venue }) {
+  return (
+    <div style={{ textAlign: 'center' }}>
+      <div style={{
+        fontFamily: 'var(--font-mono)', fontSize: '11px', letterSpacing: '0.16em',
+        textTransform: 'uppercase', color: 'var(--on-surface-dim)', marginBottom: '8px',
+      }}>
+        {venue}
+      </div>
+      <h1 style={{
+        fontFamily: 'var(--font-display)', fontSize: '46px', color: 'var(--gold)',
+        letterSpacing: '0.02em', lineHeight: 1, margin: 0,
+        textShadow: '0 0 28px rgba(255, 200, 87, 0.45)',
+      }}>
+        GAME OVER
+      </h1>
+    </div>
+  )
+}
+
 function Screen({ children }) {
   return <div style={screenStyle}>{children}</div>
 }
@@ -118,7 +139,6 @@ const screenStyle = {
   textAlign: 'center',
 }
 
-const headlineStyle = { fontFamily: 'var(--font-headline)', fontSize: '26px', margin: 0 }
 const dimMono = { fontFamily: 'var(--font-mono)', fontSize: '13px', color: 'var(--on-surface-dim)', margin: 0 }
 
 const primaryButton = {
@@ -143,8 +163,8 @@ const secondaryButton = {
 }
 
 const statsCardStyle = {
-  background: 'var(--glass-bg)',
-  border: '1px solid var(--glass-border)',
+  background: 'var(--bg-surface)',
+  border: '1.5px solid var(--line)',
   borderRadius: '16px',
   padding: '20px',
   width: '100%',

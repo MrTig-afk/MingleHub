@@ -10,16 +10,19 @@ const shimmerCard = (height = 64) => ({
   marginBottom: '12px',
 })
 
-const PAIRED_CHIP = { background: 'rgba(45,226,230,0.15)', color: 'var(--secondary)' }
-const UNPAIRED_CHIP = { background: 'rgba(255,200,87,0.15)', color: 'var(--gold)' }
-const LIVE_CHIP = { background: 'rgba(45,226,230,0.15)', color: 'var(--secondary)' }
-const IDLE_CHIP = { color: 'var(--on-surface-dim)' }
+const PAIRED_CHIP = { background: 'rgba(45,226,230,0.12)', color: 'var(--secondary)', border: '1px solid rgba(45,226,230,0.35)' }
+const UNPAIRED_CHIP = { background: 'rgba(255,200,87,0.12)', color: 'var(--gold)', border: '1px solid rgba(255,200,87,0.35)' }
+const LIVE_CHIP = { background: 'rgba(57,224,139,0.12)', color: 'var(--correct)', border: '1px solid rgba(57,224,139,0.35)' }
+const IDLE_CHIP = { color: 'var(--on-surface-dim)', border: '1px solid var(--line)' }
 
 const smallChip = (extra) => ({
-  fontSize: '11px',
-  padding: '2px 8px',
-  borderRadius: '10px',
-  fontWeight: 700,
+  fontFamily: 'var(--font-mono)',
+  fontSize: '10px',
+  letterSpacing: '0.06em',
+  textTransform: 'uppercase',
+  padding: '3px 9px',
+  borderRadius: '6px',
+  fontWeight: 500,
   ...extra,
 })
 
