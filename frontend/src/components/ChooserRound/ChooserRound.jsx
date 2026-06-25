@@ -163,12 +163,14 @@ export default function ChooserRound({ sessionId, phoneId, hotSeat, onRoundCompl
           identify which person was chosen, so naming them would be misleading. */}
       {card ? (
         <div style={{ ...glassCardStyle, borderColor: meta.color }}>
-          {/* Category badge */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}>
-            <span style={{ fontSize: '22px' }}>{meta.icon}</span>
+          {/* Category chip */}
+          <div style={{ marginBottom: '16px' }}>
             <span style={{
+              display: 'inline-block',
               fontSize: '11px', fontFamily: 'var(--font-mono)', textTransform: 'uppercase',
               letterSpacing: '0.1em', color: meta.color,
+              background: `${meta.color}1a`, border: `1px solid ${meta.color}55`,
+              padding: '4px 10px', borderRadius: '6px',
             }}>
               {meta.label}
             </span>

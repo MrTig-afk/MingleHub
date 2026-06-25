@@ -126,7 +126,7 @@ export default function Lobby({ venueName, lobbyId, phoneId, tableId, adultsOnly
   if (!state || !hasSetName) {
     return (
       <div style={containerStyle}>
-        <h1 style={{ fontFamily: 'var(--font-headline)', fontSize: '24px', textAlign: 'center' }}>
+        <h1 style={{ fontFamily: 'var(--font-display)', fontSize: '34px', letterSpacing: '0.01em', lineHeight: 1.05, textAlign: 'center' }}>
           Welcome to {venueName}
         </h1>
         <p style={{ textAlign: 'center', color: 'var(--on-surface-dim)' }}>
@@ -160,7 +160,7 @@ export default function Lobby({ venueName, lobbyId, phoneId, tableId, adultsOnly
 
   return (
     <div style={containerStyle}>
-      <h1 style={{ fontFamily: 'var(--font-headline)', fontSize: '24px', textAlign: 'center' }}>
+      <h1 style={{ fontFamily: 'var(--font-display)', fontSize: '34px', letterSpacing: '0.01em', lineHeight: 1.05, textAlign: 'center' }}>
         Welcome to {venueName}
       </h1>
 
