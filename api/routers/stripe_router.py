@@ -14,8 +14,12 @@ stripe.api_key = os.getenv("STRIPE_SECRET_KEY", "")
 _PRICE_ID = os.getenv("STRIPE_PRICE_ID", "")
 _WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
 
-_SUCCESS_URL = "https://first-move-one.vercel.app/?payment=success"
-_CANCEL_URL = "https://first-move-one.vercel.app/?payment=cancelled"
+# Where Stripe Checkout returns the owner — the Billing view, so the
+# ?payment= banner shows. Env-driven (set APP_BASE_URL per environment);
+# defaults to the production domain.
+_APP_BASE_URL = os.getenv("APP_BASE_URL", "https://minglehub.com").rstrip("/")
+_SUCCESS_URL = f"{_APP_BASE_URL}/dashboard/billing?payment=success"
+_CANCEL_URL = f"{_APP_BASE_URL}/dashboard/billing?payment=cancelled"
 
 router = APIRouter(prefix="/api")
 
