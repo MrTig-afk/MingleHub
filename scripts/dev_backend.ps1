@@ -40,8 +40,14 @@ $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
 
 # 1. Kill every stale uvicorn process (reloader + worker).
+#    Match ONLY 'uvicorn' in the command line. The reloader parent and the
+#    spawned worker BOTH carry the uvicorn module path, so this catches the whole
+#    tree. Do NOT also match the bare 'spawn_main' marker: that is the generic
+#    Python multiprocessing spawn-worker token and would friendly-fire on
+#    unrelated Python processes (e.g. the code-review-graph MCP server), tearing
+#    down tooling/sessions mid-run.
 $procs = Get-CimInstance Win32_Process -Filter "Name='python.exe'" |
-  Where-Object { $_.CommandLine -match 'uvicorn' -or $_.CommandLine -match 'spawn_main' }
+  Where-Object { $_.CommandLine -match 'uvicorn' }
 if ($procs) {
   foreach ($p in $procs) {
     Write-Host "killing stale uvicorn pid $($p.ProcessId)" -ForegroundColor Yellow
