@@ -323,6 +323,54 @@ async def _active_sessions(conn, table_id: str) -> list[dict]:
     ]
 
 
+async def check_new_game_at_table(
+    conn, table_id: str, after_session_id: str | None = None,
+) -> dict:
+    """Read-only check: is a new game forming or running at this table?
+
+    Returns the first match in priority order:
+      1. An open lobby at the table (host tapped "New game", others haven't joined yet).
+      2. An active session created after the ended session (lobby already converted).
+    Returns {"lobby_id": None, "session_id": None} when neither is found.
+
+    after_session_id: the session that just ended; used to filter out sessions
+    that predate it. None / invalid UUID = match any active session.
+    """
+    # Normalize after_session_id — invalid / absent values are treated as NULL.
+    after_uuid = None
+    if after_session_id:
+        try:
+            after_uuid = str(uuid.UUID(after_session_id))
+        except (ValueError, AttributeError):
+            after_uuid = None
+
+    # 1. Open lobby at the table (fastest path — host created it, game not yet started)
+    row = await conn.fetchrow(
+        "SELECT id FROM table_lobbies WHERE table_id = $1 AND status = 'open' LIMIT 1",
+        table_id,
+    )
+    if row:
+        return {"lobby_id": str(row["id"]), "session_id": None}
+
+    # 2. Active session created after the ended session
+    row = await conn.fetchrow(
+        """
+        SELECT gs.id FROM game_sessions gs
+        WHERE gs.table_id = $1
+          AND gs.ended_at IS NULL
+          AND ($2::uuid IS NULL OR gs.created_at > (
+              SELECT ended_at FROM game_sessions WHERE id = $2
+          ))
+        ORDER BY gs.created_at DESC LIMIT 1
+        """,
+        table_id, after_uuid,
+    )
+    if row:
+        return {"lobby_id": None, "session_id": str(row["id"])}
+
+    return {"lobby_id": None, "session_id": None}
+
+
 async def _get_or_create_open_lobby(conn, venue_id: str, table_id: str):
     existing = await conn.fetchrow(
         "SELECT id, host_phone_id, created_at FROM table_lobbies WHERE table_id = $1 AND status = 'open'",

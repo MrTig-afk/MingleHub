@@ -315,7 +315,7 @@ export default function RoundOrigin({
 
   const renderRound = () => {
     if (gameEnded) {
-      return <Recap sessionId={sessionId} venueName={venueName} />
+      return <Recap sessionId={sessionId} venueName={venueName} tableId={tableId} phoneId={phoneId} />
     }
     if (hostLeft) {
       return (

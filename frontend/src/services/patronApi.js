@@ -1,6 +1,5 @@
-// Empty/unset => same-origin relative calls (e.g. /api/patron/tap), which is
-// how the Vercel deploy serves the API. Local dev sets the absolute LAN URL.
-const BASE = import.meta.env.VITE_API_URL || ''
+// Same-origin in prod, derived LAN host in dev — see apiBase.js.
+import { API_BASE as BASE } from './apiBase'
 const KEY = import.meta.env.VITE_API_KEY
 const h = { 'Content-Type': 'application/json', 'X-API-Key': KEY }
 
@@ -313,6 +312,14 @@ export const fetchRecap = (sessionId) =>
     if (!r.ok) throw new Error((await r.json()).detail || r.status)
     return r.json()
   })
+
+export const fetchNewGame = (tableId, afterSessionId) => {
+  const params = new URLSearchParams({ after_session: afterSessionId || '' })
+  return fetch(`${BASE}/api/patron/table/${tableId}/new-game?${params}`, { headers: h }).then(async (r) => {
+    if (!r.ok) throw new Error((await r.json()).detail || r.status)
+    return r.json()
+  })
+}
 
 // Dev-only — stands in for a physical tag by computing the signature it
 // would produce for a given tag_uid + counter. 404s outside DEV_MODE.

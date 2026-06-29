@@ -1,14 +1,18 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import Leaderboard from '../Trivia/Leaderboard'
-import { fetchRecap } from '../../services/patronApi'
+import { fetchRecap, fetchNewGame } from '../../services/patronApi'
+import useSessionChannel from '../../hooks/useSessionChannel'
 
 // Terminal recap screen shown after the game ends (via End Game button,
 // game_ended broadcast, idle timeout, or re-tap on a recently-ended session).
 // Fetches aggregated stats and renders them. No round controls.
-export default function Recap({ sessionId, venueName }) {
+// tableId + phoneId enable "new game starting" detection via poll fallback
+// (realtime is best-effort; fetchChannelAuth rejects ended sessions).
+export default function Recap({ sessionId, venueName, tableId, phoneId }) {
   const [recap, setRecap] = useState(null)
   const [error, setError] = useState(null)
   const [copied, setCopied] = useState(false)
+  const [newGameAvailable, setNewGameAvailable] = useState(false)
   const meName = (() => { try { return localStorage.getItem('mh_player_name') } catch { return null } })()
 
   // Standard React 18 fetch pattern: a no-op-guard ref would deadlock under
@@ -22,6 +26,35 @@ export default function Recap({ sessionId, venueName }) {
       .catch((e) => { if (!cancelled) setError(e.message) })
     return () => { cancelled = true }
   }, [sessionId])
+
+  // Realtime best-effort: fetchChannelAuth checks active membership, which
+  // fails for ended sessions (403). The hook handles the error silently and
+  // stays disconnected. Wired here so it works if channel-auth is relaxed later.
+  useSessionChannel(tableId, phoneId, useCallback((event) => {
+    if (event === 'lobby_update') {
+      setNewGameAvailable(true)
+    }
+  }, []))
+
+  // Poll fallback — primary detection path since realtime won't work on Recap.
+  // Stops polling once a new game is detected (interval cleaned up on true flip).
+  useEffect(() => {
+    if (!tableId || newGameAvailable) return
+    let cancelled = false
+    const tick = async () => {
+      try {
+        const data = await fetchNewGame(tableId, sessionId)
+        if (!cancelled && (data.lobby_id || data.session_id)) {
+          setNewGameAvailable(true)
+        }
+      } catch {
+        // Transient failure -- keep polling
+      }
+    }
+    const id = setInterval(tick, 2500)
+    tick() // immediate first check
+    return () => { cancelled = true; clearInterval(id) }
+  }, [tableId, sessionId, newGameAvailable])
 
   const handleShare = async () => {
     if (!recap) return
@@ -77,6 +110,14 @@ export default function Recap({ sessionId, venueName }) {
         <StatRow label="Roulette Rounds" value={String(recap.roulette_rounds)} />
       </div>
 
+      {newGameAvailable && (
+        <button
+          onClick={() => { window.location.href = `${window.location.pathname}?newgame=1` }}
+          style={joinButton}
+        >
+          New game starting — Join
+        </button>
+      )}
       <button
         onClick={() => { window.location.href = `${window.location.pathname}?newgame=1` }}
         style={primaryButton}
@@ -152,6 +193,13 @@ const primaryButton = {
   width: '100%',
   maxWidth: '320px',
   cursor: 'pointer',
+}
+
+const joinButton = {
+  ...primaryButton,
+  background: 'var(--secondary)',
+  color: 'var(--bg-floor)',
+  animation: 'pulse-dot 1.4s infinite',
 }
 
 const secondaryButton = {

@@ -235,7 +235,7 @@ export default function PatronLanding() {
   // Re-tap on a recently-ended session (within retap_interval_minutes) or an
   // idle-expired session: show the Recap screen instead of lobby.
   if (status === 'recap') {
-    return <>{tag}<Recap sessionId={tableState.session_id} venueName={venue.venue_name} /></>
+    return <>{tag}<Recap sessionId={tableState.session_id} venueName={venue.venue_name} tableId={venue.table_id} phoneId={initialTap.phoneId} /></>
   }
 
   // gamespec: "Players place fingers on session-origin phone" — only the

@@ -190,7 +190,7 @@ export default function SessionParticipant({ venueName, sessionId, phoneId, tabl
     // Game over: the realtime game_ended flag is the fast path; the poll's
     // phase==='ended' is the reliable fallback if that broadcast was missed.
     if (gameEnded || state?.phase === 'ended') {
-      return <Recap sessionId={sessionId} venueName={venueName} />
+      return <Recap sessionId={sessionId} venueName={venueName} tableId={tableId} phoneId={phoneId} />
     }
     // Left this game (just tapped Leave, or re-tapped back in later — the server
     // remembers via left_early). Offer Rejoin with the live scoreboard; never the

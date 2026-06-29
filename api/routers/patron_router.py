@@ -904,6 +904,39 @@ async def get_recap(request: Request, session_id: str):
     return result
 
 
+@router.get("/table/{table_id}/new-game")
+@limiter.limit("60/minute")
+async def check_new_game(
+    request: Request,
+    table_id: str,
+    after_session: Optional[str] = Query(None, max_length=64),
+):
+    """Read-only: is a new game forming at this table?
+    Returns lobby_id and/or session_id (both nullable). No side effects.
+    BOLA: returns only IDs, no phone_ids or host info (redaction pattern)."""
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            # Validate table exists (prevents probing arbitrary UUIDs)
+            exists = await conn.fetchval(
+                "SELECT EXISTS (SELECT 1 FROM tables WHERE id = $1)", table_id
+            )
+            if not exists:
+                raise HTTPException(status_code=404, detail="Not found")
+            result = await lobby_service.check_new_game_at_table(
+                conn, table_id, after_session
+            )
+    except HTTPException:
+        raise
+    except Exception:
+        await notify_error(
+            "GET /patron/table/new-game failed",
+            traceback.format_exc()[:500],
+        )
+        raise HTTPException(status_code=500, detail="Internal error")
+    return result
+
+
 @router.get("/sessions/{session_id}/current-round")
 @limiter.limit("120/minute")
 async def current_round(request: Request, session_id: str):
