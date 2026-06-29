@@ -31,10 +31,18 @@ CLAUDE.md
 .DS_Store
 Thumbs.db
 
-# Local SSL certs (mkcert) — generated per-LAN-IP by scripts/dev_certs.ps1
+# Local SSL certs (mkcert) — per-LAN-IP, managed manually
 *.pem
 certs/
 uvicorn_dev*.log
+
+# Internal docs, reports, design + scratch — keep local, never in the repo.
+# Only files needed to run the product stay tracked (api/, frontend/, scripts/,
+# content/, config). content/ holds the card-deck JSON the game needs — kept.
+*.md
+redesign/
+scratchpad/
+scratch_*.py
 
 # session / feature-pipeline scratch
 .pipeline/
