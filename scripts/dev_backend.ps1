@@ -66,14 +66,9 @@ if (Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyCont
   throw "Port 8000 still bound after kill - investigate before starting."
 }
 
-# 3. Ensure a TLS cert exists for the CURRENT LAN IP (handles network moves with
-#    no edits here — see dev_certs.ps1). Capture the resolved IP it reports.
-$certOut = & (Join-Path $PSScriptRoot 'dev_certs.ps1')
-$certOut | Where-Object { $_ -notmatch '^DEV_IP=' } | ForEach-Object { Write-Host $_ }
-$devIp = ($certOut | Where-Object { $_ -match '^DEV_IP=' } | Select-Object -Last 1) -replace '^DEV_IP=', ''
-if (-not $devIp) { $devIp = '0.0.0.0' }
-
-# 4. Start fresh.
+# 3. Start fresh. (Certs for the current LAN IP are managed manually — make sure
+#    certs/dev.pem + certs/dev-key.pem cover the IP you're testing from.)
+$devIp = '0.0.0.0'
 $env:DEV_MODE = 'true'
 $env:PYTHONPATH = '.'
 $env:PYTHONIOENCODING = 'utf-8'
