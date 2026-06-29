@@ -60,7 +60,14 @@ if (Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyCont
   throw "Port 8000 still bound after kill - investigate before starting."
 }
 
-# 3. Start fresh.
+# 3. Ensure a TLS cert exists for the CURRENT LAN IP (handles network moves with
+#    no edits here — see dev_certs.ps1). Capture the resolved IP it reports.
+$certOut = & (Join-Path $PSScriptRoot 'dev_certs.ps1')
+$certOut | Where-Object { $_ -notmatch '^DEV_IP=' } | ForEach-Object { Write-Host $_ }
+$devIp = ($certOut | Where-Object { $_ -match '^DEV_IP=' } | Select-Object -Last 1) -replace '^DEV_IP=', ''
+if (-not $devIp) { $devIp = '0.0.0.0' }
+
+# 4. Start fresh.
 $env:DEV_MODE = 'true'
 $env:PYTHONPATH = '.'
 $env:PYTHONIOENCODING = 'utf-8'
@@ -68,12 +75,12 @@ $env:PYTHONIOENCODING = 'utf-8'
 $uvArgs = @(
   '-m', 'uvicorn', 'api.index:app',
   '--host', '0.0.0.0', '--port', '8000',
-  '--ssl-keyfile=192.168.1.108-key.pem',
-  '--ssl-certfile=192.168.1.108.pem'
+  '--ssl-keyfile=certs/dev-key.pem',
+  '--ssl-certfile=certs/dev.pem'
 )
 if (-not $NoReload) { $uvArgs += '--reload' }
 
-Write-Host "starting backend on https://192.168.1.108:8000 (reload=$(-not $NoReload))" -ForegroundColor Green
+Write-Host "starting backend on https://${devIp}:8000 (reload=$(-not $NoReload))" -ForegroundColor Green
 
 if ($Verify) {
   # Start in the background, then poll until the port is listening. Works on
@@ -86,7 +93,7 @@ if ($Verify) {
     Start-Sleep -Milliseconds 500
     if (Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue) { $ready = $true; break }
   }
-  if ($ready) { Write-Host "VERIFIED: backend is listening on https://192.168.1.108:8000" -ForegroundColor Green }
+  if ($ready) { Write-Host "VERIFIED: backend is listening on https://${devIp}:8000" -ForegroundColor Green }
   else { Write-Host "WARN: backend not listening within timeout - check for errors." -ForegroundColor Red }
   Write-Host "Backend running in background (pid $($job.Id)). Re-run this script for a guaranteed-clean restart."
 } else {

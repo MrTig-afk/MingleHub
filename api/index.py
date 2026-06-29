@@ -64,24 +64,18 @@ app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 if os.getenv("DEV_MODE") == "true":
-    origins = [
-        "http://localhost:5173",
-        "https://localhost:5173",
-        "https://localhost:5174",
-        "https://192.168.1.108:5173",
-        "https://192.168.1.108:5174",
-    ]
+    cors_kwargs = dict(allow_origin_regex=r"https?://[^/]+:(5173|5174)")
 else:
     allowed = os.environ.get("ALLOWED_ORIGINS", "")
     if not allowed:
         raise RuntimeError("ALLOWED_ORIGINS must be set in production")
-    origins = [allowed]
+    cors_kwargs = dict(allow_origins=[allowed])
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
     allow_methods=["GET", "POST", "PATCH"],
     allow_headers=["X-API-Key", "Content-Type", "Authorization"],
+    **cors_kwargs,
 )
 
 

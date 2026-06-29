@@ -31,8 +31,9 @@ CLAUDE.md
 .DS_Store
 Thumbs.db
 
-# Local SSL certs (mkcert)
+# Local SSL certs (mkcert) — generated per-LAN-IP by scripts/dev_certs.ps1
 *.pem
+certs/
 uvicorn_dev*.log
 
 # session / feature-pipeline scratch

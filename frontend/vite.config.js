@@ -1,7 +1,22 @@
+import { existsSync, readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import { VitePWA } from 'vite-plugin-pwa'
+
+// Dev TLS cert for the CURRENT LAN IP. scripts/dev_certs.ps1 (re)mints these
+// fixed-name files for whatever IP the laptop has now, so a network move needs
+// no edit here. Read them if present; otherwise dev still boots over HTTP.
+function devHttps() {
+  const root = fileURLToPath(new URL('../certs/', import.meta.url))
+  const cert = root + 'dev.pem'
+  const key = root + 'dev-key.pem'
+  if (existsSync(cert) && existsSync(key)) {
+    return { cert: readFileSync(cert), key: readFileSync(key) }
+  }
+  return undefined
+}
 
 // A stale service worker registered by an earlier build keeps serving the old
 // cached app on this origin (Chrome/standalone), so fresh dev code never loads
@@ -49,10 +64,10 @@ self.addEventListener('activate', (event) => {
 
 export default defineConfig(({ command }) => ({
   server: {
-    https: {
-      cert: '../192.168.1.108.pem',
-      key: '../192.168.1.108-key.pem',
-    },
+    // Bind all interfaces so a phone on the LAN can reach the dev app at the
+    // laptop's current IP without `-- --host`.
+    host: true,
+    https: devHttps(),
     // Never let the browser cache the dev app — every load is fresh code.
     headers: { 'Cache-Control': 'no-store' },
   },

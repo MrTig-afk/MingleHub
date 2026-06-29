@@ -1,9 +1,9 @@
 import { devLogin, geoAutocomplete } from './dashboardApi'
+import { API_BASE as BASE } from './apiBase'
 
 // Re-export devLogin and geoAutocomplete — shared utilities used by admin components.
 export { devLogin, geoAutocomplete }
 
-const BASE = import.meta.env.VITE_API_URL || ''
 const KEY = import.meta.env.VITE_API_KEY
 const h = (token) => ({
   'Content-Type': 'application/json',
