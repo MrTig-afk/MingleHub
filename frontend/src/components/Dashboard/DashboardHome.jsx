@@ -55,11 +55,11 @@ export default function DashboardHome({ token, navigate }) {
 
   const tonight = data?.tonight || {}
   const activeSessions = data?.active_sessions || []
-  const pairedTables = (data?.tables || []).filter((t) => t.tag_paired)
-  // Idle = a paired table with no live session right now. Active tables render
-  // first (highlighted), idle ones below (dimmed) — both open the same detail.
-  const idleTables = pairedTables.filter((t) => t.active_session_count === 0)
-  const hasTables = pairedTables.length > 0 || activeSessions.length > 0
+  const allTables = data?.tables || []
+  // Idle = a table with no live session right now. Active tables render first
+  // (highlighted), idle ones below (dimmed) — both open the same detail.
+  const idleTables = allTables.filter((t) => t.active_session_count === 0)
+  const hasTables = allTables.length > 0 || activeSessions.length > 0
 
   const tonightCards = [
     { value: tonight.active_tables,   label: 'active now' },
@@ -97,10 +97,7 @@ export default function DashboardHome({ token, navigate }) {
       {/* No tables configured at all */}
       {!hasTables && (
         <div style={{ ...cardStyle, marginTop: '16px', textAlign: 'center' }}>
-          <p style={{ color: 'var(--on-surface-dim)', margin: '0 0 12px' }}>No tables set up yet.</p>
-          <button onClick={() => navigate('/dashboard/pair-tags')} style={buttonStyle}>
-            Pair NFC Tags
-          </button>
+          <p style={{ color: 'var(--on-surface-dim)', margin: 0 }}>No tables set up yet.</p>
         </div>
       )}
 

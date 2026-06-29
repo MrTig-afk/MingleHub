@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { ClerkProvider, SignedIn, SignedOut, SignIn, useAuth, useClerk } from '@clerk/clerk-react'
 import { fetchMe, fetchVenue, redeemInvite } from '../../services/dashboardApi'
-import PairTags from '../PairTags/PairTags.jsx'
 import DashboardLogin from './DashboardLogin.jsx'
 import DashboardShell from './DashboardShell.jsx'
 import DashboardHome from './DashboardHome.jsx'
@@ -300,8 +299,6 @@ function DashboardInner({ token, onLogout, renderUnauth }) {
   let content
   if (path === '/dashboard') {
     content = <DashboardHome token={token} navigate={navigate} />
-  } else if (path === '/dashboard/pair-tags') {
-    content = <PairTags />
   } else if (path === '/dashboard/tables' || path === '/dashboard/tables/') {
     content = <DashboardTables token={token} navigate={navigate} />
   } else if (path.startsWith('/dashboard/tables/')) {

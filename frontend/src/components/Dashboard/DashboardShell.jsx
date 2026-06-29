@@ -5,7 +5,6 @@ const allLinks = [
   { path: '/dashboard', label: 'Home' },
   { path: '/dashboard/tables', label: 'Tables' },
   { path: '/dashboard/insights', label: 'Insights' },
-  { path: '/dashboard/pair-tags', label: 'Pair Tags', ownerOnly: true },
   { path: '/dashboard/settings', label: 'Settings', ownerOnly: true },
   { path: '/dashboard/billing', label: 'Billing', ownerOnly: true },
 ]

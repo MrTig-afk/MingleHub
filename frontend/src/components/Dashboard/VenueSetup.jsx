@@ -62,7 +62,7 @@ function Dropdown({ items, onPick }) {
 // name and address fields use a keyless (Photon/OSM, AU-biased) autocomplete: picking a
 // named place from the NAME field also auto-fills the address; the ADDRESS field is the
 // fallback for venues not in OSM. Then setup-venue creates the venue + tables.
-export default function VenueSetup({ token, onDone, navigate, prefill }) {
+export default function VenueSetup({ token, onDone, prefill }) {
   const [name, setName] = useState(prefill?.venue_name || '')
   const [venueType, setVenueType] = useState('bar')
   const [tableCount, setTableCount] = useState(4)
@@ -143,7 +143,7 @@ export default function VenueSetup({ token, onDone, navigate, prefill }) {
         longitude: coords.longitude,
         place_id: coords.place_id,
       })
-      setCreated(result) // -> success screen (pair-tags prompt)
+      setCreated(result) // -> success screen
     } catch (e) {
       setError(e.message || 'Could not set up venue.')
       setSubmitting(false)
@@ -151,7 +151,6 @@ export default function VenueSetup({ token, onDone, navigate, prefill }) {
   }
 
   if (created) {
-    const goPair = () => { if (navigate) navigate('/dashboard/pair-tags'); onDone() }
     return (
       <div style={fullScreen}>
         <div style={{ ...cardStyle, maxWidth: '440px', width: '100%', textAlign: 'center' }}>
@@ -160,19 +159,10 @@ export default function VenueSetup({ token, onDone, navigate, prefill }) {
             {name.trim()} is set up
           </h1>
           <p style={{ color: 'var(--on-surface-dim)', fontSize: '14px', margin: '0 0 22px' }}>
-            {created.table_count} table{created.table_count > 1 ? 's' : ''} created. Next, pair
-            your NFC tags so patrons can tap and play.
+            {created.table_count} table{created.table_count > 1 ? 's' : ''} created. We&rsquo;ll send
+            your NFC tags to place on each table so patrons can tap and play.
           </p>
-          <button onClick={goPair} style={{ ...buttonStyle, width: '100%' }}>
-            Pair NFC tags
-          </button>
-          <button
-            onClick={onDone}
-            style={{
-              ...buttonStyle, width: '100%', marginTop: '10px',
-              background: 'transparent', color: 'var(--on-surface-dim)',
-            }}
-          >
+          <button onClick={onDone} style={{ ...buttonStyle, width: '100%' }}>
             Go to dashboard
           </button>
         </div>

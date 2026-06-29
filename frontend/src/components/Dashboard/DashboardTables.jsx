@@ -10,8 +10,6 @@ const shimmerCard = (height = 64) => ({
   marginBottom: '12px',
 })
 
-const PAIRED_CHIP = { background: 'rgba(45,226,230,0.12)', color: 'var(--secondary)', border: '1px solid rgba(45,226,230,0.35)' }
-const UNPAIRED_CHIP = { background: 'rgba(255,200,87,0.12)', color: 'var(--gold)', border: '1px solid rgba(255,200,87,0.35)' }
 const LIVE_CHIP = { background: 'rgba(57,224,139,0.12)', color: 'var(--correct)', border: '1px solid rgba(57,224,139,0.35)' }
 const IDLE_CHIP = { color: 'var(--on-surface-dim)', border: '1px solid var(--line)' }
 
@@ -57,20 +55,16 @@ export default function DashboardTables({ token, navigate }) {
     )
   }
 
-  // Show tables that are configured (an NFC tag paired) OR currently in use (a
-  // live session). A seeded-but-never-configured, idle table stays hidden — so a
-  // venue that hasn't paired anything shows an empty state, not phantom tables.
-  const visibleTables = (tables || []).filter((t) => t.tag_paired || t.active_session_count > 0)
+  // Every table the venue has is shown — tags ship pre-written per table, so
+  // there is no "unconfigured" table to hide.
+  const visibleTables = tables || []
 
   if (visibleTables.length === 0) {
     return (
       <div style={{ ...cardStyle, marginTop: '8px', textAlign: 'center' }}>
-        <p style={{ color: 'var(--on-surface-dim)', margin: '0 0 12px' }}>
-          No tables configured yet. Pair an NFC tag to add one.
+        <p style={{ color: 'var(--on-surface-dim)', margin: 0 }}>
+          No tables yet.
         </p>
-        <button onClick={() => navigate('/dashboard/pair-tags')} style={buttonStyle}>
-          Pair NFC Tags
-        </button>
       </div>
     )
   }
@@ -95,10 +89,6 @@ export default function DashboardTables({ token, navigate }) {
                 </div>
               </div>
               <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
-                {table.tag_paired
-                  ? <span style={smallChip(PAIRED_CHIP)}>Paired</span>
-                  : <span style={smallChip(UNPAIRED_CHIP)}>Unpaired</span>
-                }
                 {table.active_session_count > 0
                   ? <span style={smallChip(LIVE_CHIP)}>{table.active_session_count} live</span>
                   : <span style={smallChip(IDLE_CHIP)}>Idle</span>
@@ -107,16 +97,6 @@ export default function DashboardTables({ token, navigate }) {
               </div>
             </div>
           </div>
-          {!table.tag_paired && (
-            <div style={{ marginBottom: '12px', paddingLeft: '4px' }}>
-              <span
-                style={{ fontSize: '12px', color: 'var(--primary)', cursor: 'pointer' }}
-                onClick={() => navigate('/dashboard/pair-tags')}
-              >
-                Pair this table
-              </span>
-            </div>
-          )}
         </div>
       ))}
     </div>

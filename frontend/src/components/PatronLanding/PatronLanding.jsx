@@ -14,11 +14,9 @@ const PHONE_ID_KEY = 'minglehub_phone_id'
 // joins, "you are the host" across reloads).
 //
 // Dev/testing override: a `?phone_id=` query param takes priority over the
-// stored value. A real tag's NDEF URL never carries this (the signed
-// payload only has tag_uid/counter/sig) — it exists purely so PairTags.jsx's
-// "Open Game" simulator can assign a distinct phone_id per simulated tap,
-// letting multiple browser tabs simulate multiple phones at one table
-// without sharing localStorage.
+// stored value. A real tag's NDEF URL never carries this — it exists purely so
+// a tester can open `…/<slug>/<table>?phone_id=<x>` in multiple browser tabs to
+// simulate several phones at one table without sharing localStorage.
 function resolvePhoneId() {
   const fromUrl = new URLSearchParams(window.location.search).get('phone_id')
   if (fromUrl) return fromUrl

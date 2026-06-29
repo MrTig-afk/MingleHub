@@ -2,7 +2,6 @@ import { useState } from 'react'
 import { fetchTableDetail } from '../../services/dashboardApi'
 import {
   buttonStyle,
-  buttonSecondaryStyle,
   cardStyle,
   chipStyle,
   formatDuration,
@@ -148,7 +147,7 @@ function SessionCard({ session }) {
   )
 }
 
-export default function DashboardTableDetail({ token, tableId, navigate, user }) {
+export default function DashboardTableDetail({ token, tableId, navigate }) {
   const { data, status, error, reload } = usePolling(
     () => fetchTableDetail(token, tableId),
     { intervalMs: 7000, tokenKey: 'mh_dashboard_token', cacheKey: `dash:table:${tableId}` }
@@ -288,17 +287,6 @@ export default function DashboardTableDetail({ token, tableId, navigate, user })
         })
       }
 
-      {/* Owner-only action buttons */}
-      {user && user.role === 'venue_owner' && (
-        <div style={{ display: 'flex', gap: '8px', marginTop: '24px' }}>
-          <button
-            onClick={() => navigate('/dashboard/pair-tags')}
-            style={buttonSecondaryStyle}
-          >
-            Re-pair Tag
-          </button>
-        </div>
-      )}
     </div>
   )
 }
