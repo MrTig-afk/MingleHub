@@ -60,13 +60,25 @@ export default function SessionParticipant({ venueName, sessionId, phoneId, tabl
         const data = await fetchTriviaCurrent(sessionId, phoneId)
         if (cancelled) return
         setState(data)
-        if (data.phase === 'question' && data.trivia_round_id !== roundRef.current) {
-          roundRef.current = data.trivia_round_id
+        // Reset this phone's per-round state the FIRST time a new trivia round is
+        // seen -- regardless of whether it first appears in 'gather' or 'question'.
+        // Every round opens in 'gather' before 'question'; the old code reset only
+        // on the 'question' phase but advanced roundRef on the 'gather' tick, so by
+        // the time 'question' arrived the id already matched and the reset never
+        // fired. On a 2nd trivia round that left done=true from the prior round, so
+        // the phone sat on "ALL DONE" instead of the new questions. Keying the reset
+        // on any new round id (gather included) is what fixes that.
+        const roundId = data.trivia_round_id || null
+        if (roundId && roundId !== roundRef.current) {
+          roundRef.current = roundId
           setMyIndex(firstUnanswered(data.my_answers || {}, (data.questions || []).length))
           setLocalAnswers({})
           setDone(false)
+        } else if (!roundId) {
+          // No active trivia round (between_rounds / roulette): forget the last
+          // round so the next trivia round is always detected as new.
+          roundRef.current = null
         }
-        if (data.phase !== 'question') roundRef.current = data.trivia_round_id || null
         // Poll fallback: detect promotion even if host_changed broadcast was missed.
         if (data.is_origin && !promoted) {
           setPendingPromotion(true)
