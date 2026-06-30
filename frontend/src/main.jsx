@@ -25,6 +25,15 @@ if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
   }
 }
 
+// Bare root is the owner entry point: rewrite '/' to '/dashboard' so the domain
+// itself opens the owner login -> venue wizard (no need to type /dashboard).
+// replaceState keeps this a single SPA render -- DashboardRoot reads '/dashboard'
+// at mount -- with no reload and no flash of the splash. Any other unrecognized
+// path still falls through to the <Splash> fallback below.
+if (window.location.pathname === '/') {
+  window.history.replaceState(null, '', '/dashboard')
+}
+
 // The public game route per gamespec.md: minglehub.com/{venue-slug}/{table-number}.
 const path = window.location.pathname
 const isPatronRoute = /^\/[a-z0-9-]+\/[0-9]+$/.test(path)
