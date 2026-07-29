@@ -167,3 +167,9 @@ Every change lands through CI (lint plus the full test suite plus a production b
 ## Status
 
 The platform is feature-complete and CI-green: onboarding, the three games, venue and admin dashboards, invite-controlled rollout, theme engine, and the full billing lifecycle (cancel / suspend / dunning / reactivation), all hand-tested end-to-end on real devices.
+
+---
+
+## License
+
+[MIT](LICENSE)
