@@ -40,6 +40,7 @@ uvicorn_dev*.log
 # Only files needed to run the product stay tracked (api/, frontend/, scripts/,
 # content/, config). content/ holds the card-deck JSON the game needs — kept.
 *.md
+!README.md
 redesign/
 scratchpad/
 scratch_*.py
