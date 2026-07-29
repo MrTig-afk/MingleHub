@@ -111,9 +111,24 @@ The seed data creates two demo venues, `fifty-five-bar` and `the-last-chance`, e
 
 > Real-time sync uses Supabase Realtime broadcast when configured, and **gracefully falls back to 2-second polling when it isn't**, so local play works with just the database. Even with realtime on, polling remains the source of truth; broadcasts just make it snappy.
 
-The owner dashboard lives at `/dashboard` and the admin panel at `/admin`. Both sign in via [Clerk](https://clerk.com) (free tier). Add your Clerk publishable key to `frontend/.env.local` and the matching secrets to `api/.env` to use them; patron gameplay needs no auth at all.
+### 4. Be the venue owner too
 
-### 4. Optional: real NFC tags
+Playing patron is only half the product. On your own instance you can run the whole business side:
+
+1. The owner dashboard lives at `/dashboard` and the admin panel at `/admin`. Both sign in via [Clerk](https://clerk.com) (free tier): add your Clerk publishable key to `frontend/.env.local` and the matching secrets to `api/.env`. Patron gameplay needs no auth at all.
+2. Add your email to `ADMIN_EMAILS` (comma-separated) in `api/.env`. On first login that email is auto-provisioned as an **admin**; everyone else becomes a venue owner.
+3. Onboarding is invite-gated: from `/admin`, generate a **venue invite** (link + QR), open it, sign in, and the setup wizard creates your venue and tables. An owner without an invite gets a locked "Contact us" screen, which is the controlled-rollout gate working as intended.
+
+As the owner you get the full dashboard: live tables tonight, per-table drill-down, insights (sessions, rounds, round mix, trends), auto-saving settings, and, the fun part, **Billing**. MingleHub meters real usage:
+
+- Active play time is measured **start to last activity**, so idle time is never billed. A lobby where nobody played a round bills $0.
+- Play is metered in **15-minute blocks**, priced per block, **capped per table per night** (separate weekday/weekend caps).
+- Blocks roll up into a **monthly invoice** automatically, and a play-time analytics view shows **actual vs billed** minutes side by side.
+- Invoicing is idempotent end to end: finalizing twice is a no-op, a paid invoice can never regress, and nothing double-sends.
+
+Play a few rounds as a patron at your venue's table URL, then watch your own bill accrue in the Billing tab. Stripe runs in test mode, so a real charge is impossible.
+
+### 5. Optional: real NFC tags
 
 When you want the true tap experience, no code changes are needed:
 
