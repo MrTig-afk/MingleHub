@@ -12,7 +12,7 @@ You don't need to install anything. The live deployment has demo venues seeded, 
 
 **<https://mingle-hub.vercel.app/fifty-five-bar/1>**
 
-Get a friend (or a second phone) to open the same link, enter names, and start a game from the host phone. Every phone on that link is "at the same table" and stays in sync live. More demo tables if you want separate groups:
+Get a friend (or a second phone) to open the same link, enter names, and start a game from the host phone. Every phone on that link is "at the same table" and stays in sync live. You'll rotate through three games: **Chooser** (hot-seat card questions), **Trivia** (everyone answers live, with scores), and **Roulette** (group-vote dares and prompts). More demo tables if you want separate groups:
 
 - `https://mingle-hub.vercel.app/fifty-five-bar/2`
 - `https://mingle-hub.vercel.app/the-last-chance/1`
@@ -42,9 +42,11 @@ Tapping the tag opens that page in the phone's browser. The page joins the phone
 
 | Game | What happens |
 |---|---|
-| **Chooser** | A finger-picker hot-seat game: the chosen player answers a card |
-| **Trivia** | Everyone answers live on their own phone, with scoring and a recap |
-| **Roulette** | The group votes on a dare/prompt outcome |
+| **Chooser** | A finger-picker puts one player in the hot seat, and they answer the card the group draws |
+| **Trivia** | Everyone answers the same questions live on their own phone, with per-player scoring and a recap at the end |
+| **Roulette** | The wheel lands on a prompt and the group votes on the outcome |
+
+Chooser and Roulette draw from **11 card packs** (300+ cards): Icebreakers, Party, Truth, Dares, Deep, Compliments, Would You Rather, Hot Takes, Debate, Freshers, and Dirty (18+ venues only; venues can restrict adult content).
 
 Rounds are drawn by the venue's **theme** (Party Night, Date Night, and so on), which weights which game types and card packs appear. Host hand-off, players leaving and rejoining, and idle timeout are all handled server-side.
 
