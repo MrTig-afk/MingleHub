@@ -1,7 +1,11 @@
 name: CI
 
 on:
+  # Only main on push. Without the branch filter a PR branch matches BOTH
+  # push and pull_request, so every PR ran the whole suite twice and sent
+  # two failure emails per push.
   push:
+    branches: [main]
   pull_request:
 
 jobs:
