@@ -57,6 +57,33 @@ def _tonight_boundary():
     return asyncio.run(_q())
 
 
+def _month_start_boundary():
+    """The 4am-local start of the current billing month, as UTC.
+
+    month_estimate covers a whole calendar month (billing_service._period_window),
+    so nights anchored here are always inside the window. Counting backwards from
+    tonight is not: on the 1st or 2nd of a month the previous play-night falls
+    into the previous month and silently drops out of the estimate.
+    """
+    async def _q():
+        conn = await asyncpg.connect(os.environ["DATABASE_URL"])
+        try:
+            return await conn.fetchval(
+                """
+                SELECT (
+                    (date_trunc('month', (NOW() AT TIME ZONE $1) - INTERVAL '4 hours')
+                        + INTERVAL '4 hours')
+                    AT TIME ZONE $1
+                ) AT TIME ZONE 'UTC'
+                """,
+                "Australia/Melbourne",
+            )
+        finally:
+            await conn.close()
+
+    return asyncio.run(_q())
+
+
 def _insert_session(table_id, venue_id, started_at=None, ended_at=None,
                     billable_blocks=None, total_rounds=0,
                     active_span_seconds=None, active_play_seconds=0):
@@ -529,12 +556,20 @@ def test_billing_bola(client, api_key_header, fresh_table):
 def test_billing_month_estimate_has_nights(client, api_key_header, fresh_table):
     """Finalized sessions on 2 distinct play-nights produce >= 2 night entries."""
     table_id = fresh_table["table_id"]
-    boundary = _tonight_boundary()
+    # Anchor both nights to the start of the current billing month: 16:00 local
+    # on its 1st and 2nd, which are two distinct play-nights inside the window
+    # whatever today's date is. The 12/36 hour offsets sit far enough from the
+    # 4am boundary that a DST shift cannot move either play-date.
+    month_start = _month_start_boundary()
 
-    s1 = _insert_session(table_id, VENUE_A_ID, started_at=_utcnow(),
-                         ended_at=_utcnow(), billable_blocks=2, total_rounds=3)
-    s2 = _insert_session(table_id, VENUE_A_ID, started_at=boundary - timedelta(hours=25),
-                         ended_at=boundary - timedelta(hours=24), billable_blocks=2, total_rounds=3)
+    s1 = _insert_session(table_id, VENUE_A_ID,
+                         started_at=month_start + timedelta(hours=12),
+                         ended_at=month_start + timedelta(hours=13),
+                         billable_blocks=2, total_rounds=3)
+    s2 = _insert_session(table_id, VENUE_A_ID,
+                         started_at=month_start + timedelta(hours=36),
+                         ended_at=month_start + timedelta(hours=37),
+                         billable_blocks=2, total_rounds=3)
     try:
         token = dev_login(client, api_key_header, OWNER_A_CLERK_ID)
         resp = client.get("/api/dashboard/billing",
