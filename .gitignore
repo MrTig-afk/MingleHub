@@ -44,6 +44,7 @@ PROJECT_RUNDOWN.md
 # content/, config). content/ holds the card-deck JSON the game needs — kept.
 *.md
 !README.md
+!SECURITY.md
 redesign/
 scratchpad/
 scratch_*.py

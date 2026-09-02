@@ -1,4 +1,2 @@
 User-agent: *
-Disallow: /admin
-Disallow: /api/admin
-Disallow: /api/dashboard
+Allow: /

@@ -190,6 +190,15 @@ async def migrate():
         """)
         print("OK rounds table ready")
 
+        # Postgres does not auto-index foreign keys. `rounds` grows without
+        # bound and the billing finalize CTE filters on session_id, so without
+        # this every finalize seq-scans every round ever played.
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_rounds_session
+            ON rounds (session_id)
+        """)
+        print("OK idx_rounds_session index ready")
+
         # ALTER rather than inside game_sessions' CREATE above, for two
         # reasons: (1) CREATE TABLE IF NOT EXISTS no-ops against the
         # already-existing dev/prod table, so a column added there would
@@ -519,6 +528,14 @@ async def migrate():
             ON game_sessions (venue_id, started_at)
         """)
         print("OK idx_sessions_venue_started index ready")
+
+        # The tap/resume path looks up the active session by table_id, which the
+        # composite index above cannot serve (venue_id is not in the predicate).
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_sessions_table
+            ON game_sessions (table_id)
+        """)
+        print("OK idx_sessions_table index ready")
 
         # Invoices: one per venue per billing period (month). Line items roll up
         # per table per play-date (4am-boundary night), capped per table per night.
