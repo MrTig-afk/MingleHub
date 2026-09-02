@@ -150,13 +150,10 @@ export default function TriviaOriginRound({ sessionId, phoneId, onDone }) {
     try {
       await finishTrivia(roundIdRef.current, phoneId)
     } catch (e) {
-      if (e.message !== 'round_not_in_progress') {
-        setError(e.message)
-        setBusy(false)
-        return
-      }
+      if (e.message !== 'round_not_in_progress') return setError(e.message)
+    } finally {
+      setBusy(false)
     }
-    setBusy(false)
     onDone()
   }
 
