@@ -10,10 +10,13 @@ Please report privately first. Do not open a public issue containing an
 exploit, a working payload, or steps that would let someone else reproduce an
 attack against a live venue.
 
-1. Preferred: open a private report from this repository's **Security** tab
-   ("Report a vulnerability"). If that option is not visible, use step 2.
-2. Otherwise: open a normal issue titled "Security contact request" with **no
-   technical detail at all**, and a maintainer will arrange a private channel.
+Use this repository's **Security** tab and choose "Report a vulnerability".
+That opens a private advisory only the maintainers can read, and it is the
+only channel that should carry technical detail.
+
+If you cannot reach that form, open a normal issue titled "Security contact
+request" with **no technical detail at all**, and a maintainer will arrange a
+private channel.
 
 Please include, once you are on a private channel:
 
