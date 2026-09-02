@@ -139,11 +139,24 @@ export default function TriviaOriginRound({ sessionId, phoneId, onDone }) {
     }
   }
 
-  // Leaving the Trivia screen advances the game loop. finishTrivia is a fallback
-  // that force-ends the round if some player never finished; if it already
-  // auto-completed, the 409 is harmless.
+  // Leaving the Trivia screen advances the game loop. finishTrivia force-ends the
+  // round if some player never finished. 'round_not_in_progress' means it already
+  // auto-completed, which is benign. Anything else (403 after a host migration,
+  // 404, 5xx) means the round is still in_progress server-side, so advancing here
+  // would strand every participant on the Trivia screen. Surface it and stay put.
   const handleBackToGame = async () => {
-    try { await finishTrivia(roundIdRef.current, phoneId) } catch { /* already complete */ }
+    setBusy(true)
+    setError(null)
+    try {
+      await finishTrivia(roundIdRef.current, phoneId)
+    } catch (e) {
+      if (e.message !== 'round_not_in_progress') {
+        setError(e.message)
+        setBusy(false)
+        return
+      }
+    }
+    setBusy(false)
     onDone()
   }
 
@@ -198,7 +211,10 @@ export default function TriviaOriginRound({ sessionId, phoneId, onDone }) {
       <Screen>
         <div style={{ fontFamily: 'var(--font-display)', fontSize: '13px', letterSpacing: '0.22em', color: 'var(--gold)', textShadow: '0 0 12px rgba(255,200,87,0.4)' }}>RESULTS</div>
         <Leaderboard rows={leaderboard} title="Trivia results" meName={meName} />
-        <button onClick={handleBackToGame} style={primaryButton}>Back to the game</button>
+        <button onClick={handleBackToGame} disabled={busy} style={primaryButton}>
+          {busy ? 'Finishing…' : 'Back to the game'}
+        </button>
+        {error && <p style={errStyle}>{error}</p>}
       </Screen>
     )
   }
