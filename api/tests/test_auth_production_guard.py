@@ -1,11 +1,16 @@
 """Production must never fall back to the dev HMAC token.
 
 api/auth.py has two auth paths: real Clerk JWTs (CLERK_JWKS_URL) and dev-login
-HMAC tokens. Before this guard, an unconfigured production silently used the
-second one, making SESSION_SECRET the only thing protecting a venue dashboard.
+HMAC tokens. Previously, an unconfigured production silently used the second
+one, making SESSION_SECRET the only thing protecting a venue dashboard.
 
-The import checks run in a subprocess so a failed import cannot poison the rest
-of the suite's already-imported api.auth.
+The fix is a refusal inside _verify_token, not a refusal to start: this module
+is imported by every router, so a hard failure here would also take down the
+patron game routes, which never use Clerk at all. A missing JWKS URL therefore
+warns loudly and breaks owner and admin login only.
+
+The import checks run in a subprocess so import-time behaviour is observed
+cleanly, without touching the suite's already-imported api.auth.
 """
 import os
 import subprocess
@@ -33,10 +38,16 @@ def _import_auth_with(env_overrides):
     return proc.returncode, proc.stderr
 
 
-def test_production_without_clerk_jwks_refuses_to_boot():
+def test_production_without_clerk_jwks_warns_but_still_boots():
+    """A missing JWKS URL must be loud, but must not take the app down.
+
+    api.auth is imported by every router, so raising here would kill the patron
+    game routes, which never touch Clerk. The security guarantee is enforced in
+    _verify_token instead (see the HMAC test below), not by refusing to start.
+    """
     code, stderr = _import_auth_with({"DEV_MODE": "false", "CLERK_JWKS_URL": None})
-    assert code != 0, "api.auth imported cleanly in production with no CLERK_JWKS_URL"
-    assert "CLERK_JWKS_URL must be set in production" in stderr
+    assert code == 0, f"api.auth refused to import, taking patron routes with it:\n{stderr}"
+    assert "CLERK_JWKS_URL is not set" in stderr
 
 
 def test_production_with_clerk_jwks_boots():

@@ -1,9 +1,11 @@
 """Platform authentication: venue/role identity for /dashboard and /admin routes.
 
-Two modes. Production verifies real Clerk RS256 JWTs against CLERK_JWKS_URL,
-which is mandatory outside DEV_MODE and enforced at import time below. DEV_MODE
-additionally accepts HMAC-signed tokens issued by POST /api/auth/dev-login, for
-local work, CI and the sim tools. The HMAC path is unreachable in production.
+Two modes. Production verifies real Clerk RS256 JWTs against CLERK_JWKS_URL.
+DEV_MODE additionally accepts HMAC-signed tokens issued by POST
+/api/auth/dev-login, for local work, CI and the sim tools. _verify_token refuses
+the HMAC path outright outside DEV_MODE, so it is unreachable in production even
+when CLERK_JWKS_URL is missing; that case warns at import and fails every
+dashboard and admin token, while leaving the patron game routes untouched.
 
 The contract below (get_current_user / require_role) is the permanent
 pattern every dashboard/admin route should depend on. Swapping in real
@@ -14,6 +16,7 @@ import base64
 import hashlib
 import hmac
 import os
+import sys
 import time
 from typing import Optional
 
@@ -30,18 +33,20 @@ TOKEN_TTL_SECONDS = 60 * 60 * 12  # 12 hours — dev convenience only
 
 # Clerk mode: set CLERK_JWKS_URL (+ CLERK_ISSUER) to verify real Clerk RS256 JWTs.
 # Unset -> falls back to the dev-login HMAC token, which is correct for dev/CI and
-# unacceptable in production, so production refuses to boot without it (below).
+# unacceptable in production, where _verify_token refuses it outright.
 CLERK_JWKS_URL = os.getenv("CLERK_JWKS_URL")
 CLERK_ISSUER = os.getenv("CLERK_ISSUER")
 CLERK_SECRET_KEY = os.getenv("CLERK_SECRET_KEY")
 
-# Outside DEV_MODE, Clerk is the only acceptable auth path. Without JWKS,
-# _verify_token skips Clerk entirely and falls through to the HMAC token below,
-# which would make SESSION_SECRET the only thing standing between a stranger and
-# a venue owner's dashboard. Fail at boot rather than silently downgrade: same
-# contract as ALLOWED_ORIGINS in api/index.py.
+# Outside DEV_MODE, Clerk is the only acceptable auth path. Warn loudly here and
+# refuse the HMAC path in _verify_token, rather than raising: this module is
+# imported by the whole app, so raising would take the patron game routes down
+# too, and they never touch Clerk. A missing JWKS URL must break owner and admin
+# login only, never a table full of people mid-session.
 if os.getenv("DEV_MODE") != "true" and not CLERK_JWKS_URL:
-    raise RuntimeError("CLERK_JWKS_URL must be set in production")
+    print("WARNING: CLERK_JWKS_URL is not set outside DEV_MODE -- dashboard and "
+          "admin auth will reject every token until it is configured",
+          file=sys.stderr)
 # Auto-provisioning allowlist: a first-login user whose email is here becomes an
 # 'admin'; everyone else becomes a 'venue_owner' (no venue yet -> setup wizard).
 ADMIN_EMAILS = {e.strip().lower() for e in os.getenv("ADMIN_EMAILS", "").split(",") if e.strip()}
