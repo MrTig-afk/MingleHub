@@ -70,7 +70,7 @@ async def sync_invoice(conn, invoice_id) -> dict:
             stripe.InvoiceItem.create(
                 customer=customer_id, currency="aud",
                 amount=int(round(float(it["amount"]) * 100)),
-                description=f"{it['units_billed']} block(s) — {it['play_date']}")
+                description=f"{it['units_billed']} block(s), {it['play_date']}")
         sinv = stripe.Invoice.create(customer=customer_id, auto_advance=True)
         stripe_invoice_id = sinv["id"]
     else:
