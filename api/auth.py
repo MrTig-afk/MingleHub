@@ -1,8 +1,11 @@
-"""Platform authentication — venue/role identity for /dashboard and /admin routes.
+"""Platform authentication: venue/role identity for /dashboard and /admin routes.
 
-DEV-ONLY STUB: gamespec.md specifies Clerk for real auth (2FA, sessions,
-roles). Until a Clerk dev instance is wired in, sessions are simple
-HMAC-signed tokens issued by POST /api/auth/dev-login (DEV_MODE only).
+Two modes. Production verifies real Clerk RS256 JWTs against CLERK_JWKS_URL.
+DEV_MODE additionally accepts HMAC-signed tokens issued by POST
+/api/auth/dev-login, for local work, CI and the sim tools. _verify_token refuses
+the HMAC path outright outside DEV_MODE, so it is unreachable in production even
+when CLERK_JWKS_URL is missing; that case warns at import and fails every
+dashboard and admin token, while leaving the patron game routes untouched.
 
 The contract below (get_current_user / require_role) is the permanent
 pattern every dashboard/admin route should depend on. Swapping in real
@@ -13,6 +16,7 @@ import base64
 import hashlib
 import hmac
 import os
+import sys
 import time
 from typing import Optional
 
@@ -28,11 +32,21 @@ SESSION_SECRET = os.environ["SESSION_SECRET"]
 TOKEN_TTL_SECONDS = 60 * 60 * 12  # 12 hours — dev convenience only
 
 # Clerk mode: set CLERK_JWKS_URL (+ CLERK_ISSUER) to verify real Clerk RS256 JWTs.
-# Unset -> falls back to the dev-login HMAC token, so dev/CI are unaffected and prod
-# "just works" once these env vars exist (the swap this module was designed for).
+# Unset -> falls back to the dev-login HMAC token, which is correct for dev/CI and
+# unacceptable in production, where _verify_token refuses it outright.
 CLERK_JWKS_URL = os.getenv("CLERK_JWKS_URL")
 CLERK_ISSUER = os.getenv("CLERK_ISSUER")
 CLERK_SECRET_KEY = os.getenv("CLERK_SECRET_KEY")
+
+# Outside DEV_MODE, Clerk is the only acceptable auth path. Warn loudly here and
+# refuse the HMAC path in _verify_token, rather than raising: this module is
+# imported by the whole app, so raising would take the patron game routes down
+# too, and they never touch Clerk. A missing JWKS URL must break owner and admin
+# login only, never a table full of people mid-session.
+if os.getenv("DEV_MODE") != "true" and not CLERK_JWKS_URL:
+    print("WARNING: CLERK_JWKS_URL is not set outside DEV_MODE -- dashboard and "
+          "admin auth will reject every token until it is configured",
+          file=sys.stderr)
 # Auto-provisioning allowlist: a first-login user whose email is here becomes an
 # 'admin'; everyone else becomes a 'venue_owner' (no venue yet -> setup wizard).
 ADMIN_EMAILS = {e.strip().lower() for e in os.getenv("ADMIN_EMAILS", "").split(",") if e.strip()}
@@ -82,6 +96,13 @@ def _verify_token(token: str) -> str:
             # tools + the dashboard dev-login). In production, Clerk is the only path.
             if os.getenv("DEV_MODE") != "true":
                 raise HTTPException(status_code=401, detail="Invalid token")
+
+    # Defence in depth. The boot guard makes an unconfigured production
+    # unreachable, but the HMAC path below must never run outside DEV_MODE even
+    # if that guard is later loosened.
+    if os.getenv("DEV_MODE") != "true":
+        raise HTTPException(status_code=401, detail="Invalid token")
+
     try:
         payload, expires_at, signature = base64.urlsafe_b64decode(token.encode()).decode().rsplit(":", 2)
     except (ValueError, UnicodeDecodeError):
