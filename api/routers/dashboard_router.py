@@ -19,7 +19,9 @@ from api.security import limiter, verify_api_key
 from api.services.notify import notify_error
 from api.services.nfc_crypto import encrypt_tag_key
 from api.services.session_service import compute_retap_state
-from api.services.billing_service import cap_blocks, BLOCK_SECONDS
+from api.services.billing_service import (
+    cap_blocks, BLOCK_SECONDS, NIGHT_BLOCKS_SQL, _period_window, night_terms,
+)
 from api.services.analytics_service import range_totals
 from api.services.theme_service import resolve_active_theme
 from api.services import stripe_service
@@ -779,17 +781,10 @@ async def get_billing(
             )
             tz = venue_row["timezone"]
 
-            # Month start: first 4am of the current local calendar month, in UTC.
-            month_start = await conn.fetchval(
-                """
-                SELECT (
-                    (date_trunc('month', (NOW() AT TIME ZONE $1) - INTERVAL '4 hours')
-                        + INTERVAL '4 hours')
-                    AT TIME ZONE $1
-                ) AT TIME ZONE 'UTC'
-                """,
-                tz,
-            )
+            # Month window via the shared helper (returns month_start + next_month_start).
+            win = await _period_window(conn, None, tz)
+            month_start = win["month_start"]
+            next_month_start = win["next_month_start"]
 
             # Tonight's play-date (4am-boundary local date) to pick out of the nights.
             tonight_date = await conn.fetchval(
@@ -797,24 +792,13 @@ async def get_billing(
                 tz,
             )
 
-            # Per (table, night) sum of billable blocks from FINALIZED sessions.
-            # In-progress sessions aren't billed until they end (blocks NULL).
+            # Per (table, night) blocks with snapshot fallback — mirrors recompute_invoices.
             block_rows = await conn.fetch(
-                """
-                SELECT
-                    gs.table_id,
-                    date_trunc('day', (gs.started_at AT TIME ZONE 'UTC' AT TIME ZONE $3)
-                        - INTERVAL '4 hours')::date AS play_date,
-                    EXTRACT(DOW FROM date_trunc('day', (gs.started_at AT TIME ZONE 'UTC'
-                        AT TIME ZONE $3) - INTERVAL '4 hours'))::int AS dow,
-                    COALESCE(SUM(gs.billable_blocks), 0)::int AS raw_blocks
-                FROM game_sessions gs
-                WHERE gs.venue_id = $1
-                  AND gs.started_at >= $2
-                  AND gs.ended_at IS NOT NULL
-                GROUP BY gs.table_id, play_date, dow
-                """,
-                current_user.venue_id, month_start, tz,
+                NIGHT_BLOCKS_SQL,
+                month_start, next_month_start, current_user.venue_id, tz,
+                venue_row["billing_unit"],
+                venue_row["nightly_cap_weekday"],
+                venue_row["nightly_cap_weekend"],
             )
 
             # Play-time analytics: billed span vs true (idle-excluded) play.
@@ -840,15 +824,17 @@ async def get_billing(
                 current_user.venue_id,
             )
 
+        # Current venue plan values — used only for the "model" display section below,
+        # NOT for computing per-night charges (those use per-row snapshot values).
         unit = venue_row["billing_unit"]
-        cap_wd = cap_blocks(venue_row["nightly_cap_weekday"], unit)   # blocks/night
+        cap_wd = cap_blocks(venue_row["nightly_cap_weekday"], unit)
         cap_we = cap_blocks(venue_row["nightly_cap_weekend"], unit)
         block_min = BLOCK_SECONDS // 60
 
-        # Aggregate per night (sum tables), applying the per-table-per-night cap.
+        # Aggregate per night (sum tables), using per-row snapshot effective values.
         nights: dict = {}
         for r in block_rows:
-            cap = cap_we if r["dow"] in (0, 6) else cap_wd
+            eff_unit, cap = night_terms(r)
             raw = r["raw_blocks"]
             billed = min(raw, cap)
             n = nights.setdefault(r["play_date"], {
@@ -858,7 +844,7 @@ async def get_billing(
             n["tables"] += 1
             n["blocks_raw"] += raw
             n["blocks_billed"] += billed
-            n["_amount"] += unit * billed
+            n["_amount"] += eff_unit * billed
             if raw > cap:
                 n["cap_applied"] = True
 

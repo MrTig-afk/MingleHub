@@ -22,6 +22,49 @@ import uuid
 BLOCK_SECONDS = 15 * 60        # one billable block = 15 minutes of active play
 IDLE_CUTOFF_SECONDS = 2 * 60   # gaps longer than this are "stepped away", not play
 
+# Shared SQL: per (table, play_date) aggregation with snapshot fallback.
+# Parameters: $1=month_start_utc, $2=next_month_start_utc, $3=venue_id,
+#             $4=tz, $5=fallback_unit, $6=fallback_cap_wd, $7=fallback_cap_we
+#
+# (array_agg(col ORDER BY started_at))[1] takes the night's FIRST session's
+# snapshot. A pre-migration first session has NULL snapshots, so the COALESCE
+# falls back to the venue's current values passed as $5/$6/$7 (today's rule).
+NIGHT_BLOCKS_SQL = """
+    SELECT
+        gs.table_id,
+        date_trunc('day', (gs.started_at AT TIME ZONE 'UTC' AT TIME ZONE $4)
+            - INTERVAL '4 hours')::date AS play_date,
+        EXTRACT(DOW FROM date_trunc('day', (gs.started_at AT TIME ZONE 'UTC'
+            AT TIME ZONE $4) - INTERVAL '4 hours'))::int AS dow,
+        COALESCE(SUM(gs.billable_blocks), 0)::int AS raw_blocks,
+        COALESCE(
+            (array_agg(gs.snap_billing_unit ORDER BY gs.started_at))[1],
+            $5
+        ) AS eff_unit,
+        COALESCE(
+            (array_agg(gs.snap_nightly_cap_weekday ORDER BY gs.started_at))[1],
+            $6
+        ) AS eff_cap_wd,
+        COALESCE(
+            (array_agg(gs.snap_nightly_cap_weekend ORDER BY gs.started_at))[1],
+            $7
+        ) AS eff_cap_we
+    FROM game_sessions gs
+    WHERE gs.venue_id = $3
+      AND gs.started_at >= $1 AND gs.started_at < $2
+      AND gs.ended_at IS NOT NULL
+    GROUP BY gs.table_id, play_date, dow
+    HAVING COALESCE(SUM(gs.billable_blocks), 0) > 0
+"""
+
+
+def night_terms(row) -> tuple:
+    """(unit, cap_blocks) for one NIGHT_BLOCKS_SQL row. Shared by the invoice and
+    the owner's billing estimate so the two can never disagree."""
+    unit = row["eff_unit"]
+    cap = row["eff_cap_we"] if row["dow"] in (0, 6) else row["eff_cap_wd"]  # 0=Sun, 6=Sat
+    return unit, cap_blocks(cap, unit)
+
 
 def cap_blocks(nightly_cap, billing_unit) -> int:
     """Max billable blocks per table per night = cap dollars / unit price.
@@ -176,32 +219,17 @@ async def recompute_invoices(conn, ref_ts=None) -> dict:
         if summary["period_start"] is None:
             summary["period_start"] = str(period_start)
 
-        # Per (table, play-date) sum of blocks for this venue only.
+        # Per (table, play-date) sum of blocks for this venue, with snapshot fallback.
         venue_rows = await conn.fetch(
-            """
-            SELECT
-                gs.table_id,
-                date_trunc('day', (gs.started_at AT TIME ZONE 'UTC' AT TIME ZONE $4)
-                    - INTERVAL '4 hours')::date AS play_date,
-                EXTRACT(DOW FROM date_trunc('day', (gs.started_at AT TIME ZONE 'UTC'
-                    AT TIME ZONE $4) - INTERVAL '4 hours'))::int AS dow,
-                COALESCE(SUM(gs.billable_blocks), 0)::int AS raw_blocks
-            FROM game_sessions gs
-            WHERE gs.venue_id = $3
-              AND gs.started_at >= $1 AND gs.started_at < $2
-              AND gs.ended_at IS NOT NULL
-            GROUP BY gs.table_id, play_date, dow
-            HAVING COALESCE(SUM(gs.billable_blocks), 0) > 0
-            """,
+            NIGHT_BLOCKS_SQL,
             month_start, next_month_start, venue_id, tz,
+            venue_entry["billing_unit"],
+            venue_entry["nightly_cap_weekday"],
+            venue_entry["nightly_cap_weekend"],
         )
 
         if not venue_rows:
             continue
-
-        unit = venue_entry["billing_unit"]
-        cap_wd = cap_blocks(venue_entry["nightly_cap_weekday"], unit)
-        cap_we = cap_blocks(venue_entry["nightly_cap_weekend"], unit)
 
         # Never recompute a paid or final invoice. is_final marks the snapshot
         # issued at cancellation; recomputing it would overwrite the at-cancel total.
@@ -231,10 +259,10 @@ async def recompute_invoices(conn, ref_ts=None) -> dict:
 
             total = 0
             for r in venue_rows:
-                cap = cap_we if r["dow"] in (0, 6) else cap_wd   # 0=Sun, 6=Sat
+                eff_unit, cap = night_terms(r)
                 raw = r["raw_blocks"]
                 units = min(raw, cap)
-                amount = unit * units
+                amount = eff_unit * units
                 total += amount
                 await conn.execute(
                     """INSERT INTO invoice_line_items

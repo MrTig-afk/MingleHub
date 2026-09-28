@@ -40,7 +40,9 @@ def _run(coro_fn):
 def _insert_session(*, table_id, venue_id, started_at, last_activity_at,
                     ended_at=None, total_rounds=0, billable_blocks=None,
                     active_span_seconds=None, active_play_seconds=0,
-                    billing_finalized_at=None):
+                    billing_finalized_at=None,
+                    snap_billing_unit=None, snap_nightly_cap_weekday=None,
+                    snap_nightly_cap_weekend=None):
     session_id = str(uuid.uuid4())
 
     async def _q(conn):
@@ -49,12 +51,14 @@ def _insert_session(*, table_id, venue_id, started_at, last_activity_at,
             INSERT INTO game_sessions
                 (id, venue_id, table_id, player_count, started_at, ended_at,
                  last_activity_at, total_rounds, billable_blocks,
-                 active_span_seconds, active_play_seconds, billing_finalized_at, created_at)
-            VALUES ($1, $2, $3, 4, $4, $5, $6, $7, $8, $9, $10, $11, NOW())
+                 active_span_seconds, active_play_seconds, billing_finalized_at, created_at,
+                 snap_billing_unit, snap_nightly_cap_weekday, snap_nightly_cap_weekend)
+            VALUES ($1, $2, $3, 4, $4, $5, $6, $7, $8, $9, $10, $11, NOW(), $12, $13, $14)
             """,
             session_id, venue_id, table_id, started_at, ended_at, last_activity_at,
             total_rounds, billable_blocks, active_span_seconds, active_play_seconds,
-            billing_finalized_at,
+            billing_finalized_at, snap_billing_unit, snap_nightly_cap_weekday,
+            snap_nightly_cap_weekend,
         )
     _run(_q)
     return session_id

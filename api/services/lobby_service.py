@@ -606,13 +606,21 @@ async def start_game(
     label = group_label or await next_group_label(conn, lobby["table_id"])
 
     session_id = str(uuid.uuid4())
+    # Snapshot billing terms from venues atomically so a mid-month cap change
+    # never retroactively re-prices this night. $2 (venue_id) is reused in WHERE.
+    # $6::jsonb gives INSERT ... SELECT the parameter type; the pool's jsonb codec
+    # (api/db.py) serialises the list, so never pass json.dumps here (double-encodes).
     await conn.execute(
         """
         INSERT INTO game_sessions (id, venue_id, table_id, group_label, player_count, player_names,
-                                    adults_only, origin_phone_id, started_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+                                    adults_only, origin_phone_id, started_at,
+                                    snap_billing_unit, snap_nightly_cap_weekday, snap_nightly_cap_weekend)
+        SELECT $1, $2, $3, $4, $5, $6::jsonb, $7, $8, NOW(),
+               v.billing_unit, v.nightly_cap_weekday, v.nightly_cap_weekend
+        FROM venues v WHERE v.id = $2
         """,
-        session_id, lobby["venue_id"], lobby["table_id"], label, player_count, names, adults_only, phone_id,
+        session_id, lobby["venue_id"], lobby["table_id"], label, player_count,
+        names, adults_only, phone_id,
     )
     # Bind each player to the phone it represents so Trivia can score the
     # right person (the phone answers on its own device) -- see game_players.phone_id.
