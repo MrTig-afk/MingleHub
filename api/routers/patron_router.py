@@ -948,6 +948,7 @@ async def current_round(request: Request, session_id: str):
             row = await conn.fetchrow(
                 """
                 SELECT gs.current_round_number, gs.ended_at, gs.id, gs.venue_id,
+                       v.timezone AS venue_tz,
                        EXTRACT(EPOCH FROM NOW() - COALESCE(gs.last_activity_at, gs.created_at))
                            AS idle_seconds,
                        COALESCE(v.retap_interval_minutes, 15) * 60
@@ -968,7 +969,7 @@ async def current_round(request: Request, session_id: str):
             # Theme-weighted round selection: the origin phone picks each round's
             # type from these weights (deterministic per round). Resolved here so
             # the whole session uses the venue's theme for tonight.
-            theme = await resolve_active_theme(conn, row["venue_id"])
+            theme = await resolve_active_theme(conn, row["venue_id"], row["venue_tz"])
             theme_key = theme.get("theme_key")
             round_type_weights = (theme.get("weighting") or {}).get("round_types", {})
             retap = compute_retap_state(

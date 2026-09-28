@@ -12,7 +12,6 @@ from api.db import get_pool
 from api.security import limiter, verify_api_key, get_client_ip
 from api.services.notify import notify_error
 from api.services import venue_lifecycle_service
-from api.routers.dashboard_router import VENUE_TIMEZONE
 
 # TODO: 2FA for admin
 # When ready, enforce MFA on admin accounts via Clerk instance settings, then
@@ -61,18 +60,9 @@ async def admin_overview(
     try:
         pool = await get_pool()
         async with pool.acquire() as conn:
-            # "Last 4am" boundary in Postgres — keeps DST handling in the DB
-            # where the full tz database lives (same SQL as dashboard_router).
-            tonight_boundary = await conn.fetchval(
-                """
-                SELECT (
-                    (date_trunc('day', (NOW() AT TIME ZONE $1) - INTERVAL '4 hours')
-                        + INTERVAL '4 hours')
-                    AT TIME ZONE $1
-                ) AT TIME ZONE 'UTC'
-                """,
-                VENUE_TIMEZONE,
-            )
+            # "Tonight" is computed per-venue using each venue's own timezone,
+            # so sessions_tonight and players_tonight are correct when venues
+            # span timezones. No scalar tonight_boundary — boundary is inline SQL.
 
             # A4: players_tonight and active_sessions_now merged into totals_row
             # as scalar subqueries to save two DB round-trips.
@@ -89,7 +79,11 @@ async def admin_overview(
                      JOIN game_sessions gs2 ON gs2.id = gp.session_id
                      JOIN venues v2 ON v2.id = gs2.venue_id
                      WHERE v2.is_test = FALSE
-                       AND gs2.started_at >= $1
+                       AND gs2.started_at >= (
+                           (date_trunc('day', (NOW() AT TIME ZONE v2.timezone) - INTERVAL '4 hours')
+                               + INTERVAL '4 hours')
+                           AT TIME ZONE v2.timezone
+                       ) AT TIME ZONE 'UTC'
                        AND gp.left_early = FALSE
                     ) AS players_tonight,
                     (SELECT COUNT(*)
@@ -101,9 +95,12 @@ async def admin_overview(
                 FROM game_sessions gs
                 JOIN venues v ON v.id = gs.venue_id
                 WHERE v.is_test = FALSE
-                  AND gs.started_at >= $1
-                """,
-                tonight_boundary,
+                  AND gs.started_at >= (
+                      (date_trunc('day', (NOW() AT TIME ZONE v.timezone) - INTERVAL '4 hours')
+                          + INTERVAL '4 hours')
+                      AT TIME ZONE v.timezone
+                  ) AT TIME ZONE 'UTC'
+                """
             )
 
             # Per-venue live breakdown (is_test excluded).
@@ -116,16 +113,24 @@ async def admin_overview(
                     (SELECT COUNT(*) FROM game_sessions gs2
                      WHERE gs2.venue_id = v.id AND gs2.ended_at IS NULL) AS active_sessions,
                     (SELECT COUNT(*) FROM game_sessions gs3
-                     WHERE gs3.venue_id = v.id AND gs3.started_at >= $1) AS sessions_tonight,
+                     WHERE gs3.venue_id = v.id AND gs3.started_at >= (
+                         (date_trunc('day', (NOW() AT TIME ZONE v.timezone) - INTERVAL '4 hours')
+                             + INTERVAL '4 hours')
+                         AT TIME ZONE v.timezone
+                     ) AT TIME ZONE 'UTC') AS sessions_tonight,
                     (SELECT COUNT(*) FROM game_players gp
                      JOIN game_sessions gs4 ON gs4.id = gp.session_id
-                     WHERE gs4.venue_id = v.id AND gs4.started_at >= $1
+                     WHERE gs4.venue_id = v.id
+                       AND gs4.started_at >= (
+                           (date_trunc('day', (NOW() AT TIME ZONE v.timezone) - INTERVAL '4 hours')
+                               + INTERVAL '4 hours')
+                           AT TIME ZONE v.timezone
+                       ) AT TIME ZONE 'UTC'
                        AND gp.left_early = FALSE) AS players_tonight
                 FROM venues v
                 WHERE v.is_test = FALSE
                 ORDER BY active_sessions DESC, v.name
-                """,
-                tonight_boundary,
+                """
             )
 
         # PostgreSQL COUNT(*) always returns a row (even over zero rows), so
@@ -169,17 +174,6 @@ async def admin_venues(
     try:
         pool = await get_pool()
         async with pool.acquire() as conn:
-            tonight_boundary = await conn.fetchval(
-                """
-                SELECT (
-                    (date_trunc('day', (NOW() AT TIME ZONE $1) - INTERVAL '4 hours')
-                        + INTERVAL '4 hours')
-                    AT TIME ZONE $1
-                ) AT TIME ZONE 'UTC'
-                """,
-                VENUE_TIMEZONE,
-            )
-
             rows = await conn.fetch(
                 """
                 SELECT
@@ -193,11 +187,14 @@ async def admin_venues(
                     (SELECT COUNT(*) FROM game_sessions gs
                      WHERE gs.venue_id = v.id AND gs.ended_at IS NULL) AS active_sessions,
                     (SELECT COUNT(*) FROM game_sessions gs2
-                     WHERE gs2.venue_id = v.id AND gs2.started_at >= $1) AS sessions_tonight
+                     WHERE gs2.venue_id = v.id AND gs2.started_at >= (
+                         (date_trunc('day', (NOW() AT TIME ZONE v.timezone) - INTERVAL '4 hours')
+                             + INTERVAL '4 hours')
+                         AT TIME ZONE v.timezone
+                     ) AT TIME ZONE 'UTC') AS sessions_tonight
                 FROM venues v
                 ORDER BY v.name
-                """,
-                tonight_boundary,
+                """
             )
 
         return {
@@ -295,7 +292,7 @@ async def admin_venue_detail(
                 """
                 SELECT id, name, slug, venue_type, status, billing_unit,
                        retap_interval_minutes, nightly_cap_weekday, nightly_cap_weekend,
-                       restrict_adult_content, is_test, created_at, updated_at
+                       restrict_adult_content, is_test, created_at, updated_at, timezone
                 FROM venues WHERE id = $1
                 """,
                 validated_id,
@@ -308,6 +305,7 @@ async def admin_venue_detail(
                 validated_id,
             )
 
+            tz = row["timezone"]
             tonight_boundary = await conn.fetchval(
                 """
                 SELECT (
@@ -316,7 +314,7 @@ async def admin_venue_detail(
                     AT TIME ZONE $1
                 ) AT TIME ZONE 'UTC'
                 """,
-                VENUE_TIMEZONE,
+                tz,
             )
 
             sessions_tonight = await conn.fetchval(

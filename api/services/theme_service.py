@@ -12,8 +12,6 @@ live abandonment signal (the old cadence didn't implement it either).
 import hashlib
 import json
 
-VENUE_TIMEZONE = "Australia/Melbourne"  # mirrors dashboard_router.VENUE_TIMEZONE
-
 DEFAULT_THEME_KEY = "random"
 MIN_PLAYERS_MULTI = 2  # Roulette + Trivia both require >= 2 active players
 
@@ -73,10 +71,13 @@ def pick_card_category(weighting: dict, round_number: int, session_id: str,
     return sorted(eligible)[-1]
 
 
-async def resolve_active_theme(conn, venue_id) -> dict:
+async def resolve_active_theme(conn, venue_id, tz: str) -> dict:
     """The venue's theme for tonight's play-date (4am boundary), or the default
     'random' theme if none is selected. Returns {theme_key, display_name,
-    weighting, trivia_category_bias}."""
+    weighting, trivia_category_bias}.
+
+    tz: the venue's timezone (from venues.timezone); required.
+    """
     row = await conn.fetchrow(
         """
         SELECT t.theme_key, t.display_name, t.weighting, t.trivia_category_bias
@@ -86,7 +87,7 @@ async def resolve_active_theme(conn, venue_id) -> dict:
           AND nts.selected_date = (date_trunc('day',
                 (NOW() AT TIME ZONE $2) - INTERVAL '4 hours'))::date
         """,
-        venue_id, VENUE_TIMEZONE,
+        venue_id, tz,
     )
     if not row:
         row = await conn.fetchrow(

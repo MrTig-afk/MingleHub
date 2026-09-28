@@ -8,8 +8,6 @@ on the night it started), matching the dashboard's "tonight" boundary.
 """
 from datetime import timedelta
 
-VENUE_TIMEZONE = "Australia/Melbourne"  # mirrors dashboard_router.VENUE_TIMEZONE
-
 DEFAULT_WINDOW_DAYS = 35  # covers the 30d insights range + buffer for late-ending sessions
 
 
@@ -18,18 +16,13 @@ async def recompute_daily_stats(conn, ref_ts=None, window_days: int = DEFAULT_WI
     game_sessions. Idempotent: re-running overwrites the same rows (sessions can
     end after a day's first rollup, so recent days are recomputed each run).
     Includes all venues (test + real). Returns a small summary for logging.
+
+    The window starts at each venue's own local 4am boundary, so the oldest
+    stat_date is always recomputed from a complete day, never a partial one.
     """
     result = await conn.fetchrow(
         """
         WITH ref AS (SELECT COALESCE($1::timestamptz, NOW()) AS r),
-        win AS (
-            SELECT (
-                (date_trunc('day', (r AT TIME ZONE $2) - INTERVAL '4 hours')
-                    - make_interval(days => $3) + INTERVAL '4 hours')
-                AT TIME ZONE $2
-            ) AT TIME ZONE 'UTC' AS window_start
-            FROM ref
-        ),
         agg AS (
             INSERT INTO venue_daily_stats AS vds (
                 venue_id, stat_date, session_count, ended_count, total_rounds,
@@ -37,7 +30,7 @@ async def recompute_daily_stats(conn, ref_ts=None, window_days: int = DEFAULT_WI
                 cards_completed, cards_skipped, total_score, updated_at)
             SELECT
                 gs.venue_id,
-                date_trunc('day', (gs.started_at AT TIME ZONE 'UTC' AT TIME ZONE $2)
+                date_trunc('day', (gs.started_at AT TIME ZONE 'UTC' AT TIME ZONE v.timezone)
                     - INTERVAL '4 hours')::date AS stat_date,
                 COUNT(*),
                 COUNT(*) FILTER (WHERE gs.ended_at IS NOT NULL),
@@ -51,8 +44,15 @@ async def recompute_daily_stats(conn, ref_ts=None, window_days: int = DEFAULT_WI
                 COALESCE(SUM(gs.cards_skipped), 0),
                 COALESCE(SUM(gs.total_score), 0),
                 NOW()
-            FROM game_sessions gs, win
-            WHERE gs.started_at >= win.window_start AND gs.started_at IS NOT NULL
+            FROM game_sessions gs
+            JOIN venues v ON v.id = gs.venue_id
+            , ref
+            WHERE gs.started_at >= (
+                (date_trunc('day', (ref.r AT TIME ZONE v.timezone) - INTERVAL '4 hours')
+                    - make_interval(days => $2) + INTERVAL '4 hours')
+                AT TIME ZONE v.timezone
+            ) AT TIME ZONE 'UTC'
+              AND gs.started_at IS NOT NULL
             GROUP BY gs.venue_id, stat_date
             ON CONFLICT (venue_id, stat_date) DO UPDATE SET
                 session_count        = EXCLUDED.session_count,
@@ -72,7 +72,7 @@ async def recompute_daily_stats(conn, ref_ts=None, window_days: int = DEFAULT_WI
                COUNT(DISTINCT venue_id) AS venues
         FROM agg
         """,
-        ref_ts, VENUE_TIMEZONE, window_days,
+        ref_ts, window_days,
     )
     return {"rows_upserted": result["rows_upserted"], "venues": result["venues"],
             "window_days": window_days}
@@ -81,12 +81,13 @@ async def recompute_daily_stats(conn, ref_ts=None, window_days: int = DEFAULT_WI
 _RANGE_DAYS = {"tonight": 0, "7d": 6, "30d": 29}
 
 
-async def range_totals(conn, venue_id, range_param: str) -> dict:
+async def range_totals(conn, venue_id, range_param: str, tz: str) -> dict:
     """Session-level totals + per-day trend for a dashboard range, read from
     venue_daily_stats for COMPLETED days plus a small live query for TODAY (which
     isn't rolled up yet). Equivalent to scanning raw game_sessions over the range,
     but only the current day is scanned live — history is pre-aggregated.
 
+    tz: the venue's timezone (from venues.timezone), used for the 4am boundary.
     Returns raw sums/counts so the caller derives averages with its own rounding.
     """
     days = _RANGE_DAYS[range_param]
@@ -97,7 +98,7 @@ async def range_totals(conn, venue_id, range_param: str) -> dict:
             ((date_trunc('day', (NOW() AT TIME ZONE $1) - INTERVAL '4 hours')
                 + INTERVAL '4 hours') AT TIME ZONE $1) AT TIME ZONE 'UTC' AS today_start
         """,
-        VENUE_TIMEZONE,
+        tz,
     )
     today = bounds["today"]
     today_start = bounds["today_start"]

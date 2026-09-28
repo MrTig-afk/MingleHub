@@ -723,6 +723,17 @@ async def migrate():
         """)
         print("OK payment_methods table ready")
 
+        # Per-venue timezone: every time computation (4am boundary, play_date,
+        # month window) uses the venue's own timezone instead of a global constant.
+        # Default 'Australia/Melbourne' keeps all existing rows unchanged.
+        # No CHECK constraint referencing pg_timezone_names — Postgres does not
+        # support that. Validation happens at the future admin write path.
+        await conn.execute("""
+            ALTER TABLE venues
+            ADD COLUMN IF NOT EXISTS timezone TEXT NOT NULL DEFAULT 'Australia/Melbourne'
+        """)
+        print("OK venues.timezone column ready")
+
         schema = await conn.fetch("""
             SELECT column_name, data_type, is_nullable, column_default
             FROM information_schema.columns
