@@ -65,6 +65,7 @@ def test_dev_mode_without_clerk_jwks_still_boots():
 
 def test_hmac_token_is_rejected_outside_dev_mode(monkeypatch):
     """A validly-signed dev token must not authenticate when DEV_MODE is off."""
+    monkeypatch.setenv("DEV_MODE", "true")  # don't rely on the ambient env
     token = api.auth.issue_dev_token("user_whatever")
     assert api.auth._verify_token(token) == "user_whatever"  # DEV_MODE on: accepted
 

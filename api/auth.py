@@ -85,7 +85,7 @@ def issue_dev_token(clerk_user_id: str) -> str:
 
 def _verify_token(token: str) -> str:
     """Returns clerk_user_id if the token is valid and unexpired, else raises 401.
-    Clerk RS256 JWT (via JWKS) when CLERK_JWKS_URL is set; dev HMAC token otherwise."""
+    Clerk RS256 JWT (via JWKS) when CLERK_JWKS_URL is set; dev HMAC token only when DEV_MODE=true."""
     client = _get_jwk_client()
     if client is not None:
         try:
