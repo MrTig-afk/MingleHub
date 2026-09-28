@@ -262,7 +262,11 @@ async def _issue_final_invoice(conn, venue_id: str):
     # Recompute the current month across all venues (idempotent rollup).
     await recompute_invoices(conn)
 
-    win = await _period_window(conn, None)
+    # Use this venue's own timezone for the period window lookup.
+    tz = await conn.fetchval(
+        "SELECT timezone FROM venues WHERE id = $1", venue_id
+    )
+    win = await _period_window(conn, None, tz)
     period_start = win["period_start"]
 
     invoice_row = await conn.fetchrow(

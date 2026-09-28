@@ -19,8 +19,6 @@ blocks. is_test venues are excluded from invoices entirely.
 """
 import uuid
 
-VENUE_TIMEZONE = "Australia/Melbourne"  # mirrors dashboard_router.VENUE_TIMEZONE
-
 BLOCK_SECONDS = 15 * 60        # one billable block = 15 minutes of active play
 IDLE_CUTOFF_SECONDS = 2 * 60   # gaps longer than this are "stepped away", not play
 
@@ -122,10 +120,10 @@ async def sweep_abandoned_sessions(conn) -> int:
     return len(rows)
 
 
-async def _period_window(conn, ref_ts):
+async def _period_window(conn, ref_ts, tz: str):
     """Return (month_start_utc, next_month_start_utc, period_start_date,
     period_end_date) for the calendar month containing ref_ts (or NOW()),
-    using the venue 4am night boundary so a session that runs past midnight
+    using the venue's 4am night boundary so a session that runs past midnight
     counts on the night it started."""
     return await conn.fetchrow(
         """
@@ -142,7 +140,7 @@ async def _period_window(conn, ref_ts):
             (m + INTERVAL '1 month' - INTERVAL '1 day')::date AS period_end
         FROM local_month
         """,
-        ref_ts, VENUE_TIMEZONE,
+        ref_ts, tz,
     )
 
 
@@ -152,51 +150,58 @@ async def recompute_invoices(conn, ref_ts=None) -> dict:
     re-running is safe and past months stay correct. 'paid' invoices are never
     touched. is_test venues are skipped (they never pay).
 
+    Loops non-test venues so each venue uses its own timezone for play_date
+    bucketing and month-window computation — correct when venues span timezones.
+
     Returns a summary for logging/visibility.
     """
-    win = await _period_window(conn, ref_ts)
-    month_start, next_month_start = win["month_start"], win["next_month_start"]
-    period_start, period_end = win["period_start"], win["period_end"]
-
-    # Per (venue, table, play-date) sum of blocks, for billable (non-test) venues.
-    rows = await conn.fetch(
-        """
-        SELECT
-            gs.venue_id,
-            gs.table_id,
-            date_trunc('day', (gs.started_at AT TIME ZONE 'UTC' AT TIME ZONE $3)
-                - INTERVAL '4 hours')::date AS play_date,
-            EXTRACT(DOW FROM date_trunc('day', (gs.started_at AT TIME ZONE 'UTC'
-                AT TIME ZONE $3) - INTERVAL '4 hours'))::int AS dow,
-            COALESCE(SUM(gs.billable_blocks), 0)::int AS raw_blocks
-        FROM game_sessions gs
-        JOIN venues v ON v.id = gs.venue_id
-        WHERE gs.started_at >= $1 AND gs.started_at < $2
-          AND gs.ended_at IS NOT NULL
-          AND v.is_test = FALSE
-        GROUP BY gs.venue_id, gs.table_id, play_date, dow
-        HAVING COALESCE(SUM(gs.billable_blocks), 0) > 0
-        """,
-        month_start, next_month_start, VENUE_TIMEZONE,
+    # Fetch all non-test venues for per-venue processing.
+    venue_list = await conn.fetch(
+        "SELECT id, timezone, billing_unit, nightly_cap_weekday, nightly_cap_weekend"
+        " FROM venues WHERE is_test = FALSE"
     )
 
-    # Group rows by venue.
-    by_venue: dict = {}
-    for r in rows:
-        by_venue.setdefault(r["venue_id"], []).append(r)
-
-    summary = {"period_start": str(period_start), "venues": 0,
+    summary = {"period_start": None, "venues": 0,
                "invoices": 0, "line_items": 0, "skipped_paid": 0}
 
-    for venue_id, venue_rows in by_venue.items():
-        venue = await conn.fetchrow(
-            """SELECT billing_unit, nightly_cap_weekday, nightly_cap_weekend
-               FROM venues WHERE id = $1""",
-            venue_id,
+    for venue_entry in venue_list:
+        venue_id = venue_entry["id"]
+        tz = venue_entry["timezone"]
+
+        win = await _period_window(conn, ref_ts, tz)
+        month_start, next_month_start = win["month_start"], win["next_month_start"]
+        period_start, period_end = win["period_start"], win["period_end"]
+
+        # Record the first period_start seen for the summary (logging only).
+        if summary["period_start"] is None:
+            summary["period_start"] = str(period_start)
+
+        # Per (table, play-date) sum of blocks for this venue only.
+        venue_rows = await conn.fetch(
+            """
+            SELECT
+                gs.table_id,
+                date_trunc('day', (gs.started_at AT TIME ZONE 'UTC' AT TIME ZONE $4)
+                    - INTERVAL '4 hours')::date AS play_date,
+                EXTRACT(DOW FROM date_trunc('day', (gs.started_at AT TIME ZONE 'UTC'
+                    AT TIME ZONE $4) - INTERVAL '4 hours'))::int AS dow,
+                COALESCE(SUM(gs.billable_blocks), 0)::int AS raw_blocks
+            FROM game_sessions gs
+            WHERE gs.venue_id = $3
+              AND gs.started_at >= $1 AND gs.started_at < $2
+              AND gs.ended_at IS NOT NULL
+            GROUP BY gs.table_id, play_date, dow
+            HAVING COALESCE(SUM(gs.billable_blocks), 0) > 0
+            """,
+            month_start, next_month_start, venue_id, tz,
         )
-        unit = venue["billing_unit"]
-        cap_wd = cap_blocks(venue["nightly_cap_weekday"], unit)
-        cap_we = cap_blocks(venue["nightly_cap_weekend"], unit)
+
+        if not venue_rows:
+            continue
+
+        unit = venue_entry["billing_unit"]
+        cap_wd = cap_blocks(venue_entry["nightly_cap_weekday"], unit)
+        cap_we = cap_blocks(venue_entry["nightly_cap_weekend"], unit)
 
         # Never recompute a paid or final invoice. is_final marks the snapshot
         # issued at cancellation; recomputing it would overwrite the at-cancel total.

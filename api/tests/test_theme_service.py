@@ -88,7 +88,7 @@ def _clear_theme(venue_id):
 
 def test_resolve_defaults_to_random_when_unset():
     _clear_theme(VENUE_A_ID)
-    theme = _run(lambda c: resolve_active_theme(c, VENUE_A_ID))
+    theme = _run(lambda c: resolve_active_theme(c, VENUE_A_ID, "Australia/Melbourne"))
     assert theme["theme_key"] == "random"
     assert "round_types" in theme["weighting"]
 
@@ -96,7 +96,7 @@ def test_resolve_defaults_to_random_when_unset():
 def test_resolve_returns_selected_theme():
     try:
         _set_theme(VENUE_A_ID, "all_trivia")
-        theme = _run(lambda c: resolve_active_theme(c, VENUE_A_ID))
+        theme = _run(lambda c: resolve_active_theme(c, VENUE_A_ID, "Australia/Melbourne"))
         assert theme["theme_key"] == "all_trivia"
         # weighting usable by the picker (dict, not raw JSON string)
         assert pick_round_type(theme["weighting"], 1, SID, active_count=4) == "trivia"

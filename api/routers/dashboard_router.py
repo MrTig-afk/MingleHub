@@ -27,9 +27,9 @@ from api.services import venue_lifecycle_service
 
 router = APIRouter(prefix="/api/dashboard", dependencies=[Depends(verify_api_key)])
 
-# "Tonight" rolls over at 4am local time. A single venue timezone for now — per-venue
-# timezone is a later slice (gamespec: "server TZ; per-venue TZ later").
-VENUE_TIMEZONE = "Australia/Melbourne"
+
+async def _venue_tz(conn, venue_id: str) -> str:
+    return await conn.fetchval("SELECT timezone FROM venues WHERE id = $1", venue_id)
 
 
 @router.get("/me")
@@ -153,6 +153,8 @@ async def table_detail(
                 validated_id, current_user.venue_id,
             )
 
+            tz = await _venue_tz(conn, current_user.venue_id)
+
             # Reuse the "last 4am local -> UTC" boundary for recent ended sessions.
             tonight_boundary = await conn.fetchval(
                 """
@@ -162,7 +164,7 @@ async def table_detail(
                     AT TIME ZONE $1
                 ) AT TIME ZONE 'UTC'
                 """,
-                VENUE_TIMEZONE,
+                tz,
             )
 
             session_rows = await conn.fetch(
@@ -368,6 +370,8 @@ async def insights(
     try:
         pool = await get_pool()
         async with pool.acquire() as conn:
+            tz = await _venue_tz(conn, current_user.venue_id)
+
             tonight_boundary = await conn.fetchval(
                 """
                 SELECT (
@@ -376,7 +380,7 @@ async def insights(
                     AT TIME ZONE $1
                 ) AT TIME ZONE 'UTC'
                 """,
-                VENUE_TIMEZONE,
+                tz,
             )
 
             if range_param == "tonight":
@@ -389,7 +393,7 @@ async def insights(
             # Session-level totals + trend: read pre-aggregated rollup for
             # completed days + a live query for today (only today scans raw
             # sessions). Equivalent to the old full-range scan — see test_insights_*.
-            agg = await range_totals(conn, current_user.venue_id, range_param)
+            agg = await range_totals(conn, current_user.venue_id, range_param, tz)
 
             player_count = await conn.fetchval(
                 """
@@ -515,6 +519,8 @@ async def overview(
     try:
         pool = await get_pool()
         async with pool.acquire() as conn:
+            tz = await _venue_tz(conn, current_user.venue_id)
+
             # Compute the "last 4am" boundary in Postgres, not Python: the DB always
             # carries the full tz database (a bare Windows/serverless Python runtime may
             # not), so this is correct and DST-aware regardless of the server process's
@@ -528,7 +534,7 @@ async def overview(
                     AT TIME ZONE $1
                 ) AT TIME ZONE 'UTC'
                 """,
-                VENUE_TIMEZONE,
+                tz,
             )
 
             # A1: players_tonight merged into totals_row as a scalar subquery
@@ -766,11 +772,12 @@ async def get_billing(
             venue_row = await conn.fetchrow(
                 """
                 SELECT billing_unit, nightly_cap_weekday, nightly_cap_weekend,
-                       stripe_customer_id, is_test, status AS venue_status
+                       stripe_customer_id, is_test, status AS venue_status, timezone
                 FROM venues WHERE id = $1
                 """,
                 current_user.venue_id,
             )
+            tz = venue_row["timezone"]
 
             # Month start: first 4am of the current local calendar month, in UTC.
             month_start = await conn.fetchval(
@@ -781,13 +788,13 @@ async def get_billing(
                     AT TIME ZONE $1
                 ) AT TIME ZONE 'UTC'
                 """,
-                VENUE_TIMEZONE,
+                tz,
             )
 
             # Tonight's play-date (4am-boundary local date) to pick out of the nights.
             tonight_date = await conn.fetchval(
                 "SELECT (date_trunc('day', (NOW() AT TIME ZONE $1) - INTERVAL '4 hours'))::date",
-                VENUE_TIMEZONE,
+                tz,
             )
 
             # Per (table, night) sum of billable blocks from FINALIZED sessions.
@@ -807,7 +814,7 @@ async def get_billing(
                   AND gs.ended_at IS NOT NULL
                 GROUP BY gs.table_id, play_date, dow
                 """,
-                current_user.venue_id, month_start, VENUE_TIMEZONE,
+                current_user.venue_id, month_start, tz,
             )
 
             # Play-time analytics: billed span vs true (idle-excluded) play.
@@ -1021,7 +1028,8 @@ async def get_active_theme(
     """The venue's theme for tonight (or the 'random' default)."""
     pool = await get_pool()
     async with pool.acquire() as conn:
-        theme = await resolve_active_theme(conn, current_user.venue_id)
+        tz = await _venue_tz(conn, current_user.venue_id)
+        theme = await resolve_active_theme(conn, current_user.venue_id, tz)
     return {"theme_key": theme["theme_key"], "display_name": theme["display_name"]}
 
 
@@ -1041,6 +1049,7 @@ async def set_theme(
     current 4am-boundary play-date."""
     pool = await get_pool()
     async with pool.acquire() as conn:
+        tz = await _venue_tz(conn, current_user.venue_id)
         exists = await conn.fetchval("SELECT 1 FROM themes WHERE theme_key = $1", body.theme_key)
         if not exists:
             raise HTTPException(status_code=404, detail="Unknown theme")
@@ -1051,7 +1060,7 @@ async def set_theme(
                 (date_trunc('day', (NOW() AT TIME ZONE $2) - INTERVAL '4 hours'))::date, $3)
             ON CONFLICT (venue_id, selected_date) DO UPDATE SET theme_key = $3
             """,
-            current_user.venue_id, VENUE_TIMEZONE, body.theme_key)
+            current_user.venue_id, tz, body.theme_key)
     return {"theme_key": body.theme_key}
 
 
