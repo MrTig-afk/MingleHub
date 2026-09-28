@@ -734,6 +734,17 @@ async def migrate():
         """)
         print("OK venues.timezone column ready")
 
+        # Billing-terms snapshot: freeze the terms in force at session start so
+        # an admin changing caps mid-month never retroactively re-prices past nights.
+        # NULL on old rows triggers fallback to the venue's current values.
+        await conn.execute("""
+            ALTER TABLE game_sessions
+            ADD COLUMN IF NOT EXISTS snap_billing_unit NUMERIC,
+            ADD COLUMN IF NOT EXISTS snap_nightly_cap_weekday NUMERIC,
+            ADD COLUMN IF NOT EXISTS snap_nightly_cap_weekend NUMERIC
+        """)
+        print("OK game_sessions billing snapshot columns ready")
+
         schema = await conn.fetch("""
             SELECT column_name, data_type, is_nullable, column_default
             FROM information_schema.columns
