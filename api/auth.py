@@ -92,14 +92,10 @@ def _verify_token(token: str) -> str:
             key = client.get_signing_key_from_jwt(token).key
             return _verify_clerk_jwt(token, key)
         except Exception:
-            # In DEV_MODE, keep accepting dev-login HMAC tokens alongside Clerk (sim
-            # tools + the dashboard dev-login). In production, Clerk is the only path.
-            if os.getenv("DEV_MODE") != "true":
-                raise HTTPException(status_code=401, detail="Invalid token")
+            pass  # DEV_MODE also accepts dev-login HMAC tokens (sim tools + dashboard dev-login)
 
-    # Defence in depth. The boot guard makes an unconfigured production
-    # unreachable, but the HMAC path below must never run outside DEV_MODE even
-    # if that guard is later loosened.
+    # Outside DEV_MODE, Clerk is the only path: a failed or unconfigured Clerk check
+    # ends here, so the HMAC path below never runs in production.
     if os.getenv("DEV_MODE") != "true":
         raise HTTPException(status_code=401, detail="Invalid token")
 
