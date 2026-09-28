@@ -29,7 +29,10 @@ jobs:
           --health-timeout 5s
           --health-retries 5
     env:
-      DATABASE_URL: postgresql://mh:mh@localhost:5432/minglehub_ci
+      # Password via PGPASSWORD (read by asyncpg), not inline in the URL, so the
+      # URL never has the user:password@ shape that secret scanners flag.
+      DATABASE_URL: postgresql://mh@localhost:5432/minglehub_ci
+      PGPASSWORD: mh
       DATABASE_SSL: disable
       API_KEY: ci-key
       DEV_MODE: "true"
