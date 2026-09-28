@@ -28,6 +28,16 @@ MIN_PLAYERS = 2
 MAX_PLAYERS = 8
 
 
+async def _touch_open_session(conn, session_id) -> bool:
+    """Reset the idle clock on a still-open session. False when it was ended
+    between our read and this update (e.g. by the nightly abandoned-session sweep)."""
+    return await conn.fetchval(
+        "UPDATE game_sessions SET last_activity_at = NOW() "
+        "WHERE id = $1 AND ended_at IS NULL RETURNING id",
+        session_id,
+    ) is not None
+
+
 async def _check_phone_session_resume(conn, table_id: str, phone_id: str) -> dict | None:
     """If this phone already belongs to an active session at this table,
     return a resume payload so the tap routes straight back into that session.
@@ -72,10 +82,8 @@ async def _check_phone_session_resume(conn, table_id: str, phone_id: str) -> dic
         # Any non-expired tap resets the clock. Covers:
         #   - Normal mid-game re-taps (active state -- harmless refresh)
         #   - Grace/pause "continue" tap (the user physically re-tapped)
-        await conn.execute(
-            "UPDATE game_sessions SET last_activity_at = NOW() WHERE id = $1",
-            row["id"],
-        )
+        if not await _touch_open_session(conn, row["id"]):
+            return {"phase": "recap", "session_id": str(row["id"])}
 
         return {
             "phase": "resume",
@@ -121,10 +129,8 @@ async def _check_phone_session_resume(conn, table_id: str, phone_id: str) -> dic
             )
             return {"phase": "recap", "session_id": str(row["id"])}
 
-        await conn.execute(
-            "UPDATE game_sessions SET last_activity_at = NOW() WHERE id = $1",
-            row["id"],
-        )
+        if not await _touch_open_session(conn, row["id"]):
+            return {"phase": "recap", "session_id": str(row["id"])}
 
         return {
             "phase": "resume",

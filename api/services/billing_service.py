@@ -82,6 +82,46 @@ async def finalize_session_billing(conn, session_id: str) -> None:
     )
 
 
+async def sweep_abandoned_sessions(conn) -> int:
+    """Finalize all sessions idle past the retap-expired threshold.
+
+    Called by rollup_billing.py before recompute_invoices so sessions whose
+    host disappeared (never got ended_at set) appear in the monthly rollup.
+
+    Threshold mirrors the lazy path in lobby_service.py:
+        COALESCE(last_activity_at, started_at) < NOW() - (retap_interval * 60 + grace + pause)
+
+    Idempotent: ended_at IS NULL in the WHERE clause means a second run is a no-op.
+    Then finalizes every ended-but-unfinalized session, so a run interrupted
+    between the two steps (here or in the lazy end paths) heals on the next run
+    instead of billing $0 forever.
+    Returns the count of sessions the sweep ended.
+    """
+    # Local import avoids circular dependency (session_service imports finalize_session_billing)
+    from api.services.session_service import RETAP_GRACE_SECONDS, RETAP_PAUSE_SECONDS
+
+    rows = await conn.fetch(
+        """
+        UPDATE game_sessions gs
+        SET ended_at = NOW(), end_reason = 'retap_expired'
+        FROM venues v
+        WHERE gs.venue_id = v.id
+          AND gs.ended_at IS NULL
+          AND gs.started_at IS NOT NULL
+          AND COALESCE(gs.last_activity_at, gs.started_at)
+              < NOW() - INTERVAL '1 second' * (v.retap_interval_minutes * 60 + $1 + $2)
+        RETURNING gs.id
+        """,
+        RETAP_GRACE_SECONDS, RETAP_PAUSE_SECONDS,
+    )
+    unfinalized = await conn.fetch(
+        "SELECT id FROM game_sessions WHERE ended_at IS NOT NULL AND billing_finalized_at IS NULL"
+    )
+    for row in unfinalized:
+        await finalize_session_billing(conn, str(row["id"]))
+    return len(rows)
+
+
 async def _period_window(conn, ref_ts):
     """Return (month_start_utc, next_month_start_utc, period_start_date,
     period_end_date) for the calendar month containing ref_ts (or NOW()),

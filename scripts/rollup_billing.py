@@ -13,13 +13,15 @@ import asyncpg
 from dotenv import load_dotenv
 
 load_dotenv("api/.env")
-from api.services.billing_service import recompute_invoices  # noqa: E402
+from api.services.billing_service import recompute_invoices, sweep_abandoned_sessions  # noqa: E402
 from api.services.venue_lifecycle_service import check_dunning_suspensions  # noqa: E402
 
 
 async def main():
     conn = await asyncpg.connect(os.environ["DATABASE_URL"])
     try:
+        swept = await sweep_abandoned_sessions(conn)
+        print(f"Abandoned sweep: {swept} session(s) ended, all ended sessions finalized")
         async with conn.transaction():
             summary = await recompute_invoices(conn)
         print(
