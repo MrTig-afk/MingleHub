@@ -12,6 +12,10 @@ You don't need to install anything. The live deployment has demo venues seeded, 
 
 **<https://mingle-hub.vercel.app/fifty-five-bar/1>**
 
+Reading this on a laptop? Scan it instead:
+
+<img src="docs/qr/fifty-five-bar-1.svg" alt="QR code for https://mingle-hub.vercel.app/fifty-five-bar/1" width="180">
+
 Get a friend (or a second phone) to open the same link, enter names, and start a game from the host phone. Every phone on that link is "at the same table" and stays in sync live. You'll rotate through three games: **Chooser** (hot-seat card questions), **Trivia** (everyone answers live, with scores), and **Roulette** (group-vote dares and prompts). More demo tables if you want separate groups:
 
 - `https://mingle-hub.vercel.app/fifty-five-bar/2`
