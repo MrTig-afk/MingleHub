@@ -198,6 +198,17 @@ async def recompute_invoices(conn, ref_ts=None) -> dict:
 
     Returns a summary for logging/visibility.
     """
+    # The lock below lives as long as the transaction, so always have one.
+    if not conn.is_in_transaction():
+        async with conn.transaction():
+            return await recompute_invoices(conn, ref_ts)
+
+    # The nightly job and a venue cancellation both delete and re-insert the same
+    # invoices' line items; serialize them. Held until the caller's transaction ends.
+    # ponytail: one global lock; lock the venue's invoice row instead if cancels
+    # ever queue behind the nightly run.
+    await conn.execute("SELECT pg_advisory_xact_lock(hashtext('recompute_invoices'))")
+
     # Fetch all non-test venues for per-venue processing.
     venue_list = await conn.fetch(
         "SELECT id, timezone, billing_unit, nightly_cap_weekday, nightly_cap_weekend"

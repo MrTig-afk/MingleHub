@@ -1,0 +1,48 @@
+name: Nightly rollup
+
+on:
+  schedule:
+    # 16:07 UTC = 03:07 Melbourne in summer (AEDT), 02:07 in winter (AEST). Must stay
+    # BEFORE the 04:00 night boundary: at 04:00 on the 1st the billing window has
+    # already moved to the new month, and the old month's last night is never billed.
+    # Off the top of the hour, where GitHub delays scheduled runs most.
+    - cron: "7 16 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A manual dispatch must not overlap the scheduled run: the abandoned-session
+# sweep and the dunning suspensions run outside the invoice lock.
+concurrency:
+  group: nightly-rollup
+  cancel-in-progress: false
+
+jobs:
+  rollup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.11"
+
+      # No DB credential in this step: install-time code never sees it.
+      - name: Install dependencies
+        run: pip install -r api/requirements.txt
+
+      - name: Billing rollup (sweep, invoices, dunning)
+        env:
+          DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
+        run: PYTHONPATH=. python scripts/rollup_billing.py
+
+      # Independent of billing: still refresh the dashboard stats if billing failed.
+      - name: Analytics rollup
+        if: ${{ !cancelled() }}
+        env:
+          DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
+        run: PYTHONPATH=. python scripts/rollup_analytics.py
