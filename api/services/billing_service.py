@@ -187,17 +187,35 @@ async def _period_window(conn, ref_ts, tz: str):
     )
 
 
-async def recompute_invoices(conn, ref_ts=None) -> dict:
-    """Nightly rollup: recompute the current month's invoices from finalized
-    sessions. Idempotent — recomputes the whole month from scratch each run, so
-    re-running is safe and past months stay correct. 'paid' invoices are never
-    touched. is_test venues are skipped (they never pay).
+# Serializes everything that rewrites or sends invoices (the nightly recompute, a
+# venue cancellation, a Stripe sync). Transaction-scoped: run it inside one.
+INVOICE_LOCK = "SELECT pg_advisory_xact_lock(hashtext('recompute_invoices'))"
+
+
+async def recompute_invoices(conn, ref_ts=None, pending_only=False) -> dict:
+    """Nightly rollup: recompute the invoices of the month containing ref_ts
+    (default: now) from finalized sessions. Idempotent — recomputes the whole
+    month from scratch each run. 'paid' and final invoices are never touched;
+    with pending_only, neither is any invoice already sent to Stripe or failed
+    (used for last month, whose invoice may already be out). is_test venues are
+    skipped (they never pay).
 
     Loops non-test venues so each venue uses its own timezone for play_date
     bucketing and month-window computation — correct when venues span timezones.
 
     Returns a summary for logging/visibility.
     """
+    # The lock below lives as long as the transaction, so always have one.
+    if not conn.is_in_transaction():
+        async with conn.transaction():
+            return await recompute_invoices(conn, ref_ts, pending_only)
+
+    # The nightly job and a venue cancellation both delete and re-insert the same
+    # invoices' line items; serialize them. Held until the caller's transaction ends.
+    # One global lock is enough at this scale; lock the venue's invoice row instead
+    # if cancels ever queue behind the nightly run.
+    await conn.execute(INVOICE_LOCK)
+
     # Fetch all non-test venues for per-venue processing.
     venue_list = await conn.fetch(
         "SELECT id, timezone, billing_unit, nightly_cap_weekday, nightly_cap_weekend"
@@ -237,7 +255,8 @@ async def recompute_invoices(conn, ref_ts=None) -> dict:
             "SELECT id, status, is_final FROM invoices WHERE venue_id = $1 AND period_start = $2",
             venue_id, period_start,
         )
-        if existing and (existing["status"] == "paid" or existing.get("is_final")):
+        if existing and (existing["status"] == "paid" or existing.get("is_final")
+                         or (pending_only and existing["status"] != "pending")):
             summary["skipped_paid"] += 1
             continue
 

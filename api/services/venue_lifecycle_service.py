@@ -23,8 +23,10 @@ async def cancel_venue(conn, venue_id: str, reason: str) -> dict:
     (owner must settle their balance first; prevents balance-dodge via cancel
     then reactivate clean).
     """
+    # NO KEY: still exclusive against another cancel, but lets the nightly rollup's
+    # invoice INSERT (its FK check) through. FOR UPDATE deadlocks with INVOICE_LOCK.
     row = await conn.fetchrow(
-        "SELECT status, cancelled_at FROM venues WHERE id = $1 FOR UPDATE",
+        "SELECT status, cancelled_at FROM venues WHERE id = $1 FOR NO KEY UPDATE",
         venue_id,
     )
     if not row:
@@ -118,7 +120,7 @@ async def admin_change_status(
 
     row = await conn.fetchrow(
         """
-        SELECT status, cancelled_at, suspended_at FROM venues WHERE id = $1 FOR UPDATE
+        SELECT status, cancelled_at, suspended_at FROM venues WHERE id = $1 FOR NO KEY UPDATE
         """,
         venue_id,
     )
