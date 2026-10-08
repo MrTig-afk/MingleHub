@@ -2,10 +2,10 @@ name: Nightly rollup
 
 on:
   schedule:
-    # 16:07 UTC = 03:07 Melbourne in summer (AEDT), 02:07 in winter (AEST). Must stay
-    # BEFORE the 04:00 night boundary: at 04:00 on the 1st the billing window has
-    # already moved to the new month, and the old month's last night is never billed.
-    # Off the top of the hour, where GitHub delays scheduled runs most.
+    # 16:07 UTC = 03:07 Melbourne in summer (AEDT), 02:07 in winter (AEST): after
+    # most play, before the 04:00 night boundary. Late sessions and a missed run on
+    # the 1st are caught by the month tail in rollup_billing.py. Off the top of the
+    # hour, where GitHub delays scheduled runs most.
     - cron: "7 16 * * *"
   workflow_dispatch:
 

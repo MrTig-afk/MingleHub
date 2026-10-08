@@ -270,12 +270,15 @@ def test_recompute_caps_per_table_night():
     _clear_invoices(VENUE_A_ID)
     # cap of 3*unit dollars => 3 blocks/night, both day types.
     _set_venue(VENUE_A_ID, is_test=False, cap_wd=unit * 3, cap_we=unit * 3)
+    # A fixed night with no real sessions: a table-night bills on its FIRST
+    # session's terms, so "tonight" breaks when the DB has real play on it.
+    night = datetime(2027, 3, 10, 9, 0)  # 20:00 AEDT
     sid = _insert_session(
         table_id=VENUE_A_TABLE_ID, venue_id=VENUE_A_ID,
-        started_at=_utcnow(), last_activity_at=_utcnow(), ended_at=_utcnow(),
+        started_at=night, last_activity_at=night, ended_at=night,
         total_rounds=12, billable_blocks=10, active_span_seconds=9000)
     try:
-        _run(lambda c: recompute_invoices(c))
+        _run(lambda c: recompute_invoices(c, ref_ts=night))
         inv, items = _invoice(VENUE_A_ID)
         assert len(items) == 1
         assert items[0]["units_billed"] == 3            # capped from 10
@@ -283,6 +286,49 @@ def test_recompute_caps_per_table_night():
         assert abs(float(inv["total_amount"]) - unit * 3) < 0.001
     finally:
         _delete_session(sid)
+        _clear_invoices(VENUE_A_ID)
+        _venue_restore(VENUE_A_ID, snap)
+
+
+def test_month_tail_bills_last_night_after_turnover():
+    """A session from a month's last night that ends after the 04:00 turnover is
+    missed by the current-month run, and picked up by the nightly script's
+    second call (ref_ts = now - 3 days) on the 2nd."""
+    snap = _venue_save(VENUE_A_ID)
+    _set_venue(VENUE_A_ID, is_test=False)
+    _clear_invoices(VENUE_A_ID)
+    # 23:00 AEDT Jan 31 -> 03:30 AEDT Feb 1: play_date Jan 31.
+    started = datetime(2027, 1, 31, 12, 0)
+    sid = _insert_session(
+        table_id=VENUE_A_TABLE_ID, venue_id=VENUE_A_ID,
+        started_at=started, last_activity_at=started + timedelta(hours=4, minutes=30),
+        ended_at=started + timedelta(hours=4, minutes=30), total_rounds=3,
+        billable_blocks=4, active_span_seconds=3600, billing_finalized_at=_utcnow(),
+    )
+    now = datetime(2027, 2, 1, 16, 7, tzinfo=timezone.utc)  # 03:07 AEDT Feb 2
+
+    async def _jan_items(conn):
+        return await conn.fetch(
+            "SELECT li.play_date FROM invoice_line_items li JOIN invoices i ON i.id = li.invoice_id"
+            " WHERE i.venue_id = $1 AND i.period_start = '2027-01-01'", VENUE_A_ID)
+    try:
+        _run(lambda c: recompute_invoices(c, ref_ts=now))
+        assert _run(_jan_items) == []                     # current run is already February
+        _run(lambda c: recompute_invoices(c, ref_ts=now - timedelta(days=3), pending_only=True))
+        assert [str(r["play_date"]) for r in _run(_jan_items)] == ["2027-01-31"]
+
+        # Once January is sent to Stripe, the tail never rewrites it.
+        async def _mark_sent(conn):
+            await conn.execute("UPDATE invoices SET status = 'sent' WHERE venue_id = $1"
+                               " AND period_start = '2027-01-01'", VENUE_A_ID)
+        _run(_mark_sent)
+        _delete_session(sid)
+        sid = None
+        _run(lambda c: recompute_invoices(c, ref_ts=now - timedelta(days=3), pending_only=True))
+        assert [str(r["play_date"]) for r in _run(_jan_items)] == ["2027-01-31"]
+    finally:
+        if sid:
+            _delete_session(sid)
         _clear_invoices(VENUE_A_ID)
         _venue_restore(VENUE_A_ID, snap)
 
