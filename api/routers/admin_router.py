@@ -420,7 +420,7 @@ async def admin_venue_override(
                     """
                     SELECT name, billing_unit, retap_interval_minutes, nightly_cap_weekday,
                            nightly_cap_weekend, restrict_adult_content, is_test, status
-                    FROM venues WHERE id = $1 FOR UPDATE
+                    FROM venues WHERE id = $1 FOR NO KEY UPDATE
                     """,
                     validated_id,
                 )

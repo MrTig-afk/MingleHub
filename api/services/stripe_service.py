@@ -16,6 +16,8 @@ import os
 import time
 import uuid
 
+from api.services.billing_service import INVOICE_LOCK
+
 STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
 STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
 
@@ -37,6 +39,16 @@ async def sync_invoice(conn, invoice_id) -> dict:
     Stub mode returns deterministic ids and never hits the network. Marks the
     invoice 'sent' (awaiting payment). Idempotent: re-running yields the same ids.
     """
+    # Never push totals the nightly rollup is rewriting at the same moment.
+    if not conn.is_in_transaction():
+        async with conn.transaction():
+            return await sync_invoice(conn, invoice_id)
+    # Cheap pre-check first, so a no-op sync never waits on the nightly run.
+    row = await conn.fetchrow("SELECT venue_id, status FROM invoices WHERE id = $1", invoice_id)
+    if row and row["status"] not in ("paid", "sent"):
+        # Same lock order as a cancellation: venue row, then INVOICE_LOCK.
+        await conn.execute("SELECT 1 FROM venues WHERE id = $1 FOR NO KEY UPDATE", row["venue_id"])
+        await conn.execute(INVOICE_LOCK)
     inv = await conn.fetchrow(
         """SELECT i.id, i.venue_id, i.total_amount, i.status, i.stripe_invoice_id,
                   v.stripe_customer_id, v.name
